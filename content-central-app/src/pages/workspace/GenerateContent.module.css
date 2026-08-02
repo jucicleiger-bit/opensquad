@@ -1,0 +1,41 @@
+.formatGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.formatCard {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.028);
+  border-radius: 20px;
+  padding: 15px;
+  transition: border-color 0.25s var(--ease), background 0.25s var(--ease);
+}
+
+.formatCardEnabled {
+  border-color: oklch(from var(--accent) l c h / 40%);
+  background: oklch(from var(--accent) l c h / 6%);
+}
+
+.formatCheckbox {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  color: var(--text);
+  margin: 0;
+}
+
+.formatCheckbox input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  flex: 0 0 auto;
+}
+
+@media (max-width: 900px) {
+  .formatGrid {
+    grid-template-columns: 1fr;
+  }
+}
