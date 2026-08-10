@@ -4,7 +4,10 @@ import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import vm from 'node:vm';
+import { withGaveta } from './helpers/with-gaveta.js';
 import {
   animateImageForReelsWithFfmpeg,
   buildAiImageGenerationPrompt,
@@ -57,6 +60,25 @@ async function request(server, path, options = {}) {
   const text = await response.text();
   const body = text ? JSON.parse(text) : null;
   return { response, body };
+}
+
+const execFileAsync = promisify(execFile);
+
+// Builds one approved-and-scheduled content item the same way the panel
+// does (create project -> generate a schedule plan -> approve one item
+// through the real route), for tests that exercise approve/publish/token
+// routes end to end.
+async function createApprovedItem(server, dir, projectId) {
+  await createCentralProject({ projectId, name: projectId }, dir);
+  const batch = await generateContentSchedulePlan(projectId, {
+    days: 1,
+    startDate: '2026-08-10',
+    formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+  }, dir);
+  const contentId = batch.items[0].contentId;
+  const approved = await request(server, `/api/projects/${projectId}/content/${contentId}/approve`, { method: 'POST' });
+  assert.equal(approved.response.status, 200);
+  return { contentId, batchId: batch.batchId };
 }
 
 test('AI image reviewer prompt blocks square-looking Story price dominance and product mismatch', () => {
@@ -1467,6 +1489,25 @@ test('content central server regenerates a shared-creative group through /conten
       },
     },
   );
+});
+
+test('POST .../approve upserts the queue item into the configured gaveta', async () => {
+  await withGaveta(async ({ workDir, bareDir }) => {
+    process.env.OPENSQUAD_GAVETA_DIR = workDir;
+    try {
+      await withServer(async (dir, server) => {
+        const { contentId } = await createApprovedItem(server, dir, 'gaveta-approve-route');
+
+        const checkDir = `${workDir}-check`;
+        await execFileAsync('git', ['clone', bareDir, checkDir]);
+        const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'gaveta-approve-route', `${contentId}.json`), 'utf-8'));
+        assert.equal(raw.publish.realPublished, false);
+        await rm(checkDir, { recursive: true, force: true });
+      });
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_DIR;
+    }
+  });
 });
 
 test('client-facing briefing page offers a PDF download that hides interactive controls when printed', async () => {

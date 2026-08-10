@@ -74,8 +74,36 @@ import {
   updateProjectImageRules,
   validateMetaToken,
 } from './content-central.js';
+import { upsertQueueItem, removeQueueItem } from './gaveta-sync.js';
 
 export { CONTENT_CENTRAL_PERSONAS };
+
+// Local dev without OPENSQUAD_GAVETA_DIR set behaves exactly as before this
+// feature existed — no queueSync/mediaUploader passed, approve/regenerate/
+// delete stay purely local.
+// projectId is passed explicitly (not read off `content`) because content
+// records don't carry their own projectId — resolveGeneratedImageAbsolutePath
+// needs it to locate the file on disk (see publishContentToInstagram above,
+// which does the same `project.projectId` lookup for the same reason).
+function resolveGaveteSync(targetDir, projectId) {
+  const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
+  if (!gaveteDir) return {};
+  return {
+    queueSync: async (action, payload) => {
+      if (action === 'upsert') return upsertQueueItem(gaveteDir, payload.projectId, payload.contentId, payload.data);
+      if (action === 'remove') return removeQueueItem(gaveteDir, payload.projectId, payload.contentId);
+    },
+    mediaUploader: async (content) => {
+      const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
+      if (isVideoChannel) {
+        if (!content.video?.localPath) return null;
+        return uploadGeneratedVideoPublicly(content.video.localPath);
+      }
+      const localPath = resolveGeneratedImageAbsolutePath(content, projectId, targetDir);
+      return localPath ? uploadGeneratedImagePublicly(localPath) : null;
+    },
+  };
+}
 
 const API_SUPPORTED_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story']);
 const execFileAsync = promisify(execFile);
@@ -731,6 +759,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
       imageReviewer: context.imageReviewer,
       captionGenerator: context.captionGenerator,
       catalogImageComposer: context.catalogImageComposer,
+      ...resolveGaveteSync(targetDir, projectId),
     }, targetDir);
     return sendJson(res, 200, { content });
   }
@@ -745,6 +774,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
       imageReviewer: context.imageReviewer,
       captionGenerator: context.captionGenerator,
       catalogImageComposer: context.catalogImageComposer,
+      ...resolveGaveteSync(targetDir, projectId),
     }, targetDir);
     return sendJson(res, 200, { items });
   }
@@ -775,7 +805,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (parts.length === 6 && parts[3] === 'content' && parts[5] === 'approve') {
     const body = await readBody(req);
-    const content = await approveContent(projectId, parts[4], targetDir, body.batchId);
+    const content = await approveContent(projectId, parts[4], targetDir, body.batchId, resolveGaveteSync(targetDir, projectId));
     return sendJson(res, 200, { content });
   }
 
@@ -792,7 +822,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (parts.length === 6 && parts[3] === 'content' && parts[5] === 'delete') {
     const body = await readBody(req);
-    const result = await deleteProjectContent(projectId, parts[4], targetDir, body.batchId, body.reason);
+    const result = await deleteProjectContent(projectId, parts[4], targetDir, body.batchId, body.reason, resolveGaveteSync(targetDir, projectId));
     return sendJson(res, 200, result);
   }
 
