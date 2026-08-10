@@ -4361,6 +4361,67 @@ test('runDuePublishSweep only publishes the earliest overdue (date, time) slot p
   });
 });
 
+test('approveContent calls queueSync with an upsert for the approved item', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sync-approve', name: 'Sync Approve', handle: '@syncapprove', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('sync-approve', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
+
+    const calls = [];
+    await approveContent('sync-approve', batch.items[0].contentId, dir, batch.batchId, {
+      queueSync: async (action, payload) => calls.push({ action, payload }),
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'upsert');
+    assert.equal(calls[0].payload.projectId, 'sync-approve');
+    assert.equal(calls[0].payload.contentId, batch.items[0].contentId);
+    assert.equal(calls[0].payload.data.scheduledDate, '2026-08-10');
+  });
+});
+
+test('approveContent works with no queueSync provided (back-compat)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sync-none', name: 'Sync None', handle: '@syncnone', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('sync-none', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
+    const content = await approveContent('sync-none', batch.items[0].contentId, dir, batch.batchId);
+    assert.equal(content.status, 'aprovado');
+  });
+});
+
+test('regenerateContentDay calls queueSync with a remove when leaving aprovado status', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sync-regen', name: 'Sync Regen', handle: '@syncregen', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('sync-regen', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
+    await approveContent('sync-regen', batch.items[0].contentId, dir, batch.batchId);
+
+    const calls = [];
+    await regenerateContentDay('sync-regen', batch.items[0].contentId, {
+      batchId: batch.batchId,
+      queueSync: async (action, payload) => calls.push({ action, payload }),
+    }, dir);
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'remove');
+    assert.equal(calls[0].payload.contentId, batch.items[0].contentId);
+  });
+});
+
+test('deleteProjectContent calls queueSync with a remove', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sync-delete', name: 'Sync Delete', handle: '@syncdelete', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('sync-delete', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
+    await approveContent('sync-delete', batch.items[0].contentId, dir, batch.batchId);
+
+    const calls = [];
+    await deleteProjectContent('sync-delete', batch.items[0].contentId, dir, batch.batchId, undefined, {
+      queueSync: async (action, payload) => calls.push({ action, payload }),
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].action, 'remove');
+  });
+});
+
 test('publishSingleContent publishes on demand even before the scheduled time', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

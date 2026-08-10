@@ -2688,6 +2688,9 @@ export async function regenerateContentDay(projectId, contentId, options = {}, t
   }
 
   await writeJson(contentPath, content);
+  if (typeof options.queueSync === 'function') {
+    await options.queueSync('remove', { projectId, contentId: content.contentId });
+  }
   return content;
 }
 
@@ -2742,6 +2745,9 @@ export async function regenerateContentGroup(projectId, contentIds, options = {}
 
   for (const entry of entries) {
     await writeJson(entry.contentPath, entry.content);
+    if (typeof options.queueSync === 'function') {
+      await options.queueSync('remove', { projectId, contentId: entry.content.contentId });
+    }
   }
   return entries.map((entry) => entry.content);
 }
@@ -2801,7 +2807,7 @@ export async function buildApprovalPayload(projectId, contentId, targetDir = pro
 // scheduled/ready to publish. Content stays on disk under drafts/<batch>;
 // only `status` and `approval.approvedAt` change, so the "Aprovado" tab is a
 // status filter over the same content list, not a physical file move.
-export async function approveContent(projectId, contentId, targetDir = process.cwd(), batchId) {
+export async function approveContent(projectId, contentId, targetDir = process.cwd(), batchId, options = {}) {
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
@@ -2812,6 +2818,9 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   content.status = 'aprovado';
   content.approval.approvedAt = now;
   content.approval.approvalSource = 'operator_panel';
+  if (typeof options.mediaUploader === 'function') {
+    content.publish = { ...content.publish, mediaUrl: await options.mediaUploader(content) };
+  }
   content.updatedAt = now;
   await writeJson(contentPath, content);
 
@@ -2822,6 +2831,20 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   project.updatedAt = now;
   await writeJson(paths.projectPath, project);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+
+  if (typeof options.queueSync === 'function') {
+    await options.queueSync('upsert', {
+      projectId,
+      contentId: content.contentId,
+      data: {
+        channel: content.channel,
+        caption: content.caption.text,
+        mediaUrl: content.publish?.mediaUrl || null,
+        scheduledDate: content.scheduledDate,
+        scheduledTime: content.scheduledTime,
+      },
+    });
+  }
 
   return content;
   });
@@ -3159,7 +3182,7 @@ export async function listProjectContent(projectId, targetDir = process.cwd()) {
   });
 }
 
-export async function deleteProjectContent(projectId, contentId, targetDir = process.cwd(), batchId, reason) {
+export async function deleteProjectContent(projectId, contentId, targetDir = process.cwd(), batchId, reason, options = {}) {
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
@@ -3169,6 +3192,9 @@ export async function deleteProjectContent(projectId, contentId, targetDir = pro
   const batch = await readJson(batchPath, null);
 
   await rm(contentPath, { force: true });
+  if (typeof options.queueSync === 'function') {
+    await options.queueSync('remove', { projectId, contentId });
+  }
   if (content?.image?.localPath) {
     await rm(safeProjectPath(paths.projectDir, content.image.localPath), { force: true });
   }
