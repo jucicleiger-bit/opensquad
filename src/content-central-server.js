@@ -176,13 +176,32 @@ function execFileNoStdin(file, args, { timeout, maxBuffer = 10 * 1024 * 1024 } =
   });
 }
 
+// gh secret set's value goes via stdin, not `--body <value>` as a literal
+// CLI argument — args are visible to anything listing processes (ps/tasklist)
+// for the life of the child, which would leak the raw Meta token. This wraps
+// the raw (non-promisified) execFile so we get the child's stdin stream to
+// write the secret value to, then closes it (`--body` with no value tells gh
+// to read stdin).
+function execFileWithStdin(file, args, input) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(file, args, (err, stdout, stderr) => {
+      if (err) return reject(Object.assign(err, { stdout, stderr }));
+      resolve({ stdout, stderr });
+    });
+    if (input !== undefined) {
+      child.stdin.write(input);
+    }
+    child.stdin.end();
+  });
+}
+
 // Pushes a project's Meta token (and IG/Page IDs) to GitHub Secrets so the
 // GitHub Actions publisher always has a fresh credential — no-op when
 // OPENSQUAD_GAVETA_REPO isn't set (local dev without GitHub configured).
 export async function syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pageId }, options = {}) {
   const repo = process.env.OPENSQUAD_GAVETA_REPO;
   if (!repo) return;
-  const run = options.execFileAsync || execFileAsync;
+  const run = options.execFileAsync || execFileWithStdin;
   const prefix = projectId.toUpperCase().replace(/-/g, '_');
   const entries = [
     [`META_TOKEN_${prefix}`, token],
@@ -190,7 +209,7 @@ export async function syncTokenSecretsToGitHub(projectId, { token, instagramUser
     [`META_PAGE_ID_${prefix}`, pageId || ''],
   ];
   for (const [name, value] of entries) {
-    await run('gh', ['secret', 'set', name, '--repo', repo, '--body', value]);
+    await run('gh', ['secret', 'set', name, '--repo', repo], value);
   }
 }
 
@@ -199,7 +218,7 @@ export async function syncTokenSecretsToGitHub(projectId, { token, instagramUser
 // node:child_process's execFile never reaches call sites that already
 // closed over the original. This lets tests swap the function the token-save
 // *route* uses without touching global module state.
-let execFileAsyncForRoutes = execFileAsync;
+let execFileAsyncForRoutes = execFileWithStdin;
 export function __setExecFileAsyncForTests(fn) {
   const previous = execFileAsyncForRoutes;
   execFileAsyncForRoutes = fn;
@@ -493,12 +512,21 @@ async function handleRequest(req, res, targetDir, context = {}) {
         ...(body.handle ? { handle: body.handle } : {}),
       },
     }, targetDir);
-    await syncTokenSecretsToGitHub(projectId, {
-      token: body.token,
-      instagramUserId: body.account?.instagramUserId,
-      pageId: body.account?.pageId,
-    }, { execFileAsync: execFileAsyncForRoutes });
-    return sendJson(res, 200, { project, validation });
+    let githubSyncWarning;
+    try {
+      await syncTokenSecretsToGitHub(projectId, {
+        token: body.token,
+        instagramUserId: body.account?.instagramUserId,
+        pageId: body.account?.pageId,
+      }, { execFileAsync: execFileAsyncForRoutes });
+    } catch (err) {
+      // The token is already saved to disk at this point — a gh failure
+      // (not installed/authenticated, API error) shouldn't turn a
+      // successful save into a 500. Surface it as a warning instead.
+      console.error(`Failed to sync GitHub secrets for project ${projectId}:`, err);
+      githubSyncWarning = err.message;
+    }
+    return sendJson(res, 200, { project, validation, ...(githubSyncWarning ? { githubSyncWarning } : {}) });
   }
 
   if (parts.length === 4 && parts[3] === 'company-profile') {

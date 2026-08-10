@@ -3301,20 +3301,24 @@ test('startPublishScheduler still starts the interval when OPENSQUAD_AUTO_PUBLIS
   }
 });
 
-test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configured', async () => {
+test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configured, passing the value via stdin not as a CLI arg', async () => {
   process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
   try {
     const calls = [];
     await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...', instagramUserId: '123', pageId: '456' }, {
-      execFileAsync: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '' }; },
+      execFileAsync: async (cmd, args, input) => { calls.push({ cmd, args, input }); return { stdout: '' }; },
     });
 
     assert.equal(calls.length, 3);
     assert.ok(calls.every((c) => c.cmd === 'gh' && c.args[0] === 'secret' && c.args[1] === 'set'));
-    assert.ok(calls.some((c) => c.args.includes('META_TOKEN_BOSS_PIZZARIA') && c.args.includes('EAAB...')));
-    assert.ok(calls.some((c) => c.args.includes('META_IG_USER_ID_BOSS_PIZZARIA') && c.args.includes('123')));
-    assert.ok(calls.some((c) => c.args.includes('META_PAGE_ID_BOSS_PIZZARIA') && c.args.includes('456')));
+    assert.ok(calls.some((c) => c.args.includes('META_TOKEN_BOSS_PIZZARIA') && c.input === 'EAAB...'));
+    assert.ok(calls.some((c) => c.args.includes('META_IG_USER_ID_BOSS_PIZZARIA') && c.input === '123'));
+    assert.ok(calls.some((c) => c.args.includes('META_PAGE_ID_BOSS_PIZZARIA') && c.input === '456'));
     assert.ok(calls.every((c) => c.args.includes('--repo') && c.args.includes('someuser/gaveta')));
+    // The secret values must never appear as literal CLI arguments (visible
+    // to ps/tasklist) — only on the stdin `input` param.
+    assert.ok(calls.every((c) => !c.args.includes('EAAB...') && !c.args.includes('123') && !c.args.includes('456')));
+    assert.ok(calls.every((c) => !c.args.includes('--body')));
   } finally {
     delete process.env.OPENSQUAD_GAVETA_REPO;
   }
@@ -3323,7 +3327,7 @@ test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configur
 test('syncTokenSecretsToGitHub is a no-op when OPENSQUAD_GAVETA_REPO is unset', async () => {
   const calls = [];
   await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...' }, {
-    execFileAsync: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '' }; },
+    execFileAsync: async (cmd, args, input) => { calls.push({ cmd, args, input }); return { stdout: '' }; },
   });
   assert.equal(calls.length, 0);
 });
@@ -3333,7 +3337,7 @@ test('POST .../token calls syncTokenSecretsToGitHub after saving', async () => {
     process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
     try {
       const calls = [];
-      const originalExecFileAsync = serverModule.__setExecFileAsyncForTests((cmd, args) => { calls.push({ cmd, args }); return Promise.resolve({ stdout: '' }); });
+      const originalExecFileAsync = serverModule.__setExecFileAsyncForTests((cmd, args, input) => { calls.push({ cmd, args, input }); return Promise.resolve({ stdout: '' }); });
 
       await request(server, '/api/projects', {
         method: 'POST',
@@ -3349,8 +3353,38 @@ test('POST .../token calls syncTokenSecretsToGitHub after saving', async () => {
       });
 
       assert.equal(res.response.status, 200);
+      assert.equal(res.body.githubSyncWarning, undefined);
       const secretCalls = calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'secret');
       assert.equal(secretCalls.length, 3);
+      assert.ok(secretCalls.every((c) => !c.args.includes('EAAB...')));
+      serverModule.__setExecFileAsyncForTests(originalExecFileAsync);
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_REPO;
+    }
+  });
+});
+
+test('POST .../token still returns 200 with a githubSyncWarning when the GitHub sync fails', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
+    try {
+      const originalExecFileAsync = serverModule.__setExecFileAsyncForTests(async () => {
+        throw new Error('gh: command not found');
+      });
+
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'gaveta-token-fail', name: 'Gaveta Token Fail', handle: '@gavetatokenfail', approvalEmail: 'a@example.com' }),
+      });
+      const res = await request(server, '/api/projects/gaveta-token-fail/token', {
+        method: 'POST',
+        body: JSON.stringify({ token: 'EAAB...', expiresAt: '2026-12-01T00:00:00.000Z', account: { handle: '@x', instagramUserId: '123', pageId: '456' } }),
+      });
+
+      assert.equal(res.response.status, 200);
+      assert.equal(res.body.githubSyncWarning, 'gh: command not found');
+      // the token save itself must still have gone through despite the sync failure
+      assert.equal(res.body.project.token.configured, true);
       serverModule.__setExecFileAsyncForTests(originalExecFileAsync);
     } finally {
       delete process.env.OPENSQUAD_GAVETA_REPO;
