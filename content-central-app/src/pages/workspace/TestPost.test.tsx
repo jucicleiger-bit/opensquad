@@ -70,7 +70,9 @@ describe("TestPost", () => {
     await userEvent.click(screen.getByRole("button", { name: "Gerar conteúdo + simular postagem" }));
 
     expect(await screen.findByText("Legenda de teste gerada pela IA")).toBeInTheDocument();
-    expect(screen.getByText("Enquadramento correto, preço legível.")).toBeInTheDocument();
+    expect(screen.getAllByText("Enquadramento correto, preço legível.").length).toBeGreaterThan(0);
+    expect(screen.getByText("Pipeline deste criativo")).toBeInTheDocument();
+    expect(screen.getByText("Renata")).toBeInTheDocument();
     expect(screen.getByText("dry-run: sim")).toBeInTheDocument();
     expect(screen.getByText("publicado: não")).toBeInTheDocument();
   });

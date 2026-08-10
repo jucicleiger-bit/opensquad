@@ -154,7 +154,7 @@ export function Pillars() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 16px" }}>Pilares</h2>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Pilares</h2>
       <p className="muted" style={{ marginTop: -8, marginBottom: 20 }}>
         Defina o norte estratégico deste projeto. Cada pilar governa uma fatia da rotação de conteúdo, o CTA e o
         tratamento visual do criativo — sem pilares configurados, a geração segue a rotação automática padrão.

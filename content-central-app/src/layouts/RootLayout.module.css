@@ -1,8 +1,8 @@
 .topbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 24px;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
   border-bottom: 1px solid var(--line);
   background: rgba(6, 6, 9, 0.66);
   backdrop-filter: blur(22px) saturate(140%);
@@ -14,7 +14,7 @@
 .brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-sm);
   text-decoration: none;
 }
 
@@ -23,12 +23,13 @@
   height: 34px;
   border-radius: 11px;
   flex: 0 0 auto;
-  background: var(--accent);
+  background: var(--gradient-brand);
   display: grid;
   place-items: center;
   font-weight: 800;
   font-size: 14px;
   color: var(--accent-ink);
+  box-shadow: 0 4px 14px -4px oklch(from var(--accent) l c h / 60%);
 }
 
 .brandName {
@@ -41,4 +42,11 @@
 
 .content {
   min-height: calc(100vh - 63px);
+  /* The one atmospheric touch in the whole system — a very soft glow
+     anchored top-center, fixed so it doesn't scroll away or repeat behind
+     every card. Reads as depth/ambience, never as a decoration competing
+     with the data on the page. */
+  background:
+    radial-gradient(760px 420px at 50% -120px, oklch(from var(--accent) l c h / 10%), transparent 70%),
+    var(--bg);
 }

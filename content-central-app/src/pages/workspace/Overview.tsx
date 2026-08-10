@@ -94,7 +94,7 @@ export function Overview() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 4px" }}>{project.name}</h2>
+      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>{project.name}</h2>
       <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>{project.projectId}</p>
 
       {error ? <EmptyState title="Não foi possível carregar o conteúdo" description={error} /> : null}

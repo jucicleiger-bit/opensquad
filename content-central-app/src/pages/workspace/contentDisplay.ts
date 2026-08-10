@@ -97,3 +97,85 @@ export function statusMeta(item: ContentItem): StatusMeta {
   if (bucketForItem(item) === "aprovado") return { label: "Aprovado", dotClass: "dotAprovado" };
   return { label: "Aguardando aprovação", dotClass: "dotAguardando" };
 }
+
+export type ContentPipelineTone = "done" | "active" | "waiting" | "blocked";
+
+export interface ContentPipelineStep {
+  id: "copy" | "direct_response" | "creative_direction" | "image" | "review";
+  agent: string;
+  label: string;
+  detail: string;
+  tone: ContentPipelineTone;
+}
+
+function captionTone(item: ContentItem): ContentPipelineTone {
+  if (item.captionGenerationError) return "blocked";
+  if (item.caption?.text?.trim()) return "done";
+  return "waiting";
+}
+
+function imageTone(item: ContentItem): ContentPipelineTone {
+  if (item.imageGenerationError) return "blocked";
+  if (item.image?.generating) return "active";
+  if (imageSource(item)) return "done";
+  return "waiting";
+}
+
+function reviewTone(item: ContentItem): ContentPipelineTone {
+  const review = item.creativeReview;
+  if (review?.status === "blocked" || review?.errors?.length) return "blocked";
+  if (review?.status === "ok") return "done";
+  if (review?.status || review?.warnings?.length) return "active";
+  return "waiting";
+}
+
+// Visible, read-only snapshot of the real generation path in src/content-central-server.js:
+// Sofia drafts the social copy, Dante optimizes it for direct response, Clara
+// turns the approved brief into the visual direction/prompt, the image provider
+// renders it, and Renata blocks/approves the creative review before the operator
+// publishes. The data is derived from the persisted ContentItem; no new backend
+// state is invented just to draw this UI.
+export function contentPipelineSteps(item: ContentItem): ContentPipelineStep[] {
+  const hasCaption = Boolean(item.caption?.text?.trim());
+  const hasPrompt = Boolean(item.image?.prompt?.trim());
+  const hasImage = Boolean(imageSource(item));
+  const review = item.creativeReview;
+
+  return [
+    {
+      id: "copy",
+      agent: "Sofia",
+      label: "Copy",
+      detail: item.captionGenerationError ? "Erro ao criar legenda" : hasCaption ? "Legenda criada" : "Aguardando legenda",
+      tone: captionTone(item),
+    },
+    {
+      id: "direct_response",
+      agent: "Dante",
+      label: "Direct response",
+      detail: item.captionGenerationError ? "Otimização não concluída" : hasCaption ? "Gancho e CTA revisados" : "Aguardando copy",
+      tone: captionTone(item),
+    },
+    {
+      id: "creative_direction",
+      agent: "Clara",
+      label: "Direção criativa",
+      detail: hasPrompt ? "Prompt visual pronto" : item.imageGenerationError ? "Briefing visual travou" : item.image?.generating ? "Direção em uso" : "Aguardando briefing visual",
+      tone: hasPrompt ? "done" : item.imageGenerationError ? "blocked" : item.image?.generating ? "active" : "waiting",
+    },
+    {
+      id: "image",
+      agent: "Imagem",
+      label: "Arte final",
+      detail: item.imageGenerationError ? "Imagem falhou" : item.image?.generating ? "Gerando imagem" : hasImage ? "Imagem pronta" : "Sem imagem ainda",
+      tone: imageTone(item),
+    },
+    {
+      id: "review",
+      agent: "Renata",
+      label: "Revisão",
+      detail: review?.summary || (review?.status === "ok" ? "Criativo aprovado" : review?.status === "blocked" ? "Criativo bloqueado" : hasImage ? "Aguardando revisão" : "Aguardando imagem"),
+      tone: reviewTone(item),
+    },
+  ];
+}

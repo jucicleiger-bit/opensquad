@@ -23,6 +23,7 @@ export interface BrandInput {
   mainDifferential?: string;
   contentGoals?: string[];
   audience?: string;
+  audienceType?: "" | "b2b" | "b2c";
   tone?: string[];
   avoid?: string;
   positioning?: string;
@@ -60,7 +61,32 @@ export interface ProjectOffer {
   notes?: string;
   active?: boolean;
   pillarId?: string | null;
+  groupId?: string | null;
+  daysOfWeek?: string[];
   photoReferenceIds?: string[];
+}
+
+export const WEEKDAY_LABELS: Record<string, string> = {
+  mon: "Seg",
+  tue: "Ter",
+  wed: "Qua",
+  thu: "Qui",
+  fri: "Sex",
+  sat: "Sáb",
+  sun: "Dom",
+};
+export const WEEKDAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+export const AUDIENCE_TYPE_LABELS: Record<string, string> = {
+  b2b: "B2B — vende para empresas/revendedores",
+  b2c: "B2C — vende direto ao consumidor final",
+};
+
+export interface OfferGroup {
+  id: string;
+  name: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ProjectPillar {
@@ -136,12 +162,25 @@ export interface BrandIdentity {
   editedColors?: string[];
 }
 
+// The real facts read off a prospect's actual Instagram profile screenshot
+// — never anything the AI generated. Quoted verbatim on the prospecting
+// mockup's profile header (see /api/projects/:id/prospect-mockup).
+export interface ProspectSource {
+  handle: string | null;
+  bio: string | null;
+  realFollowers: number | null;
+  realPosts: number | null;
+  realFollowing: number | null;
+}
+
 export interface ProjectSummary {
   projectId: string;
   name: string;
   status?: string;
   mode?: string;
   projectType?: "marketing" | "catalog";
+  isProspect?: boolean;
+  prospectSource?: ProspectSource | null;
   approvalEmail?: string;
   timezone?: string;
   instagram?: ProjectInstagram;
@@ -157,7 +196,7 @@ export interface ProjectSummary {
     catalogStoriesPerDay?: number;
     [key: string]: unknown;
   };
-  contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; [key: string]: unknown };
+  contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; [key: string]: unknown };
   rules?: unknown;
   createdAt?: string;
   updatedAt?: string;
@@ -302,6 +341,77 @@ export function deleteProject(projectId: string): Promise<{ projectId: string; d
   });
 }
 
+// What the AI read off the prospect's screenshot — always editable before
+// generating anything, since a vision read can get a detail wrong. `null`
+// fields mean "couldn't read this," never a guess.
+export interface ProspectExtraction {
+  businessName: string | null;
+  handle: string | null;
+  nicheGuess: string | null;
+  bioText: string | null;
+  differentiators: string[];
+  realFollowers: number | null;
+  realPosts: number | null;
+  realFollowing: number | null;
+}
+
+export function createProspectFromScreenshot(
+  dataUrl: string,
+): Promise<{ project: ProjectSummary; extracted: ProspectExtraction | null }> {
+  return api("/api/prospects", {
+    method: "POST",
+    body: JSON.stringify({ dataUrl }),
+  });
+}
+
+export function prospectMockupUrl(projectId: string): string {
+  return `/api/projects/${encodeURIComponent(projectId)}/prospect-mockup`;
+}
+
+// A "segment template" (e.g. "Embalagens") is a small library of
+// pre-approved, already-real (AI-photographed) art reused across every
+// prospect in the same business segment — see registerSegmentTemplate in
+// content-central.js. Registration is operator/script-driven for now; the
+// dashboard only ever lists and consumes what's already registered.
+// The art itself is fixed (never regenerated per prospect); only a live CSS
+// color overlay changes per prospect, client-side, zero network call.
+export interface SegmentTemplatePiece {
+  key: string;
+  label: string;
+  channel: string;
+  imagePath: string;
+}
+
+export interface SegmentTemplateSummary {
+  segmentId: string;
+  label: string;
+  pieceCount: number;
+  pieces: SegmentTemplatePiece[];
+}
+
+export function listSegmentTemplates(): Promise<{ templates: SegmentTemplateSummary[] }> {
+  return api("/api/segment-templates");
+}
+
+// imagePath comes back as "images/<file>.png" — only the filename matters to
+// the serving route, which resolves it against the segment's own directory.
+export function segmentTemplateImageUrl(segmentId: string, imagePath: string): string {
+  const filename = imagePath.split("/").pop() || "";
+  return `/api/segment-templates/${encodeURIComponent(segmentId)}/images/${encodeURIComponent(filename)}`;
+}
+
+// One AI pass over the operator's bio draft in the prospecting preview —
+// polishes wording only, never invents facts the draft didn't already have.
+export function improveBio(
+  projectId: string,
+  input: { bio: string; segment?: string; businessName?: string },
+): Promise<{ bio: string }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/improve-bio`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 export function deleteContent(projectId: string, contentId: string, batchId?: string, reason?: string): Promise<unknown> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/content/${encodeURIComponent(contentId)}/delete`, {
     method: "POST",
@@ -322,6 +432,14 @@ export interface GenerateContentInput {
   startDate: string;
   formats: GenerateFormatInput[];
   contentRules: string;
+  // Scopes offer-driven topics to only these offer group(s) for this
+  // generation — omit (or leave empty) to use every active offer, same as
+  // before groups existed. Goal-driven topics are never affected.
+  groupIds?: string[];
+  // Only meaningful together with groupIds: skip goal-driven topics
+  // (autoridade/engajamento/etc.) entirely, so this batch is 100% offers
+  // from the selected group(s) instead of the usual interleaved mix.
+  offersOnly?: boolean;
 }
 
 export function generateContent(
@@ -333,6 +451,132 @@ export function generateContent(
     body: JSON.stringify(input),
   });
 }
+
+export interface CommemorativeDate {
+  date: string;
+  label: string;
+  kind: "holiday" | "commercial";
+}
+
+export function listCommemorativeDates(projectId: string, months = 3): Promise<{ dates: CommemorativeDate[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/commemorative-dates?months=${months}`);
+}
+
+export interface GenerateSpecialDateInput {
+  date: string;
+  label: string;
+  // Same-shape channels (Story/Reels/Facebook Story, or Feed/Facebook Feed)
+  // sent together share one generated creative instead of each paying for
+  // its own — see creativeGroupKey in generateSpecialDateContent.
+  channels: string[];
+  offerId?: string;
+  postTime?: string;
+}
+
+// A one-off creative for a national holiday or commercial date, generated
+// independent of the normal offer/pillar rotation — see
+// generateSpecialDateContent in content-central.js.
+export function generateSpecialDateContent(
+  projectId: string,
+  input: GenerateSpecialDateInput,
+): Promise<{ batch: { items: unknown[] } }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/generate-special-date`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface AdCopyVariation {
+  angle: "dor" | "desejo" | "urgencia";
+  angleLabel: string;
+  headline: string;
+  primaryText: string;
+  description: string;
+  cta: string;
+}
+
+// The real objectives from Meta Ads Manager — each one changes the tone/CTA
+// the copy generator writes (see AD_OBJECTIVE_COPY_GUIDANCE server-side).
+export const AD_OBJECTIVE_LABELS: Record<string, string> = {
+  whatsapp: "Tráfego para o WhatsApp",
+  awareness: "Reconhecimento de marca",
+  engagement: "Engajamento",
+  leads: "Cadastros (Leads)",
+  sales: "Vendas/Conversão",
+  app_promotion: "Promoção do app",
+};
+
+// A criativo de anúncio pago (paid ad creative) — a separate concept from
+// organic ContentItem: no scheduledDate, no approval, no calendar. The
+// operator runs the campaign themselves in Ads Manager; this is just the
+// generated creative + copy variations, ready to download/copy from.
+export interface AdCreative {
+  adCreativeId: string;
+  projectId: string;
+  objective: string;
+  objectiveLabel: string;
+  offerId: string | null;
+  offerName: string | null;
+  channel: string;
+  formatLabel: string;
+  title: string;
+  image: {
+    url?: string;
+    previewUrl?: string;
+    previewDataUrl?: string;
+    generating?: boolean;
+    aspectRatio?: string;
+    dimensions?: { width: number; height: number };
+  };
+  variations: AdCopyVariation[];
+  imageGenerationError: string | null;
+  copyGenerationError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function listAdCreatives(projectId: string): Promise<{ adCreatives: AdCreative[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/ad-creatives`);
+}
+
+export interface GenerateAdCreativeInput {
+  objective: string;
+  offerId?: string;
+  format?: "story" | "feed" | "ambos";
+  note?: string;
+  noteMode?: "recomendacao" | "base_total";
+}
+
+export function generateAdCreative(
+  projectId: string,
+  input: GenerateAdCreativeInput,
+): Promise<{ adCreatives: AdCreative[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/ad-creatives`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+// "Regenerar só a imagem" (no note) or "Pedido de alteração" (with note —
+// a targeted edit of the existing image, same mechanism organic content
+// regeneration uses). Copy variations are always left untouched.
+export function regenerateAdCreative(
+  projectId: string,
+  adCreativeId: string,
+  note?: string,
+): Promise<{ adCreative: AdCreative }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/ad-creatives-regenerate/${encodeURIComponent(adCreativeId)}`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function deleteAdCreative(projectId: string, adCreativeId: string): Promise<{ deleted: boolean }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/ad-creatives-delete/${encodeURIComponent(adCreativeId)}`, {
+    method: "POST",
+  });
+}
+
 
 // For catalog (venda direta) projects: no formats/channels matrix — just
 // how many days, how many stories per day, and when the first one goes out.
@@ -480,6 +724,8 @@ export interface SaveOfferInput {
   autoGenerateCta?: boolean;
   notes?: string;
   pillarId?: string | null;
+  groupId?: string | null;
+  daysOfWeek?: string[];
   active?: boolean;
   photoReferenceIds?: string[];
 }
@@ -495,6 +741,20 @@ export function deleteOffer(projectId: string, offerId: string): Promise<{ delet
   return api(`/api/projects/${encodeURIComponent(projectId)}/offers-delete`, {
     method: "POST",
     body: JSON.stringify({ offerId }),
+  });
+}
+
+export function saveOfferGroup(projectId: string, input: { id?: string; name: string }): Promise<{ project: ProjectSummary; group: OfferGroup }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-groups`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function deleteOfferGroup(projectId: string, groupId: string): Promise<{ deleted: boolean; project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-groups-delete`, {
+    method: "POST",
+    body: JSON.stringify({ groupId }),
   });
 }
 

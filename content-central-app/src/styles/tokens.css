@@ -1,23 +1,33 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app */
+/* Hallmark · genre: modern-minimal · macrostructure: App shell (custom) · design-system: design.md · designed-as-app */
 :root {
   color-scheme: dark;
   --bg: #07070a;
   --bg-soft: #0a0a0d;
-  --panel: #0e0e12;
-  --surface: rgba(255, 255, 255, 0.04);
-  --surface-2: rgba(255, 255, 255, 0.06);
-  --surface-3: rgba(255, 255, 255, 0.08);
-  --line: rgba(255, 255, 255, 0.09);
-  --line-strong: rgba(255, 255, 255, 0.16);
-  --muted: #94939f;
+  /* Was #0e0e12 — 4 RGB units off --bg, so a .card barely read as a
+     separate surface even with a shadow under it. Widened the gap for real
+     separation at a glance. */
+  --panel: #17161f;
+  --panel-2: #1d1c28;
+  --surface: rgba(255, 255, 255, 0.045);
+  --surface-2: rgba(255, 255, 255, 0.07);
+  --surface-3: rgba(255, 255, 255, 0.1);
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --muted: #9796a3;
   --text: #f8f7fb;
   --soft: #d6d4e0;
-  --faint: #68667a;
-  /* One solid accent hue, no gradient siblings — see design.md § Theme. */
+  --faint: #6c6a7c;
   --accent: oklch(66% 0.19 292);
   --accent-strong: oklch(72% 0.17 292);
   --accent-ink: oklch(99% 0 0);
   --accent-warm: #facc15;
+  /* Signature duotone — the one deliberate "this is our product" move,
+     used sparingly (brand mark, primary button sheen, a couple of stat
+     numbers) rather than as a wash over everything. Cooler companion hue
+     to the violet accent, not a copy of any other product's brand
+     gradient. See design.md § Identity. */
+  --accent-2: oklch(70% 0.15 230);
+  --gradient-brand: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
   /* Status-dot cyan (Calendar "Publicado", Overview status legend) — a
      semantic status color, unrelated to the brand accent above. */
   --status-published: oklch(74% 0.12 220);
@@ -27,21 +37,69 @@
   --radius-sm: 10px;
   --radius: 16px;
   --radius-lg: 24px;
-  --shadow: 0 24px 80px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  /* Lighter than --shadow (that one's for floating/overlay elements) — this
+     is the everyday lift that separates a .card from the page background. */
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 16px 40px rgba(0, 0, 0, 0.38);
   --button-h: 44px;
   --ease: cubic-bezier(0.16, 1, 0.3, 1);
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-body: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+
+  /* See design.md § Spacing — the scale every page's layout must reference
+     by name instead of inventing its own pixel values inline. Bumped up a
+     notch from the first pass — the app read as cramped, not just
+     inconsistent. */
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-md: 18px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+  --space-3xl: 64px;
+
+  /* Real type scale — see design.md § Typography. Every heading in the app
+     must reference one of these instead of an inline px guess. */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+  --text-display: 44px;
 }
 
+/* Real hierarchy — the three levels used to render at nearly the same
+   weight/size and lean on whatever inline style each call site guessed.
+   h1 is a page title (there's ever only one per screen); h2 is a card/
+   section head; h3 is a minor in-card label. */
 h1,
 h2,
 h3 {
   font-family: var(--font-display);
-  font-weight: 600;
   font-style: normal;
-  letter-spacing: -0.01em;
   margin: 0;
+}
+
+h1 {
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+h2 {
+  font-size: var(--text-xl);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+h3 {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 * {
@@ -73,25 +131,33 @@ button {
   min-height: var(--button-h);
   border: 1px solid transparent;
   border-radius: 12px;
-  background: var(--accent);
+  /* The signature gradient, used sparingly — this is one of its two
+     appearances (the other is the header brand mark). Secondary/ghost
+     override this below to a neutral fill — the glow is a primary-action
+     signal, not decoration on every button. */
+  background: var(--gradient-brand);
   color: var(--accent-ink);
   font-weight: 750;
-  padding: 0 16px;
+  padding: 0 18px;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  transition: background 0.2s var(--ease), filter 0.2s ease;
+  box-shadow: 0 8px 20px -8px oklch(from var(--accent) l c h / 55%);
+  transition: background 0.2s var(--ease), filter 0.2s ease, box-shadow 0.2s var(--ease), transform 0.2s var(--ease);
 }
 
 /* One hover signal, not four — see design.md § Motion. */
 button:hover {
   filter: brightness(1.1);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px -8px oklch(from var(--accent) l c h / 65%);
 }
 
 button:active {
   filter: brightness(0.96);
+  transform: translateY(0);
 }
 
 button:disabled {
@@ -100,15 +166,27 @@ button:disabled {
   transform: none;
 }
 
+/* Secondary/ghost carry no accent glow — that lift is reserved for primary
+   actions, so it stays meaningful instead of decorating every click target. */
+button.secondary,
+button.ghost {
+  box-shadow: none;
+}
+
+button.secondary:hover,
+button.ghost:hover {
+  box-shadow: none;
+}
+
 button.secondary {
   background: var(--surface-2);
   color: var(--soft);
   border-color: var(--line);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 button.secondary:hover {
   background: var(--surface-3);
+  transform: translateY(-1px);
 }
 
 button.ghost {
@@ -124,11 +202,14 @@ button.ghost:hover {
 }
 
 /* Flat tinted surface, no glass — glassmorphism is reserved for the sticky
-   top bar, where it floats over scrolling content for a real reason. */
+   top bar, where it floats over scrolling content for a real reason. A
+   little real depth (--shadow-card) is what actually separates a card from
+   the page background at a glance — the border alone reads flat/pasted-on. */
 .card {
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
 }
 
 .pill {
@@ -184,6 +265,17 @@ textarea {
   min-height: 44px;
 }
 
+/* The block above is sized for text-style fields — a checkbox inherits it
+   too (width:100%/min-height:44px), stretching into a giant blank square
+   instead of a normal tickbox. Reset it back to its natural size. */
+input[type="checkbox"] {
+  width: 16px;
+  min-height: 0;
+  height: 16px;
+  padding: 0;
+  flex: 0 0 auto;
+}
+
 /* The closed <select> box picks up the semi-transparent background above
    fine, but the native dropdown popup ignores alpha-transparent
    backgrounds and falls back to the OS default (white) — while still
@@ -216,34 +308,84 @@ textarea::placeholder {
   background: rgba(255, 255, 255, 0.025);
   border: 1px solid var(--line);
   border-radius: 18px;
-  padding: 16px;
+  padding: var(--space-md);
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: var(--space-md);
 }
 
 .row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-sm);
 }
 
 .notice {
   border: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.035);
   border-radius: 18px;
-  padding: 15px 16px;
+  padding: var(--space-md);
   line-height: 1.65;
 }
 
 .button-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 10px;
+  gap: var(--space-xs);
   align-items: center;
+}
+
+/* See design.md § Layout family — every page's title/subtitle/actions
+   header reads from this one class instead of a bespoke inline flexbox.
+   Wraps to a stacked column once actions no longer fit beside the title. */
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-xl);
+}
+
+/* The one h1 on screen (Dashboard's "Seus projetos") gets the full display
+   size — every other heading in the app is an h2/h3, this is the actual
+   top of the hierarchy. */
+.page-head h1 {
+  font-size: var(--text-display);
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  margin: 0 0 var(--space-2xs);
+}
+
+.page-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+/* A right-aligned group of buttons — the primary/secondary action row that
+   sits beside a .page-head title, or at the bottom of a form/card. */
+.actions-row {
+  display: flex;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+}
+
+/* Vertical rhythm helpers — replaces the one-off `style={{ marginTop: N }}`
+   scattered across every page with three named steps. */
+.stack-sm > * + * {
+  margin-top: var(--space-sm);
+}
+
+.stack-md > * + * {
+  margin-top: var(--space-md);
+}
+
+.stack-lg > * + * {
+  margin-top: var(--space-lg);
 }
 
 .pill.bad {

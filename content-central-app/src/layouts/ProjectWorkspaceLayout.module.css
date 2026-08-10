@@ -6,18 +6,19 @@
 
 .sidebar {
   border-right: 1px solid var(--line);
-  padding: 20px 14px;
+  background: var(--bg-soft);
+  padding: var(--space-lg) var(--space-sm);
 }
 
 .back {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2xs);
   color: var(--muted);
   text-decoration: none;
   font-size: 12px;
   font-weight: 700;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-sm);
 }
 
 .back:hover {
@@ -29,25 +30,25 @@
   font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  margin-bottom: 18px;
+  margin-bottom: var(--space-md);
   overflow-wrap: anywhere;
 }
 
 .nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-3xs);
 }
 
 .navLink {
   display: block;
-  padding: 10px 12px;
+  padding: var(--space-xs) var(--space-sm);
   border-radius: 12px;
   color: var(--muted);
   text-decoration: none;
   font-weight: 650;
   font-size: 13px;
-  transition: color 0.2s ease, background 0.2s ease;
+  transition: color 0.2s var(--ease), background 0.2s var(--ease);
 }
 
 .navLink:hover {
@@ -61,7 +62,7 @@
 }
 
 .navGroupLabel {
-  padding: 16px 12px 6px;
+  padding: var(--space-md) var(--space-sm) var(--space-2xs);
   color: var(--faint);
   font-size: 11px;
   font-weight: 700;
@@ -70,11 +71,11 @@
 }
 
 .navGroupLabel:first-child {
-  padding-top: 4px;
+  padding-top: var(--space-2xs);
 }
 
 .content {
-  padding: 24px 28px 60px;
+  padding: var(--space-xl) var(--space-2xl) 60px;
   min-width: 0;
 }
 

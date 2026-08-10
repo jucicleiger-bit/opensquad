@@ -7,6 +7,7 @@ import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
 import { addMonths, buildMonthGrid, monthLabel, startOfMonth, toDateKey, weekdayLabels } from "./calendarUtils";
+import { ContentPipeline } from "./ContentPipeline";
 import { bucketForItem, channelLabel, imageSource, isFeedChannel, statusMeta } from "./contentDisplay";
 import styles from "./Calendar.module.css";
 
@@ -180,6 +181,7 @@ export function Calendar() {
             <div style={{ marginTop: 8 }}>
               <span className="pill">{statusMeta(selectedItem).label}</span>
             </div>
+            <ContentPipeline item={selectedItem} />
             <div className={styles.caption}>{selectedItem.caption?.text || "Sem legenda"}</div>
             <div className={styles.actions}>
               {!selectedItem.publish?.realPublished ? (

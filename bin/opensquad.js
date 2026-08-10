@@ -6,13 +6,15 @@ import { update } from '../src/update.js';
 import { skillsCli } from '../src/skills-cli.js';
 import { agentsCli } from '../src/agents-cli.js';
 import { listRuns, printRuns } from '../src/runs.js';
+import { contentCentralCli } from '../src/content-central-cli.js';
 
 const { positionals } = parseArgs({
   allowPositionals: true,
   strict: false,
 });
 
-const command = positionals[0];
+const rawArgs = process.argv.slice(2);
+const command = positionals[0] || rawArgs[0];
 
 if (command === 'init') {
   await init(process.cwd());
@@ -50,6 +52,9 @@ if (command === 'init') {
   const squadName = positionals[1] || null;
   const runs = await listRuns(squadName, process.cwd());
   printRuns(runs);
+} else if (command === 'content') {
+  const result = await contentCentralCli(rawArgs[1], rawArgs.slice(2), process.cwd());
+  if (!result.success) process.exitCode = 1;
 } else {
   console.log(`
   opensquad — Multi-agent orchestration for Claude Code
@@ -66,6 +71,7 @@ if (command === 'init') {
     npx opensquad agents remove <name>    Remove an agent
     npx opensquad agents update           Update all agents
     npx opensquad runs [squad-name]     View execution history
+    npx opensquad content                 Open content central MVP commands
 
   Learn more: https://github.com/renatoasse/opensquad
   `);

@@ -1,0 +1,110 @@
+.list {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.card {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
+  gap: 18px;
+  padding: 20px;
+}
+
+.phone {
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #050506;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.phoneFeed {
+  aspect-ratio: 4 / 5;
+}
+
+.phoneTall {
+  aspect-ratio: 9 / 16;
+  max-height: 420px;
+}
+
+.phone img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.variations {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.variation {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.variationHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.variationLabel {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 8px;
+}
+
+.variationLabel:first-of-type {
+  margin-top: 0;
+}
+
+.variationHeadline {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.variationText {
+  color: var(--soft);
+  font-size: 14px;
+  white-space: pre-wrap;
+}
+
+.variationDescription {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.variationCta {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+@media (max-width: 640px) {
+  .card {
+    grid-template-columns: 1fr;
+  }
+}

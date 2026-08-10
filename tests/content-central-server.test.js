@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import vm from 'node:vm';
@@ -10,13 +10,20 @@ import {
   buildAiImageGenerationPrompt,
   buildAiImageReviewPrompt,
   buildCatalogOutpaintPrompt,
+  buildAdCopyPrompt,
+  CONTENT_CENTRAL_PERSONAS,
+  buildDanteOptimizerPrompt,
+  buildSofiaSocialCaptionPrompt,
   composeProductStoryImage,
+  cropCircularAvatar,
   cropOpenAiImageToChannel,
   fetchSiteText,
   htmlToReadableText,
   loadContentCentralEnv,
   nousFalAspectRatioForChannel,
+  normalizeProspectExtraction,
   openAiImageSizeForChannel,
+  resolveContentImageAbsolutePath,
   startContentCentralServer,
   uploadGeneratedImagePublicly,
   uploadGeneratedVideoPublicly,
@@ -26,6 +33,7 @@ import {
   createCentralProject,
   generateCatalogSchedulePlan,
   generateContentSchedulePlan,
+  registerSegmentTemplate,
   saveProjectAsset,
   saveProjectOffer,
 } from '../src/content-central.js';
@@ -78,6 +86,63 @@ test('AI image reviewer prompt blocks square-looking Story price dominance and p
   assert.match(prompt, /combo e imagem mostrar item único/i);
 });
 
+test('Content Central exposes the official persona map and prompt builders use those persona identities', () => {
+  assert.deepEqual(Object.keys(CONTENT_CENTRAL_PERSONAS), ['sofia', 'dante', 'clara', 'diego', 'renata']);
+
+  const content = {
+    channel: 'instagram_feed',
+    formatLabel: 'Instagram Feed',
+    image: { prompt: 'Briefing aprovado', dimensions: { width: 1080, height: 1350 } },
+    contentTopic: { offerName: 'Combo Família', price: '89,90', type: 'combo' },
+  };
+  const project = { name: 'Boss Pizzaria', brandInput: {} };
+
+  assert.match(buildSofiaSocialCaptionPrompt({ content, project }), /Sofia Social/);
+  assert.match(buildDanteOptimizerPrompt({ content, project, draft: 'Legenda inicial.' }), /Dante Conteúdo/);
+  assert.match(buildAiImageGenerationPrompt({ content }), /Clara Criativa/);
+  assert.match(buildAdCopyPrompt({ adCreative: { objective: 'sales', objectiveLabel: 'Vendas', contentTopic: content.contentTopic }, project }), /Diego Performance/);
+  assert.match(buildAiImageReviewPrompt({ content, project }), /Renata Revisão/);
+});
+
+test('AI image reviewer prompt also blocks missing required items (by default, with no note needed) and letterbox blur bars, and switches framing when the image is attached instead of linked', () => {
+  const linked = buildAiImageReviewPrompt({
+    content: {
+      channel: 'instagram_feed',
+      formatLabel: 'Instagram Feed',
+      image: { url: 'https://cdn.example.com/rodizio.png' },
+      contentTopic: { offerName: 'Rodizio da boss', price: '29,99', items: 'pizza salgado, pizza doce, batata frita e esfiha' },
+    },
+    project: { name: 'Boss Pizzaria' },
+    note: '',
+  });
+  assert.match(linked, /Imagem: https:\/\/cdn\.example\.com\/rodizio\.png/);
+  assert.match(linked, /item.*não apareça visualmente reconhecível/i);
+  assert.match(linked, /todos os itens listados precisam estar representados/i);
+  assert.match(linked, /barras, faixas ou bordas desfocadas/i);
+
+  const attached = buildAiImageReviewPrompt({
+    content: { channel: 'instagram_feed', formatLabel: 'Instagram Feed', image: { url: 'https://cdn.example.com/rodizio.png' }, contentTopic: {} },
+    project: { name: 'Boss Pizzaria' },
+    attachedAsFile: true,
+  });
+  assert.doesNotMatch(attached, /Imagem: https:\/\//);
+  assert.match(attached, /imagem final anexada a este turno/i);
+});
+
+test('resolveContentImageAbsolutePath derives the real file path on disk from content.filePath + image.url, without needing targetDir threaded in separately', () => {
+  const projectDir = 'C:\\Users\\op\\OneDrive\\Documentos\\PROJETO\\OPENSQUAD\\_opensquad\\content-central\\projects\\boss-pizzaria';
+  const resolved = resolveContentImageAbsolutePath({
+    projectId: 'boss-pizzaria',
+    filePath: `${projectDir}\\content\\ad-creatives\\boss-pizzaria-anuncio-123.json`,
+    image: { url: '/api/projects/boss-pizzaria/assets/assets/generated/codexagent-123.png' },
+  });
+  assert.equal(resolved, `${projectDir}\\assets\\generated\\codexagent-123.png`);
+
+  // No usable filePath/url — returns null instead of guessing or throwing.
+  assert.equal(resolveContentImageAbsolutePath({ projectId: 'boss-pizzaria', filePath: '', image: {} }), null);
+  assert.equal(resolveContentImageAbsolutePath({ filePath: 'C:\\x\\_opensquad\\...', image: { url: '/api/projects/x/assets/assets/y.png' } }), null);
+});
+
 test('AI image generation prompt uses ChatGPT/OpenAI instead of Grok', () => {
   const prompt = buildAiImageGenerationPrompt({
     content: {
@@ -108,6 +173,121 @@ test('AI image generation prompt uses ChatGPT/OpenAI instead of Grok', () => {
   assert.doesNotMatch(prompt, /Grok/i);
   assert.doesNotMatch(prompt, /2:3 Alto/i);
   assert.doesNotMatch(prompt, /3:2 Ampla/i);
+  // Confirmed live (2026-08-07): real ad creatives came back with blurred
+  // letterbox bars on the edges when the raw image_gen output didn't land
+  // on the exact target aspect ratio. Both the from-scratch and targeted-
+  // edit prompts must tell the model to fill the whole frame.
+  assert.match(prompt, /preenchendo o quadro inteiro/i);
+});
+
+test('a targeted edit prompt also asks the model to fill the whole frame, same anti-letterbox instruction as the from-scratch prompt', () => {
+  const prompt = buildAiImageGenerationPrompt({
+    content: { channel: 'instagram_feed', formatLabel: 'Instagram Feed', image: { aspectRatio: 'portrait', dimensions: { width: 1080, height: 1350 } } },
+    note: 'Trocar o preço para R$ 19,90.',
+    targetedEdit: true,
+  });
+  assert.match(prompt, /preenchendo o quadro inteiro/i);
+});
+
+test('a targeted edit (an operator correction note) asks the model to change only that, instead of the from-scratch brief that pushes it to redo at least 3 things', () => {
+  const content = {
+    channel: 'instagram_story',
+    formatLabel: 'Instagram Stories',
+    image: {
+      aspectRatio: 'portrait',
+      dimensions: { width: 1080, height: 1920 },
+      prompt: 'FORMATO\n- Story vertical 9:16.\n\nTEXTOS OBRIGATÓRIOS\n- Título exato: Galinha com Arroz',
+    },
+  };
+
+  const editPrompt = buildAiImageGenerationPrompt({ content, note: 'aumentar o preço', targetedEdit: true });
+  assert.match(editPrompt, /EDIÇÃO pontual/i);
+  assert.match(editPrompt, /aumentar o preço/);
+  assert.match(editPrompt, /preserve exatamente o restante da composição/i);
+  assert.doesNotMatch(editPrompt, /mudar claramente pelo menos 3 itens/i);
+  assert.doesNotMatch(editPrompt, /HIERARQUIA/i);
+  // A realism-focused correction ("isso ficou com cara de IA") needs the
+  // same concrete anti-AI technique vocabulary the full brief carries —
+  // otherwise the model has nothing but the bare complaint to act on.
+  assert.match(editPrompt, /evite aparência de IA/i);
+  assert.match(editPrompt, /textura real e levemente irregular/i);
+
+  // A rescue pass (fixing a broken canvas/aspect ratio) needs a real
+  // from-scratch regeneration — editing the same broken image can't fix a
+  // structural problem, so targetedEdit must be ignored there.
+  const rescuePrompt = buildAiImageGenerationPrompt({ content, note: 'aumentar o preço', targetedEdit: true, rescueMode: true });
+  assert.doesNotMatch(rescuePrompt, /EDIÇÃO pontual/i);
+  assert.match(rescuePrompt, /MODO RESGATE ATIVO/i);
+
+  // No note at all ("try something different") has nothing to edit toward —
+  // stays a normal from-scratch generation.
+  const noNotePrompt = buildAiImageGenerationPrompt({ content, note: '', targetedEdit: true });
+  assert.doesNotMatch(noNotePrompt, /EDIÇÃO pontual/i);
+});
+
+test('caption prompts adapt tone to the project\'s B2B/B2C audience focus, and stay silent when unset', () => {
+  const content = { formatLabel: 'Instagram Stories', channel: 'instagram_story', contentTopic: { offerName: 'Combo 20 Esfihas', price: '97,00' } };
+
+  const b2bPrompt = buildSofiaSocialCaptionPrompt({ content, project: { name: 'Casa de Embalagem', brandInput: { audienceType: 'b2b' } } });
+  assert.match(b2bPrompt, /B2B/);
+  assert.match(b2bPrompt, /revenda, atacado, operação/i);
+  assert.doesNotMatch(b2bPrompt, /B2C/);
+
+  const b2cPrompt = buildSofiaSocialCaptionPrompt({ content, project: { name: 'Boss Pizzaria', brandInput: { audienceType: 'b2c' } } });
+  assert.match(b2cPrompt, /B2C/);
+  assert.match(b2cPrompt, /consumidor final/i);
+
+  const unsetPrompt = buildSofiaSocialCaptionPrompt({ content, project: { name: 'Boss Pizzaria', brandInput: {} } });
+  assert.doesNotMatch(unsetPrompt, /Foco comercial/i);
+
+  const b2bOptimizerPrompt = buildDanteOptimizerPrompt({ content, project: { name: 'Casa de Embalagem', brandInput: { audienceType: 'b2b' } }, draft: 'Rascunho de teste.' });
+  assert.match(b2bOptimizerPrompt, /B2B/);
+});
+
+test('ad copy prompt asks for headline/primaryText/description within Meta\'s real character limits, and its guidance changes with the ad objective', () => {
+  const adCreative = { objective: 'sales', objectiveLabel: 'Vendas/Conversão', contentTopic: { offerName: 'Combo 20 Esfihas', price: '97,00' } };
+  const salesPrompt = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' } });
+  assert.match(salesPrompt, /"description"/);
+  assert.match(salesPrompt, /máximo 30 caracteres/);
+  assert.match(salesPrompt, /Compre agora/i);
+
+  const engagementCreative = { ...adCreative, objective: 'engagement', objectiveLabel: 'Engajamento' };
+  const engagementPrompt = buildAdCopyPrompt({ adCreative: engagementCreative, project: { name: 'Boss Pizzaria' } });
+  assert.match(engagementPrompt, /Comenta aqui/i);
+  assert.doesNotMatch(engagementPrompt, /Compre agora/i);
+
+  const awarenessCreative = { ...adCreative, objective: 'awareness', objectiveLabel: 'Reconhecimento de marca' };
+  const awarenessPrompt = buildAdCopyPrompt({ adCreative: awarenessCreative, project: { name: 'Boss Pizzaria' } });
+  assert.match(awarenessPrompt, /Sem venda dura/i);
+});
+
+test('ad copy prompt treats the operator\'s note as one more input by default, but as the whole brief in "base_total" mode', () => {
+  const adCreative = { objective: 'whatsapp', objectiveLabel: 'Tráfego para o WhatsApp', contentTopic: {} };
+  const recomendacaoPrompt = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' }, note: 'menos de R$5/dia move seu Instagram', noteMode: 'recomendacao' });
+  assert.match(recomendacaoPrompt, /use como inspiração adicional/i);
+  assert.doesNotMatch(recomendacaoPrompt, /todas baseadas na MESMA ideia central/i);
+
+  const baseTotalPrompt = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' }, note: 'menos de R$5/dia move seu Instagram', noteMode: 'base_total' });
+  assert.match(baseTotalPrompt, /baseie tudo nela/i);
+  assert.match(baseTotalPrompt, /todas baseadas na MESMA ideia central/i);
+});
+
+test('ad copy prompt folds in the project\'s approved/avoid learnings from past organic posts, same signal the image prompt already gets', () => {
+  const adCreative = { objective: 'whatsapp', objectiveLabel: 'Tráfego para o WhatsApp', contentTopic: {} };
+  const projectWithLearnings = {
+    name: 'Boss Pizzaria',
+    learnings: {
+      avoid: ['Combo Família (Instagram Feed, 2026-07-01): rejeitado — tom agressivo demais, cliente pediu mais leveza.'],
+      approved: ['Pizza Grande (Instagram Feed, 2026-07-15): aprovado.'],
+    },
+  };
+  const promptWithLearnings = buildAdCopyPrompt({ adCreative, project: projectWithLearnings });
+  assert.match(promptWithLearnings, /APRENDIZADOS DE CONTEÚDOS ANTERIORES/i);
+  assert.match(promptWithLearnings, /tom agressivo demais/i);
+  assert.match(promptWithLearnings, /Pizza Grande.*aprovado/i);
+
+  const promptWithoutLearnings = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' } });
+  assert.doesNotMatch(promptWithoutLearnings, /APRENDIZADOS DE CONTEÚDOS ANTERIORES/i);
 });
 
 test('content central loads OpenAI image settings from local env file without overriding process env', async () => {
@@ -292,6 +472,298 @@ test('composeProductStoryImage renders a real 1080x1920 PNG from a catalog produ
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test('cropCircularAvatar cuts a real square crop out of a screenshot and zeroes the alpha outside the circle', async () => {
+  const { Jimp } = await import('jimp');
+  // A 400x400 solid-blue "screenshot" — the avatar box asks for the middle
+  // 50% square (100,100 to 300,300).
+  const screenshot = new Jimp({ width: 400, height: 400, color: 0x3388ffff });
+  const buffer = await screenshot.getBuffer('image/png');
+
+  const dataUrl = await cropCircularAvatar(buffer, { xPct: 25, yPct: 25, sizePct: 50 });
+  assert.ok(dataUrl.startsWith('data:image/png;base64,'));
+
+  const pngBuffer = Buffer.from(dataUrl.split(',')[1], 'base64');
+  const cropped = await Jimp.read(pngBuffer);
+  assert.equal(cropped.bitmap.width, 200);
+  assert.equal(cropped.bitmap.height, 200);
+
+  const centerIdx = (100 * 200 + 100) * 4;
+  assert.equal(cropped.bitmap.data[centerIdx + 3], 255, 'center of the circle must stay fully opaque');
+  assert.equal(cropped.bitmap.data[centerIdx], 0x33, 'center pixel must keep the real screenshot color, not a guessed one');
+
+  const cornerIdx = (0 * 200 + 0) * 4;
+  assert.equal(cropped.bitmap.data[cornerIdx + 3], 0, 'corners outside the circle must be fully transparent');
+});
+
+test('cropCircularAvatar returns null instead of guessing when there is no box or the box falls outside the image', async () => {
+  const { Jimp } = await import('jimp');
+  const screenshot = new Jimp({ width: 400, height: 400, color: 0x3388ffff });
+  const buffer = await screenshot.getBuffer('image/png');
+
+  assert.equal(await cropCircularAvatar(buffer, null), null);
+  assert.equal(await cropCircularAvatar(buffer, { xPct: 80, yPct: 80, sizePct: 50 }), null, 'a box that runs past the image edge must not be silently clamped');
+});
+
+const FAKE_PROSPECT_EXTRACTION = {
+  businessName: 'Empório Rei da Mussarela',
+  handle: '@emporioreidamussarela',
+  nicheGuess: 'delivery de frios e laticínios',
+  bioText: 'Serviço de entrega de comida. Loja de frios e Fatiados.',
+  differentiators: ['Qualidade e preço justo', 'O melhor preço de Cuiabá'],
+  realFollowers: 4388,
+  realPosts: 20,
+  realFollowing: 35,
+  avatarCrop: { xPct: 25, yPct: 25, sizePct: 50 },
+};
+
+test('POST /api/prospects reads a real profile screenshot end to end: creates a manual-mode isProspect project pre-filled with the real facts, and saves the cropped avatar as the logo', async () => {
+  const { Jimp } = await import('jimp');
+  // Same injection pattern as every other AI feature in this file
+  // (imageGenerator, webResearcher, siteAnalyzer...) — the real
+  // prospectScreenshotAnalyzer runs `hermes chat --image`, a real
+  // subprocess call with no mocking seam, so tests inject a fake one here
+  // exactly like startContentCentralServer already lets an operator inject
+  // any of the others.
+  const analyzerCalls = [];
+  await withServer(async (dir, server) => {
+    const screenshot = new Jimp({ width: 400, height: 400, color: 0xdc2626ff });
+    const dataUrl = `data:image/png;base64,${(await screenshot.getBuffer('image/png')).toString('base64')}`;
+
+    const { response, body } = await request(server, '/api/prospects', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+    assert.equal(response.status, 201);
+
+    assert.equal(body.project.isProspect, true);
+    assert.equal(body.project.mode, 'manual', 'a prospect must never auto-publish');
+    assert.equal(body.project.name, 'Empório Rei da Mussarela');
+    assert.deepEqual(body.project.prospectSource, {
+      handle: '@emporioreidamussarela',
+      bio: 'Serviço de entrega de comida. Loja de frios e Fatiados.',
+      realFollowers: 4388,
+      realPosts: 20,
+      realFollowing: 35,
+    });
+    assert.equal(body.extracted.nicheGuess, 'delivery de frios e laticínios');
+
+    // The cropped avatar really landed on disk as the project's logo.
+    assert.match(body.project.brand.logoPath, /^assets\/logo\.png$/);
+    const logoPath = join(dir, '_opensquad', 'content-central', 'projects', body.project.projectId, 'assets', 'logo.png');
+    assert.ok(existsSync(logoPath), 'expected the cropped avatar to be saved as the real logo file');
+    const savedLogo = await Jimp.read(logoPath);
+    assert.equal(savedLogo.bitmap.width, 200);
+    assert.equal(savedLogo.bitmap.height, 200);
+
+    const { body: state } = await request(server, '/api/state');
+    const listed = state.projects.find((p) => p.projectId === body.project.projectId);
+    assert.equal(listed.isProspect, true, 'must still be flagged as a prospect through the real project list, not just the create response');
+  }, {
+    prospectScreenshotAnalyzer: async (payload) => {
+      analyzerCalls.push(payload);
+      return FAKE_PROSPECT_EXTRACTION;
+    },
+  });
+  assert.equal(analyzerCalls.length, 1);
+  assert.ok(Buffer.isBuffer(analyzerCalls[0].buffer), 'the real uploaded screenshot bytes must reach the analyzer');
+  assert.equal(analyzerCalls[0].mimeType, 'image/png');
+});
+
+test('POST /api/prospects still creates the project with no analyzer configured (enableAiImages off, the default), with blank fields instead of failing the request', async () => {
+  const { Jimp } = await import('jimp');
+  await withServer(async (_dir, server) => {
+    const screenshot = new Jimp({ width: 400, height: 400, color: 0xdc2626ff });
+    const dataUrl = `data:image/png;base64,${(await screenshot.getBuffer('image/png')).toString('base64')}`;
+
+    const { response, body } = await request(server, '/api/prospects', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+    assert.equal(response.status, 201);
+    assert.equal(body.extracted, null);
+    assert.equal(body.project.isProspect, true);
+    // Still the normalized shape (same convention as normalizeLearnings/
+    // normalizeCompanyProfile elsewhere) — every field null instead of
+    // fabricating a value, but never a bare null for the whole object.
+    assert.deepEqual(body.project.prospectSource, { handle: null, bio: null, realFollowers: null, realPosts: null, realFollowing: null });
+    assert.match(body.project.name, /^Nova prospecção \d+$/);
+  });
+});
+
+test('POST /api/prospects still creates the project when the injected analyzer throws, instead of failing the request', async () => {
+  const { Jimp } = await import('jimp');
+  await withServer(async (_dir, server) => {
+    const screenshot = new Jimp({ width: 400, height: 400, color: 0xdc2626ff });
+    const dataUrl = `data:image/png;base64,${(await screenshot.getBuffer('image/png')).toString('base64')}`;
+
+    const { response, body } = await request(server, '/api/prospects', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+    assert.equal(response.status, 201);
+    assert.equal(body.extracted, null);
+    assert.equal(body.project.isProspect, true);
+  }, {
+    prospectScreenshotAnalyzer: async () => { throw new Error('hermes chat failed'); },
+  });
+});
+
+test('GET prospect-mockup renders the real profile counts/bio from prospectSource (never invented) with the freshly generated posts in a real Instagram-profile layout', async () => {
+  const { Jimp } = await import('jimp');
+  await withServer(async (_dir, server) => {
+    const screenshot = new Jimp({ width: 400, height: 400, color: 0xdc2626ff });
+    const dataUrl = `data:image/png;base64,${(await screenshot.getBuffer('image/png')).toString('base64')}`;
+    const { body: created } = await request(server, '/api/prospects', { method: 'POST', body: JSON.stringify({ dataUrl }) });
+    const projectId = created.project.projectId;
+
+    await request(server, `/api/projects/${projectId}/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ days: 1, startDate: '2026-08-10', channel: 'instagram_feed' }),
+    });
+    await request(server, `/api/projects/${projectId}/generate`, {
+      method: 'POST',
+      body: JSON.stringify({ days: 1, startDate: '2026-08-10', channel: 'instagram_story' }),
+    });
+
+    const response = await fetch(`${server.url}/api/projects/${projectId}/prospect-mockup`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+
+    assert.ok(html.includes('4.388'), 'must quote the real follower count exactly as the screenshot showed it');
+    assert.ok(html.includes('20'), 'real post count');
+    assert.ok(html.includes('35'), 'real following count');
+    assert.ok(html.includes('Serviço de entrega de comida. Loja de frios e Fatiados.'), 'must quote the real bio verbatim');
+    assert.ok(html.includes('Empório Rei da Mussarela'));
+    assert.ok(html.includes('onclick="window.print()"'));
+    assert.match(html, /class="ig-grid"/, 'the generated feed posts must render as a real profile grid, not a linear card list');
+    assert.match(html, /class="ig-highlights"/);
+    assert.match(
+      html,
+      new RegExp(`<img src="/api/projects/${projectId}/assets/assets/logo\\.png" alt="Foto de perfil">`),
+      'a real cropped avatar must render as a real <img>, not the fallback initial',
+    );
+  }, {
+    prospectScreenshotAnalyzer: async () => FAKE_PROSPECT_EXTRACTION,
+  });
+});
+
+test('GET /api/segment-templates lists nothing before any template is registered, then the real registered ones', async () => {
+  await withServer(async (dir, server) => {
+    const empty = await request(server, '/api/segment-templates');
+    assert.equal(empty.response.status, 200);
+    assert.deepEqual(empty.body.templates, []);
+
+    const source = join(dir, 'source.png');
+    await writeFile(source, Buffer.from('89504e470d0a1a0a', 'hex'));
+    await registerSegmentTemplate('embalagens', {
+      label: 'Embalagens',
+      pieces: [{ key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', angleNote: 'atacado e varejo', sourceImagePath: source }],
+    }, dir);
+
+    const { response, body } = await request(server, '/api/segment-templates');
+    assert.equal(response.status, 200);
+    assert.deepEqual(body.templates, [{
+      segmentId: 'embalagens',
+      label: 'Embalagens',
+      pieceCount: 1,
+      pieces: [{ key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', imagePath: 'images/sell-products.png' }],
+    }]);
+  });
+});
+
+test('GET /api/segment-templates/:id/images/:file serves the real registered art directly, with path traversal rejected', async () => {
+  await withServer(async (dir, server) => {
+    const source = join(dir, 'source.png');
+    const pngBytes = Buffer.from('89504e470d0a1a0a', 'hex');
+    await writeFile(source, pngBytes);
+    await registerSegmentTemplate('embalagens', {
+      label: 'Embalagens',
+      pieces: [{ key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', angleNote: 'atacado e varejo', sourceImagePath: source }],
+    }, dir);
+
+    // Binary image response — bypasses the request() helper above, which
+    // always tries to JSON-parse the body.
+    const served = await fetch(`${server.url}/api/segment-templates/embalagens/images/sell-products.png`);
+    assert.equal(served.status, 200);
+    assert.equal(served.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await served.arrayBuffer()), pngBytes);
+
+    const missing = await fetch(`${server.url}/api/segment-templates/embalagens/images/nao-existe.png`);
+    assert.equal(missing.status, 404);
+
+    const traversal = await fetch(`${server.url}/api/segment-templates/embalagens/images/..%2F..%2Ftemplate.json`);
+    assert.equal(traversal.status, 404);
+  });
+});
+
+test('POST /api/projects/:id/adapt-segment-template adapts a registered template into real content items through the real endpoint, instead of generating from scratch', async () => {
+  await withServer(async (dir, server) => {
+    const source = join(dir, 'source.png');
+    await writeFile(source, Buffer.from('89504e470d0a1a0a', 'hex'));
+    await registerSegmentTemplate('embalagens', {
+      label: 'Embalagens',
+      pieces: [
+        { key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', angleNote: 'atacado e varejo', sourceImagePath: source },
+        { key: 'produtos', label: 'Destaque Produtos', channel: 'instagram_story', angleNote: 'vitrine', sourceImagePath: source },
+      ],
+    }, dir);
+
+    const { body: created } = await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'prospect-adapt', name: 'Prospect Adapt', isProspect: true }),
+    });
+    const projectId = created.project.projectId;
+
+    const { response, body } = await request(server, `/api/projects/${projectId}/adapt-segment-template`, {
+      method: 'POST',
+      body: JSON.stringify({ segmentId: 'embalagens' }),
+    });
+    assert.equal(response.status, 202);
+    assert.equal(body.queued, true);
+
+    for (let i = 0; i < 50; i += 1) {
+      const { body: contentBody } = await request(server, `/api/projects/${projectId}/content`);
+      if (contentBody.content.length === 2 && contentBody.content.every((item) => !item.image.generating)) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    const { body: finalContent } = await request(server, `/api/projects/${projectId}/content`);
+    assert.equal(finalContent.content.length, 2);
+    assert.deepEqual(finalContent.content.map((item) => item.channel).sort(), ['instagram_feed', 'instagram_story']);
+    assert.ok(finalContent.content.every((item) => item.image.generatedSource === 'ai'));
+    assert.ok(finalContent.content.every((item) => item.imageGenerationError === null));
+  }, {
+    imageGenerator: async (payload) => ({ url: `https://cdn.example.com/adapted-${payload.content.contentTopic.id}.png`, mimeType: 'image/png' }),
+  });
+});
+
+test('POST /api/projects/:id/adapt-segment-template rejects a missing segmentId instead of queueing nothing silently', async () => {
+  await withServer(async (dir, server) => {
+    const { body: created } = await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'prospect-sem-segmento', name: 'Prospect Sem Segmento' }),
+    });
+    const { response, body } = await request(server, `/api/projects/${created.project.projectId}/adapt-segment-template`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert.equal(response.status, 400);
+    assert.match(body.error, /segmentId/);
+  }, {
+    imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+  });
+});
+
+test('GET prospect-mockup never fabricates a stat it does not have — shows "—" instead of 0 when the vision read came back empty, and never shows a broken-image avatar when no crop was saved', async () => {
+  await withServer(async (dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'prospect-vazio', name: 'Prospect Vazio', isProspect: true }),
+    });
+
+    const response = await fetch(`${server.url}/api/projects/prospect-vazio/prospect-mockup`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.ok(html.includes('—'), 'missing stats must render as an explicit unknown marker, never 0');
+    // brand.logoPath defaults to 'assets/logo.png' at creation regardless of
+    // whether a file actually exists there — the mockup must not render an
+    // <img> against that default path when no avatar was ever saved.
+    assert.ok(!html.includes('<img src="/api/projects/prospect-vazio/assets/'), 'must not render a broken-image <img> for a logo path that was never actually saved');
+    assert.match(html, /class="ig-profile-avatar-fallback"/, 'must fall back to the initial-letter bubble instead');
+  });
 });
 
 test('uploading a WEBP product photo through the real /assets route converts it to PNG so composeProductStoryImage can actually read it', async () => {
@@ -1019,7 +1491,108 @@ test('client-facing briefing page offers a PDF download that hides interactive c
 
     assert.ok(html.includes('Baixar em PDF'));
     assert.ok(html.includes('onclick="window.print()"'));
-    assert.match(html, /@media print\{[\s\S]*\.briefing-approve,\.download-pdf\{display:none\}/);
+    assert.match(html, /@media print\{[\s\S]*\.download-pdf\{display:none\}/);
+  });
+});
+
+test('client-facing briefing page serves a resized/compressed JPEG preview of each creative instead of the full-resolution PNG, so the page (and its PDF export) stays a reasonable size', async () => {
+  const { Jimp } = await import('jimp');
+  await withServer(
+    async (dir, server) => {
+      const generatedDir = join(dir, '_opensquad', 'content-central', 'projects', 'briefing-heavy', 'assets', 'generated');
+      await mkdir(generatedDir, { recursive: true });
+      // A real 1200x1500 PNG with per-pixel noise, not a flat color — a flat
+      // fill already compresses losslessly to almost nothing under PNG,
+      // which would make a JPEG re-encode look *bigger*, the opposite of
+      // real AI-generated photos (2-4MB each in production) that this
+      // stands in for. Noise is the worst case for PNG and the case where
+      // JPEG's resize+lossy compression actually pays off, same as a photo.
+      const source = new Jimp({ width: 1200, height: 1500, color: 0x2a6f4dff });
+      source.scan(0, 0, source.bitmap.width, source.bitmap.height, (x, y, idx) => {
+        source.bitmap.data[idx + 0] = Math.floor(Math.random() * 256);
+        source.bitmap.data[idx + 1] = Math.floor(Math.random() * 256);
+        source.bitmap.data[idx + 2] = Math.floor(Math.random() * 256);
+      });
+      const originalBuffer = await source.getBuffer('image/png');
+      await writeFile(join(generatedDir, 'codex-heavy.png'), originalBuffer);
+
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: 'briefing-heavy',
+          name: 'Briefing Heavy',
+          handle: '@briefingheavy',
+          approvalEmail: 'aprovacao@example.com',
+        }),
+      });
+      await request(server, '/api/projects/briefing-heavy/generate', {
+        method: 'POST',
+        body: JSON.stringify({ days: 1, startDate: '2026-07-20', channel: 'instagram_feed' }),
+      });
+
+      // enqueueBatchImageGeneration runs in the background, off the /generate
+      // response — poll the content list until the injected imageGenerator's
+      // result has actually landed.
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/briefing-heavy/content');
+        if (body.content[0]?.image?.url && !body.content[0]?.image?.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      const page = await fetch(`${server.url}/api/projects/briefing-heavy/briefing`);
+      const html = await page.text();
+      assert.doesNotMatch(html, /src="\/api\/projects\/briefing-heavy\/assets\/assets\//, 'the raw full-resolution asset URL should not appear in the page');
+      const previewMatch = html.match(/src="(\/api\/projects\/briefing-heavy\/assets-preview\/assets\/generated\/codex-heavy\.png)"/);
+      assert.ok(previewMatch, 'expected the <img> to point at the resized-preview route');
+
+      const preview = await fetch(`${server.url}${previewMatch[1]}`);
+      assert.equal(preview.status, 200);
+      assert.equal(preview.headers.get('content-type'), 'image/jpeg');
+      const previewBuffer = Buffer.from(await preview.arrayBuffer());
+      assert.ok(previewBuffer.length < originalBuffer.length / 3, `preview (${previewBuffer.length}B) should be much smaller than the original (${originalBuffer.length}B)`);
+      const decoded = await Jimp.read(previewBuffer);
+      assert.ok(decoded.bitmap.width <= 640, `preview should be resized down, got width ${decoded.bitmap.width}`);
+
+      // The preview should be cached to disk, not recomputed on every request.
+      const cachedFiles = await readdir(join(generatedDir, '..', 'previews')).catch(() => []);
+      assert.ok(cachedFiles.some((name) => name.includes('codex-heavy.png')), 'expected the resized preview to be cached under assets/previews/');
+    },
+    {
+      imageGenerator: async () => ({
+        url: '/api/projects/briefing-heavy/assets/assets/generated/codex-heavy.png',
+        mimeType: 'image/png',
+      }),
+    },
+  );
+});
+
+test('client-facing briefing page is presentation-only — no approve action, no way to change real system state from it', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectId: 'briefing-presentation',
+        name: 'Briefing Presentation',
+        handle: '@briefingpresentation',
+        approvalEmail: 'aprovacao@example.com',
+      }),
+    });
+    await request(server, '/api/projects/briefing-presentation/generate', {
+      method: 'POST',
+      body: JSON.stringify({ days: 1, startDate: '2026-07-20', channel: 'instagram_feed' }),
+    });
+
+    const response = await fetch(`${server.url}/api/projects/briefing-presentation/briefing`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+
+    assert.doesNotMatch(html, /Aprovar/);
+    assert.doesNotMatch(html, /approveBriefingCard/);
+    assert.doesNotMatch(html, /data-items=/);
+    assert.doesNotMatch(html, /<script>/);
+    assert.match(html, /Aguardando aprovação/);
+    assert.match(html, /20 de julho de 2026/);
+    assert.match(html, /Descrição da publicação/);
   });
 });
 
@@ -1058,22 +1631,11 @@ test('client-facing briefing page groups same-shape channels that share a creati
     const cardCount = (html.match(/class="briefing-card"/g) || []).length;
     assert.equal(cardCount, 2, 'expected one grouped card for the vertical trio and one solo card for the feed item');
 
-    assert.match(html, /Aprovar estes 3 formatos/);
-    assert.match(html, /Aprovar este card/);
-
-    const groupedItemsMatch = html.match(/data-items='(\[[^']*\])'/);
-    assert.ok(groupedItemsMatch, 'expected a data-items attribute on the grouped approve button');
-    const payloads = [...html.matchAll(/data-items='(\[[^']*\])'/g)].map((match) => JSON.parse(match[1].replace(/&quot;/g, '"')));
-    const groupedPayload = payloads.find((payload) => payload.length === 3);
-    assert.ok(groupedPayload, 'expected one approve button whose data-items lists all 3 grouped contentIds');
-    assert.deepEqual(
-      groupedPayload.map((entry) => entry.contentId).sort(),
-      [
-        'briefing-grupo-2026-07-20-facebook_story-01',
-        'briefing-grupo-2026-07-20-instagram_reels-01',
-        'briefing-grupo-2026-07-20-instagram_story-01',
-      ],
-    );
+    // Channel tags still show which formats share the grouped creative — the
+    // page just doesn't offer an action to approve them from here anymore.
+    const groupedMeta = html.match(/<div class="briefing-meta">((?:(?!<\/div>)[\s\S])*)<\/div>/g) || [];
+    const threeChannelMeta = groupedMeta.find((meta) => (meta.match(/class="pill"/g) || []).length === 3);
+    assert.ok(threeChannelMeta, 'expected one card whose channel-tag row lists all 3 grouped channels');
   });
 });
 
@@ -1422,6 +1984,72 @@ test('content central API saves, edits and deletes content pillars', async () =>
 
     const finalState = await request(server, '/api/state');
     assert.deepEqual(finalState.body.projects[0].contentStrategy.pillars, []);
+  });
+});
+
+test('content central API saves, edits and deletes offer groups, and links an offer to one', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'grupos-web', name: 'Grupos Web' }),
+    });
+
+    const created = await request(server, '/api/projects/grupos-web/offer-groups', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Black Friday' }),
+    });
+    assert.equal(created.response.status, 200);
+    assert.equal(created.body.group.name, 'Black Friday');
+    const groupId = created.body.group.id;
+
+    const offer = await request(server, '/api/projects/grupos-web/offers', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Produto BF', groupId }),
+    });
+    assert.equal(offer.body.offer.groupId, groupId);
+
+    const state = await request(server, '/api/state');
+    assert.equal(state.body.projects[0].contentStrategy.offerGroups.length, 1);
+
+    const deleted = await request(server, '/api/projects/grupos-web/offer-groups-delete', {
+      method: 'POST',
+      body: JSON.stringify({ groupId }),
+    });
+    assert.equal(deleted.response.status, 200);
+    assert.equal(deleted.body.deleted, true);
+
+    const finalState = await request(server, '/api/state');
+    assert.deepEqual(finalState.body.projects[0].contentStrategy.offerGroups, []);
+  });
+});
+
+test('content central server generates content scoped to a group via /generate, ignoring offers outside it', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'grupos-generate-web', name: 'Grupos Generate Web' }),
+    });
+    const group = await request(server, '/api/projects/grupos-generate-web/offer-groups', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Black Friday' }),
+    });
+    const groupId = group.body.group.id;
+    await request(server, '/api/projects/grupos-generate-web/offers', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Produto BF', price: 'R$1', groupId }),
+    });
+    await request(server, '/api/projects/grupos-generate-web/offers', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Produto Sem Grupo' }),
+    });
+
+    const generated = await request(server, '/api/projects/grupos-generate-web/generate', {
+      method: 'POST',
+      body: JSON.stringify({ days: 2, startDate: '2026-08-03', channel: 'instagram_feed', groupIds: [groupId] }),
+    });
+    assert.equal(generated.response.status, 201);
+    const offerNames = generated.body.batch.items.map((item) => item.contentTopic.offerName);
+    assert.ok(offerNames.every((name) => name === 'Produto BF'));
   });
 });
 
@@ -1825,6 +2453,64 @@ test('content central API keeps Story selected in safe test post', async () => {
   });
 });
 
+// The vision call itself (analyzeProspectScreenshotWithHermes) runs
+// `hermes chat --image <path>` — a real subprocess/CLI call, same as every
+// other hermes-based function in this file (reviewAiImageWithHermes,
+// callHermesChatText, writeAiCaptionWithHermes etc.), none of which are
+// unit-tested directly for the same reason: no mocking seam for
+// execFileAsync exists here (nor should one be bolted on just for this).
+// It's exercised live instead (see the /api/prospects route tests below,
+// which inject a fake prospectScreenshotAnalyzer the same way other AI
+// features are injected via startContentCentralServer's context) and via
+// manual verification against a real screenshot. What's unit-tested here is
+// the normalization logic — the exact class of bug (locale-formatted counts,
+// an incomplete avatarCrop) most likely to hide a real defect.
+test('normalizeProspectExtraction cleans locale-formatted counts and drops a blank differentiator entry, without inventing anything', () => {
+  const extracted = normalizeProspectExtraction({
+    businessName: 'Empório Rei da Mussarela',
+    handle: '@emporioreidamussarela',
+    nicheGuess: 'delivery de frios e laticínios',
+    bioText: 'Serviço de entrega de comida. Loja de frios e Fatiados.',
+    differentiators: ['Qualidade e preço justo', 'O melhor preço de Cuiabá', ''],
+    realFollowers: '4.388',
+    realPosts: 20,
+    realFollowing: 35,
+    avatarCrop: { xPct: 4, yPct: 6, sizePct: 18 },
+  });
+  assert.equal(extracted.businessName, 'Empório Rei da Mussarela');
+  assert.equal(extracted.handle, '@emporioreidamussarela');
+  assert.equal(extracted.realFollowers, 4388, 'must strip the "4.388" locale formatting down to a plain number');
+  assert.equal(extracted.realPosts, 20);
+  assert.equal(extracted.realFollowing, 35);
+  assert.deepEqual(extracted.differentiators, ['Qualidade e preço justo', 'O melhor preço de Cuiabá'], 'must drop the blank entry, never pad it back in');
+  assert.deepEqual(extracted.avatarCrop, { xPct: 4, yPct: 6, sizePct: 18 });
+});
+
+test('normalizeProspectExtraction drops an incomplete avatar crop instead of guessing the missing side, and never invents a missing field', () => {
+  const extracted = normalizeProspectExtraction({
+    businessName: 'Loja Teste',
+    handle: null,
+    nicheGuess: null,
+    bioText: null,
+    differentiators: [],
+    realFollowers: null,
+    realPosts: null,
+    realFollowing: null,
+    avatarCrop: { xPct: 4, yPct: null, sizePct: 18 },
+  });
+  assert.equal(extracted.avatarCrop, null);
+  assert.equal(extracted.handle, null);
+  assert.equal(extracted.realFollowers, null);
+});
+
+test('normalizeProspectExtraction returns a safe empty shape for a garbage/non-object input instead of throwing', () => {
+  assert.doesNotThrow(() => normalizeProspectExtraction(null));
+  const extracted = normalizeProspectExtraction(null);
+  assert.equal(extracted.businessName, null);
+  assert.deepEqual(extracted.differentiators, []);
+  assert.equal(extracted.avatarCrop, null);
+});
+
 async function withMockedImageUpload(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-image-upload-'));
   const imagePath = join(dir, 'generated.jpg');
@@ -2098,6 +2784,53 @@ test('content central server wires the injected siteAnalyzer through the real ro
   );
 });
 
+test('content central server exposes improve-bio as 501 when no bioImprover is configured', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'prospect-bio', name: 'Prospect Bio' }),
+    });
+    const improved = await request(server, '/api/projects/prospect-bio/improve-bio', {
+      method: 'POST',
+      body: JSON.stringify({ bio: 'Pizzas boas', segment: 'Pizzaria' }),
+    });
+    assert.equal(improved.response.status, 501);
+  });
+});
+
+test('content central server wires the injected bioImprover through the real route, and 502s when it returns nothing', async () => {
+  const calls = [];
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'prospect-bio', name: 'Prospect Bio' }),
+      });
+
+      const improved = await request(server, '/api/projects/prospect-bio/improve-bio', {
+        method: 'POST',
+        body: JSON.stringify({ bio: 'Pizzas boas e baratas', segment: 'Pizzaria', businessName: 'Prospect Bio' }),
+      });
+
+      assert.equal(improved.response.status, 200);
+      assert.deepEqual(calls[0], { bio: 'Pizzas boas e baratas', segment: 'Pizzaria', businessName: 'Prospect Bio' });
+      assert.equal(improved.body.bio, 'Pizzas artesanais assadas na hora, direto pra sua mesa.');
+
+      const empty = await request(server, '/api/projects/prospect-bio/improve-bio', {
+        method: 'POST',
+        body: JSON.stringify({ bio: '' }),
+      });
+      assert.equal(empty.response.status, 502);
+    },
+    {
+      bioImprover: async ({ bio, segment, businessName }) => {
+        calls.push({ bio, segment, businessName });
+        return bio ? 'Pizzas artesanais assadas na hora, direto pra sua mesa.' : null;
+      },
+    },
+  );
+});
+
 test('content central server exposes research-online as 501 when no webResearcher is configured', async () => {
   await withServer(async (_dir, server) => {
     await request(server, '/api/projects', {
@@ -2319,6 +3052,148 @@ test('fetchSiteText keeps the main page text even when every linked sub-page fai
     async () => {
       const text = await fetchSiteText('https://pizza.example.com/');
       assert.match(text, /Boss Pizzaria/);
+    },
+  );
+});
+
+test('GET commemorative-dates returns upcoming national holidays/commercial dates within the requested window', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectId: 'datas-comemorativas',
+        name: 'Datas Comemorativas',
+        handle: '@datas',
+        approvalEmail: 'aprovacao@example.com',
+      }),
+    });
+
+    const { response, body } = await request(server, '/api/projects/datas-comemorativas/commemorative-dates?months=12');
+    assert.equal(response.status, 200);
+    assert.ok(Array.isArray(body.dates));
+    assert.ok(body.dates.length > 5);
+    assert.ok(body.dates.every((entry) => /^\d{4}-\d{2}-\d{2}$/.test(entry.date) && entry.label && ['holiday', 'commercial'].includes(entry.kind)));
+  });
+});
+
+test('POST generate-special-date creates a real content card for the chosen date, wired through the same image/caption generators as a normal batch', async () => {
+  const captions = [];
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectId: 'gerar-data-especial',
+          name: 'Boss Pizzaria',
+          handle: '@bosspizzaria',
+          approvalEmail: 'aprovacao@example.com',
+        }),
+      });
+
+      const generated = await request(server, '/api/projects/gerar-data-especial/generate-special-date', {
+        method: 'POST',
+        body: JSON.stringify({ date: '2026-11-27', label: 'Black Friday', channel: 'instagram_feed' }),
+      });
+      assert.equal(generated.response.status, 201);
+      assert.equal(generated.body.batch.items.length, 1);
+      assert.equal(generated.body.batch.items[0].scheduledDate, '2026-11-27');
+      assert.equal(generated.body.batch.items[0].contentTopic.specialDateLabel, 'Black Friday');
+
+      const contentId = generated.body.batch.items[0].contentId;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/gerar-data-especial/content');
+        const item = body.content.find((entry) => entry.contentId === contentId);
+        if (item?.image?.url && !item?.image?.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      const { body: finalContent } = await request(server, '/api/projects/gerar-data-especial/content');
+      const finalItem = finalContent.content.find((entry) => entry.contentId === contentId);
+      assert.equal(finalItem.image.url, 'https://cdn.example.com/black-friday.png');
+      assert.equal(captions.length, 1);
+    },
+    {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/black-friday.png', mimeType: 'image/png' }),
+      captionGenerator: async ({ content }) => {
+        captions.push(content.contentTopic.specialDateLabel);
+        return 'Legenda de Black Friday.';
+      },
+    },
+  );
+});
+
+test('POST ad-creatives with format "ambos" generates one Story and one Feed ad creative in a single call', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'anuncio-ambos', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+
+      const generated = await request(server, '/api/projects/anuncio-ambos/ad-creatives', {
+        method: 'POST',
+        body: JSON.stringify({ objective: 'sales', format: 'ambos' }),
+      });
+      assert.equal(generated.response.status, 201);
+      assert.equal(generated.body.adCreatives.length, 2);
+      assert.deepEqual(generated.body.adCreatives.map((entry) => entry.channel).sort(), ['instagram_feed', 'instagram_story']);
+
+      const { body: listed } = await request(server, '/api/projects/anuncio-ambos/ad-creatives');
+      assert.equal(listed.adCreatives.length, 2);
+    },
+    { imageGenerator: async () => ({ url: 'https://cdn.example.com/ambos.png', mimeType: 'image/png' }) },
+  );
+});
+
+test('POST ad-creatives-regenerate with a note performs a targeted image edit and never touches the existing copy variations', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'anuncio-regen-http', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+
+      const generated = await request(server, '/api/projects/anuncio-regen-http/ad-creatives', {
+        method: 'POST',
+        body: JSON.stringify({ objective: 'whatsapp' }),
+      });
+      const adCreativeId = generated.body.adCreatives[0].adCreativeId;
+
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/anuncio-regen-http/ad-creatives');
+        const item = body.adCreatives.find((entry) => entry.adCreativeId === adCreativeId);
+        if (item?.image?.url && !item?.image?.generating && item?.variations?.length) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      const regenerated = await request(server, `/api/projects/anuncio-regen-http/ad-creatives-regenerate/${adCreativeId}`, {
+        method: 'POST',
+        body: JSON.stringify({ note: 'deixar o preço maior' }),
+      });
+      assert.equal(regenerated.response.status, 200);
+
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/anuncio-regen-http/ad-creatives');
+        const item = body.adCreatives.find((entry) => entry.adCreativeId === adCreativeId);
+        if (item?.image?.url === 'https://cdn.example.com/edited.png' && !item?.image?.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      const { body: finalContent } = await request(server, '/api/projects/anuncio-regen-http/ad-creatives');
+      const finalItem = finalContent.adCreatives.find((entry) => entry.adCreativeId === adCreativeId);
+      assert.equal(finalItem.image.url, 'https://cdn.example.com/edited.png');
+      // The copy from the original generation must survive an image-only regenerate.
+      assert.equal(finalItem.variations.length, 3);
+    },
+    {
+      imageGenerator: async (payload) => ({
+        url: payload.targetedEdit ? 'https://cdn.example.com/edited.png' : 'https://cdn.example.com/original.png',
+        mimeType: 'image/png',
+      }),
+      adCopyGenerator: async () => ([
+        { angle: 'dor', headline: 'h1', primaryText: 'p1', description: 'd1', cta: 'c1' },
+        { angle: 'desejo', headline: 'h2', primaryText: 'p2', description: 'd2', cta: 'c2' },
+        { angle: 'urgencia', headline: 'h3', primaryText: 'p3', description: 'd3', cta: 'c3' },
+      ]),
     },
   );
 });

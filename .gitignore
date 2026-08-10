@@ -5,10 +5,15 @@ squads/*/
 _opensquad/_memory/company.md
 _opensquad/_memory/preferences.md
 _opensquad/_browser_profile/
+_opensquad/content-central/secrets/
 docs/
 .superpowers/
 temp/
 tests/
+!tests/
+!tests/*.test.js
+tests/*.py
+tests/__pycache__/
 test-results/
 temp/squads/
 .claude/settings.local.json

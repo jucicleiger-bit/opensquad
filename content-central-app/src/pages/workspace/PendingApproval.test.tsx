@@ -59,8 +59,14 @@ describe("PendingApproval", () => {
     renderPendingApproval();
 
     expect(await screen.findByText("Legenda aguardando aprovação")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline deste criativo")).toBeInTheDocument();
+    expect(screen.getByText("Sofia")).toBeInTheDocument();
+    expect(screen.getByText("Dante")).toBeInTheDocument();
+    expect(screen.getByText("Clara")).toBeInTheDocument();
+    expect(screen.getByText("Direct response")).toBeInTheDocument();
+    expect(screen.getByText("Renata")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Aprovar" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Abrir briefing de aprovação" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "Abrir apresentação" })).toHaveAttribute(
       "href",
       "/api/projects/boss-pizzaria/briefing",
     );
@@ -107,7 +113,7 @@ describe("PendingApproval", () => {
     renderPendingApproval();
 
     expect(await screen.findByText("Nada aguardando aprovação")).toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: "Abrir briefing de aprovação" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Abrir apresentação" })).not.toBeInTheDocument();
   });
 
   it("approves a card through the real endpoint and removes it from the list", async () => {

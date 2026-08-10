@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
 
@@ -105,6 +105,20 @@ const CONTENT_GOAL_LABELS = {
 
 const CONTENT_GOAL_OPTIONS = new Set(Object.keys(CONTENT_GOAL_LABELS));
 
+const AUDIENCE_TYPE_LABELS = {
+  b2b: 'B2B — vende para empresas/revendedores (atacado, distribuição, fornecimento)',
+  b2c: 'B2C — vende direto para o consumidor final',
+};
+
+function normalizeAudienceType(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized in AUDIENCE_TYPE_LABELS ? normalized : '';
+}
+
+function audienceTypeLabel(value) {
+  return AUDIENCE_TYPE_LABELS[normalizeAudienceType(value)] || '';
+}
+
 const DEFAULT_CONTENT_TOPICS = [
   {
     id: 'desejo-produto-servico',
@@ -143,13 +157,26 @@ const DEFAULT_CONTENT_TOPICS = [
   },
 ];
 
+// Content goals with real sales/conversion intent (checked in the Raio-X
+// form). These never spawn a standalone post of their own — doing so
+// without a real registered offer would force the AI to invent a price or
+// promotion. Instead, marking one of these boosts how often real offer
+// topics show up in the rotation (see buildTopicPool) — the client's stated
+// intent still has a real, visible effect, just channeled through actual
+// offers instead of invented ones. With zero offers registered, marking
+// these has no effect at all, same as before.
+const PRICED_INTENT_GOALS = new Set(['sell_products', 'sell_services', 'promotions', 'whatsapp_orders', 'leads']);
+// How many times the offer-topic pool repeats in the interleave when a
+// priced-intent goal is marked — interleaveTopics merges proportionally by
+// relative position, so a larger pool naturally lands more slots without
+// needing a separate weighting mechanism.
+const SALES_INTENT_BOOST = 2;
+
 // One entry per non-priced content objective (the "Objetivos do conteúdo"
 // checkboxes in the Raio-X form, saved to project.brandInput.contentGoals).
-// Deliberately excludes priced-intent goals (sell_products, sell_services,
-// promotions, whatsapp_orders, leads) — those stay satisfied by real
-// registered offers so the AI never invents a sales CTA without a real
-// offer behind it. buildObjective grounds each topic in already-approved
-// Raio-X text instead of generic boilerplate.
+// Deliberately excludes priced-intent goals (see PRICED_INTENT_GOALS above).
+// buildObjective grounds each topic in already-approved Raio-X text instead
+// of generic boilerplate.
 const GOAL_TOPIC_TEMPLATES = {
   authority: {
     type: 'institutional',
@@ -260,11 +287,13 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
   const projectsDir = join(root, 'projects');
   const secretsDir = join(root, 'secrets');
   const approvalsDir = join(root, 'approvals');
+  const segmentTemplatesDir = join(root, 'segment-templates');
   const paths = {
     root,
     projectsDir,
     secretsDir,
     approvalsDir,
+    segmentTemplatesDir,
     globalRulesPath: join(root, 'global-rules.json'),
   };
 
@@ -286,6 +315,11 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     approvedDir: join(projectDir, 'content', 'approved'),
     publishedDir: join(projectDir, 'content', 'published'),
     cancelledDir: join(projectDir, 'content', 'cancelled'),
+    // Ad creatives (paid traffic) are a separate concept from organic content
+    // above — no scheduledDate, no approval workflow, no calendar. The
+    // operator runs the actual campaign themselves in Ads Manager; this is
+    // just where generated creative+copy variations live until downloaded.
+    adCreativesDir: join(projectDir, 'content', 'ad-creatives'),
     tokenSecretPath: join(secretsDir, `${normalized}.token`),
   };
 }
@@ -311,7 +345,11 @@ export function calculateTokenDaysRemaining(expiresAt, now = new Date()) {
 
 export async function createCentralProject(options, targetDir = process.cwd()) {
   const projectId = normalizeProjectId(options?.projectId || options?.name);
-  const mode = options?.mode || 'semi_automatic';
+  const isProspect = Boolean(options?.isProspect);
+  // A prospecção never has a real token configured anyway, but forcing
+  // 'manual' here makes the "this can't auto-publish" guarantee explicit
+  // instead of accidental — it's a throwaway demo project, not a client.
+  const mode = isProspect ? 'manual' : (options?.mode || 'semi_automatic');
   if (!SUPPORTED_MODES.has(mode)) throw new Error(`Unsupported project mode: ${mode}`);
   const projectType = options?.projectType || 'marketing';
   if (!SUPPORTED_PROJECT_TYPES.has(projectType)) throw new Error(`Unsupported project type: ${projectType}`);
@@ -331,6 +369,14 @@ export async function createCentralProject(options, targetDir = process.cwd()) {
     status: 'active',
     mode,
     projectType,
+    isProspect,
+    // Real facts read off the prospect's actual Instagram profile (via
+    // vision) — never fabricated, only ever what the screenshot showed.
+    // Kept separate from companyProfile/brandInput because those are the
+    // operator's own inputs; this is what the mockup's profile header
+    // quotes verbatim (follower/post counts, bio) instead of anything the
+    // AI generated.
+    prospectSource: isProspect ? normalizeProspectSource(options?.prospectSource) : null,
     approvalEmail: options?.approvalEmail || '',
     timezone: options?.timezone || 'America/Sao_Paulo',
     instagram: {
@@ -374,6 +420,7 @@ export async function createCentralProject(options, targetDir = process.cwd()) {
     contentStrategy: {
       offers: [],
       pillars: [],
+      offerGroups: [],
     },
     rules: {
       project: Array.isArray(options?.projectRules) ? options.projectRules : [],
@@ -687,6 +734,50 @@ export async function deleteProjectOffer(projectId, offerId, targetDir = process
   return { deleted: true, offerId: id, project };
   });
 }
+
+export async function saveProjectOfferGroup(projectId, groupInput, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  const group = normalizeProjectOfferGroup(groupInput, now, project.contentStrategy?.offerGroups || []);
+  const currentGroups = normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []);
+  const byId = new Map(currentGroups.map((item) => [item.id, item]));
+  byId.set(group.id, group);
+  project.contentStrategy = {
+    ...(project.contentStrategy || {}),
+    offerGroups: [...byId.values()],
+  };
+  project.updatedAt = now.toISOString();
+  await writeJson(paths.projectPath, project);
+  await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+  return { project, group };
+  });
+}
+
+// Deleting a group never touches the offers that reference it (same
+// precedent as deleteProjectPillar) — an offer with a stale groupId just
+// stops matching any groupIds filter at generation time until reassigned,
+// it never disappears or loses its other data.
+export async function deleteProjectOfferGroup(projectId, groupId, targetDir = process.cwd()) {
+  const id = String(groupId || '').trim();
+  if (!id) throw new Error('Grupo de ofertas inválido');
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  const groups = normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []);
+  const nextGroups = groups.filter((group) => group.id !== id);
+  if (nextGroups.length === groups.length) throw new Error(`Grupo de ofertas não encontrado: ${id}`);
+  project.contentStrategy = {
+    ...(project.contentStrategy || {}),
+    offerGroups: nextGroups,
+  };
+  project.updatedAt = new Date().toISOString();
+  await writeJson(paths.projectPath, project);
+  await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+  return { deleted: true, groupId: id, project };
+  });
+}
+
 
 export async function saveProjectPillar(projectId, pillarInput, targetDir = process.cwd(), now = new Date()) {
   const paths = getCentralPaths(targetDir, projectId);
@@ -1015,7 +1106,10 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
   const startDate = options.startDate || formatDate(new Date());
   const postTime = options.postTime || project.contentSettings.defaultPostTime || DEFAULT_TIME;
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
-  const topicCount = contentTopicCount(project);
+  const topicCount = contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly });
+  if (options.offersOnly && !topicCount) {
+    throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
+  }
   const topicOffset = normalizeTopicIndex(
     options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
     topicCount
@@ -1041,7 +1135,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     const scheduledDate = addDays(startDate, index);
     const dimensions = imageDimensionsForChannel(channel);
     const aspectRatio = imageAspectRatioForChannel(channel);
-    const contentTopic = buildContentTopic(project, topicOffset + index, { channel });
+    const contentTopic = buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) });
     const contentId = `${project.projectId}-${scheduledDate}-${channel}`;
     const filePath = join(batchDir, `day-${String(dayNumber).padStart(2, '0')}.json`);
     const imageFileName = `day-${String(dayNumber).padStart(2, '0')}.svg`;
@@ -1107,6 +1201,756 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
   };
   await writeJson(paths.projectPath, project);
   return batch;
+  });
+}
+
+const SPECIAL_DATE_BATCH_PREFIX = 'data-comemorativa';
+
+function slugify(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'data';
+}
+
+// Anonymous Gregorian algorithm (Meeus/Jones/Butcher) — Easter Sunday for a
+// given year, used to derive Carnaval/Sexta-feira Santa/Corpus Christi below.
+function easterDateString(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return formatDate(new Date(Date.UTC(year, month - 1, day)));
+}
+
+// The n-th weekday of a month (e.g. "2nd Sunday of May" for Dia das Mães).
+// weekdayIndex0Sun follows getUTCDay() convention (0=Sunday..6=Saturday).
+function nthWeekdayOfMonth(year, monthIndex0, weekdayIndex0Sun, n) {
+  const firstOfMonth = new Date(Date.UTC(year, monthIndex0, 1));
+  const offset = (weekdayIndex0Sun - firstOfMonth.getUTCDay() + 7) % 7;
+  return formatDate(new Date(Date.UTC(year, monthIndex0, 1 + offset + (n - 1) * 7)));
+}
+
+// The last weekday of a month (e.g. "last Friday of November" for Black
+// Friday).
+function lastWeekdayOfMonth(year, monthIndex0, weekdayIndex0Sun) {
+  const lastOfMonth = new Date(Date.UTC(year, monthIndex0 + 1, 0));
+  const diff = (lastOfMonth.getUTCDay() - weekdayIndex0Sun + 7) % 7;
+  return formatDate(new Date(Date.UTC(year, monthIndex0, lastOfMonth.getUTCDate() - diff)));
+}
+
+// Fixed-date national holidays (month/day) — a curated set, not the full
+// official calendar (e.g. state/municipal holidays are deliberately left
+// out; every project sees the same national list).
+const FIXED_NATIONAL_HOLIDAYS = [
+  { month: 1, day: 1, label: 'Confraternização Universal' },
+  { month: 4, day: 21, label: 'Tiradentes' },
+  { month: 5, day: 1, label: 'Dia do Trabalho' },
+  { month: 9, day: 7, label: 'Independência do Brasil' },
+  { month: 10, day: 12, label: 'Nossa Senhora Aparecida' },
+  { month: 11, day: 2, label: 'Finados' },
+  { month: 11, day: 15, label: 'Proclamação da República' },
+  { month: 12, day: 25, label: 'Natal' },
+];
+
+// Commercial/marketing dates — not official holidays, but the ones a small
+// business actually wants a themed post for.
+const FIXED_COMMERCIAL_DATES = [
+  { month: 6, day: 12, label: 'Dia dos Namorados' },
+  { month: 9, day: 15, label: 'Dia do Cliente' },
+  { month: 10, day: 12, label: 'Dia das Crianças' },
+];
+
+function commemorativeDatesForYear(year) {
+  const easter = easterDateString(year);
+  const dates = [
+    ...FIXED_NATIONAL_HOLIDAYS.map((entry) => ({
+      date: formatDate(new Date(Date.UTC(year, entry.month - 1, entry.day))),
+      label: entry.label,
+      kind: 'holiday',
+    })),
+    ...FIXED_COMMERCIAL_DATES.map((entry) => ({
+      date: formatDate(new Date(Date.UTC(year, entry.month - 1, entry.day))),
+      label: entry.label,
+      kind: 'commercial',
+    })),
+    { date: addDays(easter, -47), label: 'Carnaval', kind: 'holiday' },
+    { date: addDays(easter, -2), label: 'Sexta-feira Santa', kind: 'holiday' },
+    { date: easter, label: 'Páscoa', kind: 'commercial' },
+    { date: addDays(easter, 60), label: 'Corpus Christi', kind: 'holiday' },
+    { date: nthWeekdayOfMonth(year, 4, 0, 2), label: 'Dia das Mães', kind: 'commercial' },
+    { date: nthWeekdayOfMonth(year, 7, 0, 2), label: 'Dia dos Pais', kind: 'commercial' },
+    { date: lastWeekdayOfMonth(year, 10, 5), label: 'Black Friday', kind: 'commercial' },
+  ];
+  return dates;
+}
+
+// Feriados nacionais + datas comerciais relevantes (Dia das Mães, Black
+// Friday etc.) dentro do intervalo [fromDateString, toDateString], para o
+// operador escolher uma e gerar uma arte avulsa pra ela — ver
+// generateSpecialDateContent. Datas móveis (Páscoa e derivadas, Dia das
+// Mães/Pais, Black Friday) são calculadas, não hardcoded.
+export function listCommemorativeDates(fromDateString, toDateString) {
+  const fromYear = Number(fromDateString.slice(0, 4));
+  const toYear = Number(toDateString.slice(0, 4));
+  const years = [];
+  for (let year = fromYear; year <= toYear; year += 1) years.push(year);
+  return years
+    .flatMap(commemorativeDatesForYear)
+    .filter((entry) => entry.date >= fromDateString && entry.date <= toDateString)
+    .sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
+}
+
+function buildSpecialDateContentTopic({ date, label, project, offer }) {
+  const idSuffix = `${date}-${slugify(label)}`;
+  if (offer) {
+    const offerTopic = offerToContentTopic(offer);
+    return {
+      ...offerTopic,
+      id: `special-date-${idSuffix}`,
+      source: 'special_date',
+      specialDateLabel: label,
+      objective: `Post comemorativo de ${label} para ${project.name}, aproveitando a data para gerar engajamento e movimentar o Instagram do cliente. ${offerTopic.objective || ''}`.trim(),
+    };
+  }
+  return {
+    id: `special-date-${idSuffix}`,
+    type: 'institutional',
+    label: `Post comemorativo — ${label}`,
+    source: 'special_date',
+    specialDateLabel: label,
+    price: '',
+    items: '',
+    cta: '',
+    autoGenerateCta: false,
+    notes: '',
+    objective: `Post comemorativo de ${label} para ${project.name}. Objetivo: reforçar a presença da marca e gerar engajamento nessa data, sem inventar oferta, preço ou promoção que não esteja cadastrada.`,
+  };
+}
+
+// A one-off creative for a national holiday or commercial date, created
+// entirely independent of the normal offer/pillar rotation — clicking a
+// date in "Datas comemorativas" must always produce a themed post for
+// exactly that date, never whatever the rotation cursor happens to be
+// pointing at right now. Never touches nextScheduleTopicIndex/
+// nextPillarSequenceIndex, so it has zero effect on the next regular
+// scheduled batch. Reuses the same item shape generateContentBatch writes,
+// so it shows up in Aguardando aprovação/Calendário/briefing exactly like
+// any other card, and can optionally be tied to a real registered offer
+// (options.offerId) instead of running as a purely institutional post.
+export async function generateSpecialDateContent(projectId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  const globalRules = await loadGlobalRules(getCentralPaths(targetDir));
+  const date = String(options.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Data inválida.');
+  const label = String(options.label || '').trim();
+  if (!label) throw new Error('Informe o nome da data comemorativa.');
+  // Accepts either the original single `channel` (kept for callers that
+  // still only ever want one format) or a plural `channels` list — picking
+  // "Instagram Stories" + "Facebook Story" for the same date is the whole
+  // point of offering multiple checkboxes, and same-shape channels must
+  // share ONE generated creative instead of each burning its own AI call,
+  // exactly like a regular scheduled batch already does via creativeGroupKey
+  // (see generateContentSchedulePlan/enrichBatchItemsWithRealImages).
+  const requestedChannels = Array.isArray(options.channels) && options.channels.length
+    ? options.channels
+    : [options.channel || project.contentSettings.channels[0] || DEFAULT_CHANNEL];
+  const channels = [...new Set(requestedChannels)];
+  const postTime = options.postTime || project.contentSettings.defaultPostTime || DEFAULT_TIME;
+  const offer = options.offerId
+    ? normalizeProjectOffers(project.contentStrategy?.offers || []).find((entry) => entry.id === options.offerId)
+    : null;
+
+  const batchId = `${date}-${SPECIAL_DATE_BATCH_PREFIX}-${slugify(label)}`;
+  const batchDir = join(paths.draftsDir, batchId);
+  const imageDir = join(batchDir, 'images');
+  await mkdir(batchDir, { recursive: true });
+  await mkdir(imageDir, { recursive: true });
+
+  // Built once, outside the per-channel loop below, and reused for every
+  // channel — same topic/message across formats is what makes sharing one
+  // creative across a shape group correct in the first place.
+  const contentTopic = buildSpecialDateContentTopic({ date, label, project, offer });
+  const createdAt = new Date().toISOString();
+
+  const items = [];
+  for (const channel of channels) {
+    const dimensions = imageDimensionsForChannel(channel);
+    const aspectRatio = imageAspectRatioForChannel(channel);
+    const contentId = `${project.projectId}-${date}-${slugify(label)}-${channel}`;
+    const imageFileName = `day-01-${channel}.svg`;
+    const filePath = join(batchDir, `day-01-${channel}.json`);
+    const imageLocalPath = `content/drafts/${batchId}/images/${imageFileName}`;
+    const shapeGroup = creativeShapeGroupForChannel(channel);
+    const item = {
+      schemaVersion: 1,
+      contentId,
+      projectId: project.projectId,
+      batchId,
+      dayNumber: 1,
+      scheduledDate: date,
+      scheduledTime: postTime,
+      channel,
+      formatLabel: CHANNEL_LABELS[channel] || channel,
+      contentTopic,
+      contentReview: buildContentReview({ channel, aspectRatio, dimensions, contentTopic }),
+      status: 'draft_generated',
+      title: `${label} — ${project.name}`,
+      // Same key shape as generateContentSchedulePlan: date + shape group +
+      // this occasion's own slug, so this special date's Story/Reels/
+      // Facebook Story share one creative, its Feed/Facebook Feed share
+      // another, without colliding with any regular scheduled batch's keys.
+      creativeGroupKey: shapeGroup ? `${date}::${shapeGroup}::special::${slugify(label)}` : null,
+      image: {
+        localPath: imageLocalPath,
+        prompt: buildImagePrompt(project, globalRules.rules, [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
+        references: buildImageReferencePayload(project, paths),
+        aspectRatio,
+        dimensions,
+        generated: true,
+        mimeType: 'image/svg+xml',
+        version: 1,
+      },
+      caption: {
+        text: buildCaptionDraft(project, 1, contentTopic),
+        version: 1,
+      },
+      dayRules: [],
+      generationContext: {
+        globalRules: globalRules.rules.map((rule) => rule.text),
+        projectRules: [...project.rules.project],
+        contentRules: [],
+      },
+      approval: {
+        required: project.mode !== 'automatic',
+        emailSentAt: null,
+        approvedAt: null,
+        approvalSource: null,
+      },
+      publish: {
+        publishedAt: null,
+        metaMediaId: null,
+        error: null,
+      },
+      filePath,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    item.image.previewDataUrl = await writeGeneratedImage(join(imageDir, imageFileName), item, project);
+    await writeJson(filePath, item);
+    items.push(item);
+  }
+
+  const batch = {
+    batchId,
+    projectId: project.projectId,
+    createdAt,
+    days: 1,
+    channel: channels[0],
+    startDate: date,
+    items,
+  };
+  await writeJson(join(batchDir, 'batch.json'), batch);
+  return batch;
+  });
+}
+
+// A "segment template" is a small library of pre-approved art (e.g. the
+// packaging/"embalagens" segment's 6 Feed pieces + 3 highlight covers) that
+// gets reused across future prospects in the same business segment instead
+// of generating fresh AI art from scratch for every single lead — the
+// operator just supplies a new logo, and the approved pieces get edited
+// (palette + logo swap, same composition/product/layout) via the targeted-
+// edit mechanism already used for "Pedido de alteração" (see
+// generateAiImageWithCodexAgent's templateEditBasePath in
+// content-central-server.js). Lives at the root level, parallel to
+// projects/ — a template isn't owned by any one client project.
+
+// Copies each piece's source image into the permanent template store and
+// writes its metadata. This is an operator/registration-time action (run
+// once per segment via a script), not something end users trigger from the
+// dashboard in this first version — see "Fora de escopo" in the plan.
+export async function registerSegmentTemplate(segmentId, { label, pieces }, targetDir = process.cwd()) {
+  const id = slugify(segmentId);
+  if (!id) throw new Error('Informe um id de segmento válido.');
+  const normalizedLabel = String(label || '').trim();
+  if (!normalizedLabel) throw new Error('Informe um nome pro segmento.');
+  if (!Array.isArray(pieces) || !pieces.length) throw new Error('Informe pelo menos 1 peça pro template.');
+
+  const paths = getCentralPaths(targetDir);
+  const templateDir = join(paths.segmentTemplatesDir, id);
+  const imagesDir = join(templateDir, 'images');
+  await mkdir(imagesDir, { recursive: true });
+
+  const storedPieces = [];
+  for (const piece of pieces) {
+    const key = slugify(piece.key || piece.label);
+    if (!key) throw new Error('Cada peça precisa de uma chave (key) válida.');
+    if (!piece.sourceImagePath) throw new Error(`Peça "${key}" sem sourceImagePath.`);
+    const imagePath = `images/${key}.png`;
+    await copyFile(piece.sourceImagePath, join(templateDir, imagePath));
+    storedPieces.push({
+      key,
+      label: String(piece.label || key).trim(),
+      channel: piece.channel || DEFAULT_CHANNEL,
+      angleNote: String(piece.angleNote || '').trim(),
+      imagePath,
+    });
+  }
+
+  const template = {
+    segmentId: id,
+    label: normalizedLabel,
+    pieces: storedPieces,
+    createdAt: new Date().toISOString(),
+  };
+  await writeJson(join(templateDir, 'template.json'), template);
+  return template;
+}
+
+// Resolves each piece's imagePath to an absolute path so callers never have
+// to know the on-disk layout — mirrors how getProjectLogoReference etc.
+// hand back ready-to-use absolute paths elsewhere in this file.
+export async function loadSegmentTemplate(segmentId, targetDir = process.cwd()) {
+  const id = slugify(segmentId);
+  const paths = getCentralPaths(targetDir);
+  const templateDir = join(paths.segmentTemplatesDir, id);
+  const template = await readJson(join(templateDir, 'template.json'), null);
+  if (!template) return null;
+  return {
+    ...template,
+    pieces: template.pieces.map((piece) => ({
+      ...piece,
+      imageAbsolutePath: join(templateDir, piece.imagePath),
+    })),
+  };
+}
+
+// Powers the dashboard's segment picker — an empty/missing directory is a
+// normal "no templates registered yet" state, not an error.
+export async function listSegmentTemplates(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  let entries;
+  try {
+    entries = await readdir(paths.segmentTemplatesDir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const summaries = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const template = await readJson(join(paths.segmentTemplatesDir, entry.name, 'template.json'), null);
+    if (!template) continue;
+    summaries.push({
+      segmentId: template.segmentId,
+      label: template.label,
+      pieceCount: template.pieces.length,
+      // Full piece list so the dashboard can render the fixed grid/highlight
+      // images directly (no per-prospect AI generation) — imagePath is the
+      // on-disk relative path; the server route resolves it to bytes.
+      pieces: template.pieces.map((piece) => ({ key: piece.key, label: piece.label, channel: piece.channel, imagePath: piece.imagePath })),
+    });
+  }
+  return summaries.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+// Builds one draft content item from a segment-template piece — same shape
+// generateSpecialDateContent writes (so listProjectContent/the prospect
+// mockup renderer handle it identically), just institutional/no offer and
+// with no caption (the mockup only ever shows the images, never caption
+// text — see renderProspectMockupPage). The actual pixels come later, via a
+// targeted edit keyed off `templateEditBasePath` set by the caller — this
+// only writes the skeleton/placeholder the same way every other content
+// item starts out.
+export function buildSegmentTemplateContentItem(piece, project, paths) {
+  const channel = piece.channel || DEFAULT_CHANNEL;
+  const dimensions = imageDimensionsForChannel(channel);
+  const aspectRatio = imageAspectRatioForChannel(channel);
+  const contentTopic = {
+    id: `segment-template-${piece.key}`,
+    type: 'institutional',
+    label: piece.label,
+    source: 'segment_template',
+    price: '',
+    items: '',
+    cta: '',
+    autoGenerateCta: false,
+    notes: '',
+    objective: piece.angleNote || piece.label,
+  };
+  const contentId = `${project.projectId}-segment-template-${piece.key}`;
+  const batchId = `segment-template-${piece.key}`;
+  const batchDir = join(paths.draftsDir, batchId);
+  const filePath = join(batchDir, 'day-01.json');
+  const imageLocalPath = `content/drafts/${batchId}/images/day-01.svg`;
+  const createdAt = new Date().toISOString();
+  return {
+    schemaVersion: 1,
+    contentId,
+    projectId: project.projectId,
+    batchId,
+    dayNumber: 1,
+    scheduledDate: createdAt.slice(0, 10),
+    scheduledTime: DEFAULT_TIME,
+    channel,
+    formatLabel: CHANNEL_LABELS[channel] || channel,
+    contentTopic,
+    contentReview: buildContentReview({ channel, aspectRatio, dimensions, contentTopic }),
+    status: 'draft_generated',
+    title: `${piece.label} — ${project.name}`,
+    image: {
+      localPath: imageLocalPath,
+      prompt: `Adaptação de template de segmento (${piece.label}) a partir de uma peça já aprovada — ver templateEditBasePath.`,
+      references: buildImageReferencePayload(project, paths),
+      aspectRatio,
+      dimensions,
+      generated: true,
+      mimeType: 'image/svg+xml',
+      version: 1,
+    },
+    caption: {
+      text: '',
+      version: 1,
+    },
+    dayRules: [],
+    generationContext: { globalRules: [], projectRules: [...project.rules.project], contentRules: [] },
+    approval: {
+      required: project.mode !== 'automatic',
+      emailSentAt: null,
+      approvedAt: null,
+      approvalSource: null,
+    },
+    publish: {
+      publishedAt: null,
+      metaMediaId: null,
+      error: null,
+    },
+    filePath,
+    createdAt,
+    updatedAt: createdAt,
+  };
+}
+
+// Runs each segment-template item's targeted edit sequentially (not
+// mapWithConcurrency like enrichBatchItemsWithRealImages — a handful of
+// items for one new prospect, no rotation/sharing logic needed, and
+// sequential keeps codex-agent turns from piling up). Same
+// "record the error on the item, never abort the rest" contract as every
+// other real-image enrichment in this file. Every item shares the same
+// `options.note` (the palette/logo swap instruction) and `options.imageGenerator`
+// — the per-piece edit base comes from `item.templateEditBasePath`, already
+// set by the caller before this runs.
+export async function enrichSegmentTemplateItemsForProspect(items, project, projectId, options = {}) {
+  if (typeof options.imageGenerator !== 'function') return;
+  for (const item of items) {
+    item.image.generating = true;
+    item.updatedAt = new Date().toISOString();
+    await writeJson(item.filePath, item);
+    try {
+      await generateAiImageWithReviewLoop(item, project, projectId, {
+        imageGenerator: options.imageGenerator,
+        channel: item.channel,
+        note: options.note,
+        targetedEdit: true,
+        maxAttempts: 1,
+      });
+      item.imageGenerationError = null;
+    } catch (err) {
+      item.imageGenerationError = err.message;
+    }
+    item.image.generating = false;
+    item.updatedAt = new Date().toISOString();
+    await writeJson(item.filePath, item);
+  }
+}
+
+// Fire-and-forget dispatch for the route handler — same shape as
+// enqueueBatchImageGeneration just above: load what's needed, run the real
+// work, swallow+log any failure (the request that kicked this off has
+// already responded by the time this runs). Builds the shared adaptation
+// note from the project's own real extracted logo colors — never invents a
+// palette if the logo hasn't been colour-analyzed yet.
+export function enqueueSegmentTemplateAdaptation(projectId, segmentId, options = {}, targetDir = process.cwd()) {
+  if (typeof options.imageGenerator !== 'function') return;
+  const paths = getCentralPaths(targetDir, projectId);
+  Promise.all([loadProject(paths), loadSegmentTemplate(segmentId, targetDir)])
+    .then(([project, template]) => {
+      if (!template) throw new Error(`Template de segmento "${segmentId}" não encontrado.`);
+      const extractedColors = project.brandIdentity?.extractedColors || [];
+      const note = [
+        extractedColors.length
+          ? `Troque a paleta de cor de fundo original pela nova paleta baseada na logo anexada: ${extractedColors.join(', ')}.`
+          : 'Troque a paleta de cor de fundo original por uma paleta compatível com a logo anexada (segunda referência).',
+        'Troque a logo/nome da marca pela logo anexada (segunda referência).',
+        'Mantenha produto, ícones, layout, tipografia e composição exatamente iguais ao original — só a cor e a logo mudam.',
+      ].join(' ');
+      const items = template.pieces.map((piece) => {
+        const item = buildSegmentTemplateContentItem(piece, project, paths);
+        item.templateEditBasePath = piece.imageAbsolutePath;
+        return item;
+      });
+      return enrichSegmentTemplateItemsForProspect(items, project, projectId, { imageGenerator: options.imageGenerator, note });
+    })
+    .catch((err) => {
+      console.error(`[content-central] segment template adaptation failed for ${projectId}/${segmentId}:`, err.message);
+    });
+}
+
+// Ad creative (paid traffic) is a separate concept from every organic
+// content path above: no scheduledDate, no rotation cursor, no approval
+// workflow, no calendar/publish. The operator runs the actual campaign
+// themselves in Ads Manager — this only produces the creative asset plus a
+// few copy variations to paste in there. Only "whatsapp" is supported for
+// now; more objectives (site link, lead form) can be added the same way
+// later without touching what's already here.
+const AD_OBJECTIVE_LABELS = {
+  whatsapp: 'Tráfego para o WhatsApp',
+  awareness: 'Reconhecimento de marca',
+  engagement: 'Engajamento',
+  leads: 'Cadastros (Leads)',
+  sales: 'Vendas/Conversão',
+  app_promotion: 'Promoção do app',
+};
+
+function normalizeAdObjective(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized in AD_OBJECTIVE_LABELS ? normalized : '';
+}
+
+// Character limits (AD_COPY_LIMITS) and angle definitions live in
+// content-central-server.js, next to the actual copy-generation prompt that
+// uses them — this file only builds the ad creative's image/topic, not its
+// copy.
+// The operator's free-text idea always feeds both the copy and the image —
+// "recomendacao" (default) treats it as one more input alongside the normal
+// angle-based approach; "base_total" makes it the actual brief the AI must
+// build around, only still allowed to pull in real brand facts (logo,
+// colors, identity) it already has, not invent a different concept.
+function buildAdCreativeNoteLine(note, noteMode) {
+  if (!note) return '';
+  if (noteMode === 'base_total') {
+    return `IMPORTANTE — ideia do operador (base totalmente o criativo nisso, não use um ângulo diferente do que foi pedido; pode usar logo, cores e identidade da marca já cadastrados como apoio): "${note}"`;
+  }
+  return `Ideia sugerida pelo operador (use como inspiração adicional, sem abandonar o restante da direção do anúncio): "${note}"`;
+}
+
+function buildAdCreativeContentTopic({ project, offer, objective, note, noteMode }) {
+  const id = `ad-creative-${Date.now()}`;
+  const objectiveLabel = AD_OBJECTIVE_LABELS[objective];
+  const noteLine = buildAdCreativeNoteLine(note, noteMode);
+  if (offer) {
+    const offerTopic = offerToContentTopic(offer);
+    return {
+      ...offerTopic,
+      id,
+      source: 'ad_creative',
+      adObjective: objective,
+      adNote: note || '',
+      adNoteMode: noteMode || 'recomendacao',
+      objective: [
+        `Criativo de anúncio pago (${objectiveLabel}) para ${project.name}.`,
+        offerTopic.objective || '',
+        noteLine,
+      ].filter(Boolean).join(' '),
+    };
+  }
+  return {
+    id,
+    type: 'institutional',
+    label: 'Criativo de anúncio',
+    source: 'ad_creative',
+    adObjective: objective,
+    adNote: note || '',
+    adNoteMode: noteMode || 'recomendacao',
+    price: '',
+    items: '',
+    cta: '',
+    autoGenerateCta: false,
+    notes: '',
+    objective: [
+      `Criativo de anúncio pago (${objectiveLabel}) para ${project.name}. Sem inventar oferta, preço ou promoção que não esteja cadastrada.`,
+      noteLine,
+    ].filter(Boolean).join(' '),
+  };
+}
+
+// Injected adCopyGenerator returns an array of angle-based variations (one
+// per angle: dor, desejo, urgência — see AD_COPY_ANGLE_LABELS in
+// content-central-server.js). A generator that resolves with nothing usable
+// records a real error instead of leaving the ad creative silently
+// copy-less, same pattern as writeAiCaptionForItem for organic captions.
+async function writeAdCopyVariations(adCreative, project, options) {
+  if (typeof options.adCopyGenerator !== 'function') return;
+  try {
+    const variations = await options.adCopyGenerator({ adCreative, project, note: options.note, noteMode: options.noteMode });
+    if (Array.isArray(variations) && variations.length) {
+      adCreative.variations = variations;
+      adCreative.copyGenerationError = null;
+    } else {
+      adCreative.copyGenerationError = 'O redator de IA não retornou variações de copy (resposta vazia). Regenere para tentar de novo.';
+    }
+  } catch (err) {
+    adCreative.copyGenerationError = err.message;
+  }
+}
+
+export async function generateAdCreative(projectId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  const objective = normalizeAdObjective(options.objective) || 'whatsapp';
+  const offer = options.offerId
+    ? normalizeProjectOffers(project.contentStrategy?.offers || []).find((entry) => entry.id === options.offerId)
+    : null;
+  const note = String(options.note || '').trim();
+  const noteMode = options.noteMode === 'base_total' ? 'base_total' : 'recomendacao';
+
+  // Caller (the HTTP route) resolves "Story", "Feed" or "Ambos" into one or
+  // two calls to this function — each call always renders exactly one
+  // format, so it stays a single AI generation per call like every other
+  // image-generating path in this file.
+  const channel = options.channel === 'instagram_story' ? 'instagram_story' : 'instagram_feed';
+  const dimensions = imageDimensionsForChannel(channel);
+  const aspectRatio = imageAspectRatioForChannel(channel);
+  const contentTopic = buildAdCreativeContentTopic({ project, offer, objective, note, noteMode });
+
+  const adCreativeId = `${project.projectId}-anuncio-${Date.now()}`;
+  const imageDir = join(paths.adCreativesDir, 'images');
+  await mkdir(paths.adCreativesDir, { recursive: true });
+  await mkdir(imageDir, { recursive: true });
+
+  const filePath = join(paths.adCreativesDir, `${adCreativeId}.json`);
+  const imageFileName = `${adCreativeId}.svg`;
+  const imageLocalPath = `content/ad-creatives/images/${imageFileName}`;
+  const createdAt = new Date().toISOString();
+
+  const adCreative = {
+    schemaVersion: 1,
+    adCreativeId,
+    projectId: project.projectId,
+    objective,
+    objectiveLabel: AD_OBJECTIVE_LABELS[objective],
+    offerId: offer?.id || null,
+    offerName: offer?.name || null,
+    channel,
+    formatLabel: CHANNEL_LABELS[channel] || channel,
+    contentTopic,
+    title: offer ? `Anúncio — ${offer.name}` : `Anúncio — ${project.name}`,
+    image: {
+      localPath: imageLocalPath,
+      prompt: buildImagePrompt(project, [], [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
+      references: buildImageReferencePayload(project, paths),
+      aspectRatio,
+      dimensions,
+      generated: true,
+      mimeType: 'image/svg+xml',
+      version: 1,
+    },
+    variations: [],
+    copyGenerationError: null,
+    imageGenerationError: null,
+    createdAt,
+    updatedAt: createdAt,
+    filePath,
+  };
+  adCreative.image.previewDataUrl = await writeGeneratedImage(join(imageDir, imageFileName), adCreative, project);
+  await writeJson(filePath, adCreative);
+  return adCreative;
+  });
+}
+
+// Replaces the placeholder SVG with a real AI-generated ad creative and
+// writes the copy variations, same "generate + review loop, record errors
+// instead of throwing" shape as enrichBatchItemsWithRealImages uses for
+// organic content — just for one standalone item instead of a batch.
+// options.skipCopy — used by regenerateAdCreative: "Regenerar só a
+// imagem"/"Pedido de alteração" only touch the image, the same way the
+// organic-content regenerate flow leaves the caption alone unless asked
+// otherwise. A fresh generateAdCreative always wants both.
+export async function enrichAdCreativeWithRealImage(adCreative, project, projectId, options = {}) {
+  if (typeof options.imageGenerator !== 'function') return;
+  adCreative.image.generating = true;
+  adCreative.updatedAt = new Date().toISOString();
+  await writeJson(adCreative.filePath, adCreative);
+
+  const imageWork = (async () => {
+    try {
+      await generateAiImageWithReviewLoop(adCreative, project, projectId, {
+        imageGenerator: options.imageGenerator,
+        imageReviewer: options.imageReviewer,
+        channel: adCreative.channel,
+        maxAttempts: options.maxCreativeAttempts,
+        promptFraming: 'ad_creative',
+        note: options.note,
+        targetedEdit: Boolean(options.note),
+      });
+      adCreative.imageGenerationError = null;
+    } catch (err) {
+      adCreative.imageGenerationError = err.message;
+    }
+  })();
+  const copyWork = options.skipCopy ? Promise.resolve() : writeAdCopyVariations(adCreative, project, options);
+  await Promise.all([imageWork, copyWork]);
+
+  adCreative.image.generating = false;
+  adCreative.updatedAt = new Date().toISOString();
+  await writeJson(adCreative.filePath, adCreative);
+}
+
+// "Regenerar só a imagem" (no note) or "Pedido de alteração" (with note —
+// becomes a targeted edit of the existing image, same mechanism organic
+// content regeneration uses) for an ad creative already on disk. Copy
+// variations are left exactly as they are; this only touches the image.
+export async function regenerateAdCreative(projectId, adCreativeId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const safeId = String(adCreativeId || '').replace(/[\\/]/g, '');
+    if (!safeId) throw new Error('ID do criativo inválido.');
+    const filePath = join(paths.adCreativesDir, `${safeId}.json`);
+    const adCreative = await readJson(filePath);
+    adCreative.image.references = buildImageReferencePayload(project, paths);
+    return adCreative;
+  });
+}
+
+export async function listAdCreatives(projectId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  let files;
+  try {
+    files = await readdir(paths.adCreativesDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const items = await Promise.all(
+    files.filter((name) => name.endsWith('.json')).map((name) => readJson(join(paths.adCreativesDir, name)))
+  );
+  return items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+export async function deleteAdCreative(projectId, adCreativeId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const safeId = String(adCreativeId || '').replace(/[\\/]/g, '');
+    if (!safeId) throw new Error('ID do criativo inválido.');
+    await rm(join(paths.adCreativesDir, `${safeId}.json`), { force: true });
+    return { deleted: true };
   });
 }
 
@@ -1265,6 +2109,16 @@ export function enqueueBatchImageGeneration(projectId, batch, options = {}, targ
     });
 }
 
+export function enqueueAdCreativeImageGeneration(projectId, adCreative, options = {}, targetDir = process.cwd()) {
+  if (typeof options.imageGenerator !== 'function') return;
+  const paths = getCentralPaths(targetDir, projectId);
+  loadProject(paths)
+    .then((project) => enrichAdCreativeWithRealImage(adCreative, project, projectId, options))
+    .catch((err) => {
+      console.error(`[content-central] background ad-creative generation failed for ${projectId}/${adCreative.adCreativeId}:`, err.message);
+    });
+}
+
 export async function generateContentSchedulePlan(projectId, options = {}, targetDir = process.cwd()) {
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
@@ -1278,7 +2132,10 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
-  const topicCount = contentTopicCount(project);
+  const topicCount = contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly });
+  if (options.offersOnly && !topicCount) {
+    throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
+  }
   const topicOffset = normalizeTopicIndex(
     options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
     topicCount
@@ -1319,7 +2176,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const pillarSequence = activePillars.length ? buildPillarRotationSequence(activePillars) : [];
   let pillarCursor = normalizeTopicIndex(project.contentStrategy?.nextPillarSequenceIndex, pillarSequence.length || 1);
   let topicCursor = topicOffset;
-  function nextContentTopic(channel, creativeGroupKey) {
+  function nextContentTopic(channel, creativeGroupKey, weekday) {
     if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) {
       return topicByCreativeGroupKey.get(creativeGroupKey);
     }
@@ -1327,7 +2184,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     if (pillarSequence.length) {
       const pillar = pillarSequence[pillarCursor % pillarSequence.length];
       pillarCursor += 1;
-      const pool = buildTopicPool(project);
+      const pool = buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday });
       const matching = pool.filter((candidate) => resolveTopicPillar(candidate, activePillars)?.id === pillar.id);
       const bucket = matching.length ? matching : pool;
       const raw = bucket[topicCursor % bucket.length];
@@ -1339,7 +2196,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         pillar: pillarSnapshotFrom(pillar),
       };
     } else {
-      topic = buildContentTopic(project, topicCursor, { channel });
+      topic = buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday });
       topicCursor += 1;
     }
     if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
@@ -1349,6 +2206,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
     const dayNumber = dayIndex + 1;
     const scheduledDate = addDays(startDate, dayIndex);
+    const weekday = weekdayFromDate(scheduledDate);
     for (const format of formats) {
       if (dayIndex % format.everyDays !== 0) continue;
       for (let slotIndex = 0; slotIndex < format.postsPerDay; slotIndex += 1) {
@@ -1358,7 +2216,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const aspectRatio = imageAspectRatioForChannel(format.channel);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
         const creativeGroupKey = shapeGroup ? `${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
-        const contentTopic = { ...nextContentTopic(format.channel, creativeGroupKey), channel: format.channel };
+        const contentTopic = { ...nextContentTopic(format.channel, creativeGroupKey, weekday), channel: format.channel };
         const contentId = `${project.projectId}-${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const filePath = join(batchDir, `${fileName}.json`);
@@ -1728,12 +2586,25 @@ export async function simulateTestPost(projectId, options = {}, targetDir = proc
 // regenerateContentDay (single card) and regenerateContentGroup (a whole
 // shared-creative group, where this only ever runs once, on the leader,
 // before its result gets copied onto the other members).
-async function applyContentRegeneration(content, project, projectId, options) {
+async function applyContentRegeneration(content, project, projectId, options, paths = null) {
   const regenerate = options.regenerate || 'all';
   if (options.note) content.dayRules.push(options.note);
   let creativeRegenerated = false;
   if (regenerate === 'creative' || regenerate === 'all') {
     content.image.version += 1;
+    // content.contentTopic and content.image.references are snapshots taken
+    // when this content was first generated — if the operator has since
+    // attached a real photo to the offer (or fixed its price/name), those
+    // snapshots are stale and regenerating would silently keep ignoring the
+    // update. Refresh both from the project's current live state first, so
+    // "regenerar" always reflects what's actually cadastrado right now.
+    if (content.contentTopic?.source === 'offer' && content.contentTopic.offerId) {
+      const currentOffer = (project.contentStrategy?.offers || []).find(
+        (offer) => offer.id === content.contentTopic.offerId
+      );
+      if (currentOffer) content.contentTopic = offerToContentTopic(currentOffer);
+    }
+    if (paths) content.image.references = buildImageReferencePayload(project, paths);
     if (project.projectType === 'catalog') {
       // Catalog cards never go through AI art, including on regenerate —
       // "regenerating" just recomposes the same real photo again (useful
@@ -1756,6 +2627,12 @@ async function applyContentRegeneration(content, project, projectId, options) {
           channel: content.channel,
           note: options.note || 'Gerar uma nova abordagem visual, diferente da anterior.',
           maxAttempts: options.maxCreativeAttempts,
+          // An operator-typed correction (vs. the "try something different"
+          // fallback above) means "fix this one thing", not "start over" —
+          // let the review loop pass the existing image through as an edit
+          // base on its first attempt instead of composing a new piece from
+          // scratch, so the rest of the creative doesn't drift.
+          targetedEdit: Boolean(options.note),
         });
         content.imageGenerationError = null;
         creativeRegenerated = true;
@@ -1801,7 +2678,7 @@ export async function regenerateContentDay(projectId, contentId, options = {}, t
   const contentPath = await findContentPath(paths.draftsDir, contentId, options.batchId);
   const content = await readJson(contentPath);
 
-  const { creativeRegenerated } = await applyContentRegeneration(content, project, projectId, options);
+  const { creativeRegenerated } = await applyContentRegeneration(content, project, projectId, options, paths);
   if (creativeRegenerated) {
     // A fresh, independently-generated image no longer matches whatever
     // sibling cards it used to share a creative with (if any) — clear
@@ -1836,7 +2713,7 @@ export async function regenerateContentGroup(projectId, contentIds, options = {}
 
   const [leaderEntry, ...followerEntries] = entries;
   const leader = leaderEntry.content;
-  await applyContentRegeneration(leader, project, projectId, options);
+  await applyContentRegeneration(leader, project, projectId, options, paths);
 
   const regenerate = options.regenerate || 'all';
   const allContentIds = entries.map((entry) => entry.content.contentId);
@@ -1989,6 +2866,18 @@ export async function updateContentCaption(projectId, contentId, text, targetDir
 // try/catch — one failure doesn't block the rest of the queue, since each
 // card here is an independent scheduled post (not one post fanned out
 // across channels like the old squad's publisher assumed).
+//
+// Only the earliest due (scheduledDate, scheduledTime) slot is published per
+// call — confirmed live (2026-08-08) that the scheduler only runs while this
+// server process is alive (a plain setInterval, not a real background
+// service), so any downtime (laptop asleep, terminal closed, a restart to
+// pick up a code change) lets several slots go overdue at once; publishing
+// every overdue slot in one sweep dumped multiple different Stories onto the
+// client's Instagram within the same second, which read as spam/duplicates.
+// Channels intentionally scheduled together (e.g. an Instagram + Facebook
+// Story sharing one creative at the same slot) still publish together since
+// they share the same slot key — only *different* slots get spread across
+// separate sweep cycles instead of bursting out together.
 export async function runDuePublishSweep(targetDir = process.cwd(), options = {}) {
   if (typeof options.metaPublisher !== 'function') return { published: [], failed: [] };
   const now = options.now || new Date();
@@ -2003,7 +2892,10 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
       .filter((item) => item.status === 'aprovado' && !item.publish?.realPublished && isPublishDue(item, now))
       .sort((a, b) => (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime));
 
-    for (const item of due) {
+    const earliestSlotKey = due.length ? due[0].scheduledDate + due[0].scheduledTime : null;
+    const dueInEarliestSlot = due.filter((item) => item.scheduledDate + item.scheduledTime === earliestSlotKey);
+
+    for (const item of dueInEarliestSlot) {
       const ok = await publishOneItem(item, projectSummary, options.metaPublisher, now);
       (ok ? published : failed).push(ok ? item.contentId : { contentId: item.contentId, error: item.publish.error });
     }
@@ -2290,7 +3182,7 @@ export async function deleteProjectContent(projectId, contentId, targetDir = pro
     });
   }
 
-  const cleanReason = String(reason || '').trim();
+  const cleanReason = summarizeAvoidLearningReason(content, reason);
   if (cleanReason) {
     const now = new Date().toISOString();
     project.learnings.avoid = [
@@ -2310,6 +3202,35 @@ function summarizeAvoidLearning(content, reason) {
   const subject = content?.contentTopic?.offerName || content?.contentTopic?.label || content?.title || 'Post';
   const channel = content ? (CHANNEL_LABELS[content.channel] || content.channel) : '';
   return channel ? `${subject} (${channel}): ${reason}` : reason;
+}
+
+function summarizeAvoidLearningReason(content, reason) {
+  return [creativeReviewAvoidLearning(content), usefulOperatorAvoidReason(reason)].filter(Boolean).join('; ');
+}
+
+function usefulOperatorAvoidReason(reason) {
+  const text = String(reason || '').trim();
+  if (!text) return '';
+  const normalized = normalizeComparableText(text);
+  if (/(^|\b)(foi )?(apenas )?(um )?teste(\b|$)/.test(normalized)) return '';
+  if (/\b(vou|irei|preciso)?\s*(gerar|fazer) outro/.test(normalized)) return '';
+  if (/\b(cliente pediu )?(para )?nao postar agora\b/.test(normalized)) return '';
+  return text;
+}
+
+function creativeReviewAvoidLearning(content) {
+  const review = content?.creativeReview;
+  if (!['blocked', 'warning'].includes(review?.status)) return '';
+  return [
+    ...(review.errors || []),
+    ...(review.warnings || []),
+    review.summary,
+  ].map(String).map((line) => line.trim()).filter((line) => line && usefulCreativeReviewLearning(line)).join('; ');
+}
+
+function usefulCreativeReviewLearning(line) {
+  const normalized = normalizeComparableText(line);
+  return !/revisor automatico indisponivel|revisao visual manual|resposta vazia|resposta incompleta|imagem precisa de revisao/.test(normalized);
 }
 
 export async function listProjectReferences(projectId, targetDir = process.cwd()) {
@@ -2422,6 +3343,8 @@ async function loadProject(paths) {
     // their saved JSON — default here on every load instead of a one-off
     // migration, same convention as the other normalized fields below.
     projectType: SUPPORTED_PROJECT_TYPES.has(project.projectType) ? project.projectType : 'marketing',
+    isProspect: Boolean(project.isProspect),
+    prospectSource: project.isProspect ? normalizeProspectSource(project.prospectSource) : null,
     companyProfile: normalizeCompanyProfile(project.companyProfile),
     brandInput: normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name)),
     brandIdentity: normalizeBrandIdentity(project.brandIdentity || { logoPath: project.brand?.logoPath }),
@@ -2431,6 +3354,7 @@ async function loadProject(paths) {
       ...(project.contentStrategy || {}),
       offers: normalizeProjectOffers(project.contentStrategy?.offers || []),
       pillars: normalizeProjectPillars(project.contentStrategy?.pillars || []),
+      offerGroups: normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []),
     },
     learnings: normalizeLearnings(project.learnings),
   };
@@ -2443,6 +3367,8 @@ function toProjectSummary(project) {
     status: project.status,
     mode: project.mode,
     projectType: SUPPORTED_PROJECT_TYPES.has(project.projectType) ? project.projectType : 'marketing',
+    isProspect: Boolean(project.isProspect),
+    prospectSource: project.isProspect ? normalizeProspectSource(project.prospectSource) : null,
     approvalEmail: project.approvalEmail,
     timezone: project.timezone,
     instagram: project.instagram,
@@ -2458,6 +3384,7 @@ function toProjectSummary(project) {
       ...(project.contentStrategy || {}),
       offers: normalizeProjectOffers(project.contentStrategy?.offers || []),
       pillars: normalizeProjectPillars(project.contentStrategy?.pillars || []),
+      offerGroups: normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []),
     },
     rules: project.rules,
     learnings: normalizeLearnings(project.learnings),
@@ -2552,11 +3479,23 @@ function buildManual(project) {
 }
 
 function buildImagePrompt(project, globalRules, contentRules, dayNumber, context = {}) {
-  const imageRules = filterImageRulesForTopic(
-    normalizeRuleList(project.brand?.imageRules || []),
-    context.contentTopic,
-    project
-  );
+  // Registered image rules (often seeded from an online research pass —
+  // "[Pesquisa online] Composição 'mockup de resultado': notebook/celular,
+  // cards, gráficos e cursores...") describe how the brand's REGULAR content
+  // should look, and applied unconditionally even to a commemorative post
+  // (Dia dos Pais etc.) they make it look like a business/analytics pitch
+  // instead of a celebration — confirmed on a real generation for a
+  // marketing-agency client whose standing rules are dashboard-themed.
+  // Skip them here and say so explicitly instead, so the model doesn't fall
+  // back to the brand's usual business-dashboard visual language.
+  const isSpecialDateInstitutional = context.contentTopic?.source === 'special_date' && !context.contentTopic?.offerId;
+  const imageRules = isSpecialDateInstitutional
+    ? []
+    : filterImageRulesForTopic(
+      normalizeRuleList(project.brand?.imageRules || []),
+      context.contentTopic,
+      project
+    );
   const activeReferences = sortReferencesForPrompt(normalizeProjectReferences(project))
     .filter((reference) => reference.useInNextGeneration !== false);
   const logoReferences = uniqueReferences([
@@ -2631,6 +3570,9 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
       : ['Nenhuma referência visual ativa cadastrada.']),
     section('DIREÇÃO VISUAL CONSOLIDADA', [
       consolidatedVisualDirection || 'Direção visual ainda não consolidada; manter aparência limpa, profissional e coerente com os fatos cadastrados.',
+      isSpecialDateInstitutional
+        ? 'Esta peça é uma celebração de data comemorativa, não o conteúdo comercial padrão da marca — mesmo que a marca normalmente use elementos de dashboard, gráfico, métrica, card de resultado ou mockup de tela/software, NÃO usar nada disso aqui. Priorize uma composição mais humana, calorosa e simples, mantendo as cores e a logo da marca, mas sem parecer peça de vendas ou apresentação de negócio.'
+        : '',
       ...imageRules.map((rule) => `Regra de imagem: ${rule}`),
       'Criar imagem alinhada ao manual vivo do projeto, com visual limpo e sem aparência artificial/3D genérica.',
       'Se for arte promocional com preço, seguir hierarquia de anúncio profissional: título forte, oferta clara, selo de preço legível e produto/serviço apresentado com realismo.',
@@ -2789,10 +3731,34 @@ function pillarSnapshotFrom(pillar) {
 // education posts instead of only ever advertising the next offer.
 // DEFAULT_CONTENT_TOPICS is now a true last resort — only when a project
 // has neither offers nor any goal that maps to a template.
-function buildTopicPool(project) {
+//
+// `options.groupIds`, when non-empty, scopes offers to just the requested
+// offer group(s) (see saveProjectOfferGroup) — e.g. generating this week's
+// schedule from only a "Black Friday" group without touching any offer's
+// `active` flag. Goal-driven topics (engagement/authority/etc.) are never
+// affected by this filter; only which real offers compete for slots.
+//
+// `options.weekday` ('mon'..'sun'), when set, additionally drops any offer
+// whose own daysOfWeek doesn't include that day — e.g. a pizzeria's weekday
+// rodízio price never competes for a Saturday slot, and its separate
+// weekend-price offer never competes for a Tuesday slot. An offer with no
+// daysOfWeek set is eligible every day, unchanged from before this existed.
+// `options.offersOnly` (only meaningful together with options.groupIds) —
+// "generate just this group, don't mix in the goal-driven topics
+// (autoridade/engajamento/etc.)" the operator asked for as a way to run a
+// batch that's 100% e.g. "Promoção fim de semana" with no institutional
+// post breaking up the run. Skips goalTopics AND the DEFAULT_CONTENT_TOPICS
+// fallback entirely — an empty result here (group has no active offers) is
+// a real error, validated by the caller before this ever runs, not
+// something to silently paper over with unrelated content.
+function buildTopicPool(project, options = {}) {
+  const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
   const offerTopics = normalizeProjectOffers(project.contentStrategy?.offers || [])
     .filter((offer) => offer.active)
+    .filter((offer) => !groupIds || groupIds.has(offer.groupId))
+    .filter((offer) => !options.weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(options.weekday))
     .map(offerToContentTopic);
+  if (options.offersOnly) return offerTopics;
   const goalTopics = (project.brandInput?.contentGoals || [])
     .map((goalKey) => buildGoalContentTopic(goalKey, project))
     .filter(Boolean);
@@ -2802,11 +3768,15 @@ function buildTopicPool(project) {
       return { ...built, cta: salesGatedCta(built, topic.cta) };
     });
   }
-  return interleaveTopics(offerTopics, goalTopics);
+  const hasSalesIntent = (project.brandInput?.contentGoals || []).some((goalKey) => PRICED_INTENT_GOALS.has(goalKey));
+  const boostedOfferTopics = hasSalesIntent && offerTopics.length
+    ? Array.from({ length: SALES_INTENT_BOOST }, () => offerTopics).flat()
+    : offerTopics;
+  return interleaveTopics(boostedOfferTopics, goalTopics);
 }
 
 function buildContentTopic(project, index, context = {}) {
-  const topics = buildTopicPool(project);
+  const topics = buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday });
   const topic = topics[index % topics.length];
   return {
     ...topic,
@@ -2815,8 +3785,8 @@ function buildContentTopic(project, index, context = {}) {
   };
 }
 
-function contentTopicCount(project) {
-  return buildTopicPool(project).length;
+function contentTopicCount(project, options = {}) {
+  return buildTopicPool(project, options).length;
 }
 
 async function inferNextTestTopicIndex(paths, project, topicCount) {
@@ -2896,7 +3866,7 @@ function formatContentTopicLines(topic) {
     `Tipo de publicação: ${topic.label || offerTypeLabel(topic.type)}.`,
     topic.offerName ? `Oferta/assunto obrigatório: ${topic.offerName}.` : `Assunto: ${topic.objective || topic.label}.`,
     topic.price ? `Preço obrigatório: ${topic.price}. Não alterar, arredondar ou inventar outro preço.` : 'Não inventar preço se nenhum preço foi cadastrado para este assunto.',
-    topic.items ? `Itens inclusos/detalhes: ${topic.items}.` : '',
+    topic.items ? `Itens inclusos/detalhes: ${topic.items}. Cada item listado precisa aparecer visualmente reconhecível na composição — não representar só um ou dois itens e deixar o restante de fora.` : '',
     topic.cta ? `Chamada/CTA obrigatório: ${topic.cta}.` : '',
     !topic.cta && topic.autoGenerateCta ? 'CTA automático: criar uma chamada curta, natural e contextual depois de analisar o assunto, o formato do post e a composição criada. Evitar CTA massivo, genérico ou apelativo.' : '',
     topic.notes ? `Observações/restrições: ${topic.notes}.` : '',
@@ -2971,10 +3941,13 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       channel: options.channel || content.channel,
       topic: content.contentTopic,
       variationSeed: content.publish?.variationSeed || content.contentId || '',
+      allOffers: project.contentStrategy?.offers || [],
     }
   );
   content.creativePreflight = buildCreativePreflight(content.contentTopic || {}, options.channel || content.channel, rawReferences, baseReferences);
-  const basePrompt = buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences);
+  const basePrompt = options.promptFraming === 'ad_creative'
+    ? appendAdCreativeFraming(buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences))
+    : buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences);
   const baseContentReview = { ...(content.contentReview || {}) };
   const reviewAttempts = [];
   let reviewFeedback = '';
@@ -2995,6 +3968,12 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       projectId,
       note: options.note,
       channel: options.channel,
+      // Only the very first attempt of an operator-requested correction is a
+      // real edit of the existing image — a rescue pass is fixing a
+      // structural problem (wrong canvas/aspect ratio) that editing the same
+      // broken image can't fix, and a review-retry (attempt > 1) is already
+      // the AI's own correction loop, not the operator's original request.
+      targetedEdit: Boolean(options.targetedEdit) && attempt === 1 && !rescueMode,
       attempt,
       maxAttempts: allowedAttempts,
       rescueMode,
@@ -3135,11 +4114,39 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // already on the logo). Let the AI write a specific, hook-style headline
   // instead, the same way autoGenerateCta already lets it choose a CTA.
   const isGoalTopic = topic.source === 'goal';
-  const exactTitle = isGoalTopic ? '' : normalizeCreativeTitle(topic.offerName || project.name);
+  // An institutional special-date post (Dia dos Pais etc. with no offer
+  // linked) has exactly the same problem as a goal topic — no offer name,
+  // so exactTitle used to collapse to the raw project name, rendering the
+  // company name as the whole headline with no actual message about the
+  // occasion. Same fix, keyed off the occasion instead of the pillar topic —
+  // but kept as its own case (not folded into isGoalTopic) because the tone
+  // instruction differs: a pillar/authority hook is meant to sound like a
+  // punchy business hook, but the same treatment on a commemorative date
+  // read as a sales pitch instead of a celebration of the date itself.
+  const isSpecialDateFreeTitle = topic.source === 'special_date' && !topic.offerId;
+  // Same problem again, this time in the ad-creative pipeline: an
+  // institutional ad (no offer linked — e.g. a brand-awareness or
+  // engagement creative with no product to name) has no offer name either,
+  // so exactTitle collapsed to the raw project name — worse here, since
+  // project.name isn't even the real brand name for every client ("CASA DE
+  // EMBALAGEM" is the project's own label; the real brand on the logo is
+  // "Hygi Comércio"). Same hook-writing freedom a goal topic gets, subject
+  // is the ad's real objective (Vendas/Conversão, Engajamento etc.) instead
+  // of the pillar topic — the operator's own note, when given, already
+  // reaches the model through the OBJETIVO section above regardless.
+  const isAdCreativeFreeTitle = topic.source === 'ad_creative' && !topic.offerId;
+  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle;
+  const freeTitleSubject = topic.specialDateLabel
+    || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
+    || topic.label
+    || project.name;
+  const exactTitle = isFreeTitleTopic ? '' : normalizeCreativeTitle(topic.offerName || project.name);
   const exactPrice = normalizeCreativePrice(topic.price);
-  const exactCta = chooseCreativeCta(topic, targetChannel);
+  const exactCta = chooseCreativeCta(topic);
   const objective = buildCreativeObjective(topic, project);
   const isVerticalStory = isVerticalStoryChannel(targetChannel);
+  const useSalesHookTitle = creativeShapeGroupForChannel(targetChannel) === 'feed' && !isFreeTitleTopic && isSalesTopic(topic);
+  const realUrgency = topic.type === 'urgency' ? cleanPromptText(topic.notes) : '';
   // A drawn button/selo isn't actually clickable in a Story/Reels asset —
   // the real action there happens through DM/reply, not a tap on the image
   // — so a bold CTA button reads as a UI element that does nothing. Feed
@@ -3147,11 +4154,17 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // vertical formats get the same CTA text folded into a small, subtitle-
   // style line instead, never a button/pill/selo.
   const useSubtleCta = isVerticalStory && Boolean(exactCta);
-  const productFocus = detectCreativeProductFocus(topic);
-  const quantityRules = buildCreativeQuantityRules(topic, productFocus, exactTitle);
-  const visualSummary = summarizeBrandForCreative(project);
   const logoReferences = selectedReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
   const productReferences = selectedReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2);
+  // Only trust a photo as "this exact real product" when it's the one this
+  // topic/offer explicitly linked (see buildPrimaryAiImageReferences) — a
+  // pool-matched photo (legacy pizza/esfiha keyword fallback) doesn't get
+  // this treatment, since we can't be sure it's the right SKU.
+  const hasLinkedProductPhoto = Boolean(topic.photoReferenceIds?.length)
+    && productReferences.some((reference) => topic.photoReferenceIds.includes(reference.id));
+  const productFocus = detectCreativeProductFocus(topic, hasLinkedProductPhoto);
+  const quantityRules = buildCreativeQuantityRules(topic, productFocus, exactTitle);
+  const visualSummary = summarizeBrandForCreative(project);
   // Which single layout/visual reference to use is already rotated upstream
   // in buildPrimaryAiImageReferences (seeded per test run), so selectedReferences
   // contains at most one of each here.
@@ -3178,11 +4191,16 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       objective,
     ]),
     section('TEXTOS OBRIGATÓRIOS', [
-      isGoalTopic
-        ? `Título: criar um título curto (até 8 palavras), chamativo, em formato de gancho ou pergunta específica sobre "${topic.label}" — não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Ex. de estilo (adaptar ao assunto real, não copiar): pergunta direta que gera curiosidade, seguida de um subtítulo curto que reforça o valor.`
-        : `Título exato: ${exactTitle}`,
+      isSpecialDateFreeTitle
+        ? `Título: criar um título curto (até 8 palavras) com tom caloroso e comemorativo sobre "${freeTitleSubject}" — é um post de celebração da data, não uma oferta nem uma peça comercial. Pode conectar de leve com o negócio/segmento da marca, mas sem soar como anúncio, pitch de venda ou gancho de captação. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo.`
+        : isGoalTopic || isAdCreativeFreeTitle
+          ? `Título: criar um título curto (até 8 palavras), chamativo, em formato de gancho ou pergunta específica sobre "${freeTitleSubject}" — não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Ex. de estilo (adaptar ao assunto real, não copiar): pergunta direta que gera curiosidade, seguida de um subtítulo curto que reforça o valor.`
+          : useSalesHookTitle
+            ? `Título: criar um título-gancho curto sobre "${exactTitle}", sem inventar benefício, prazo ou desconto.`
+            : `Título exato: ${exactTitle}`,
       topic.items ? `Subtítulo permitido: ${cleanPromptText(topic.items)}` : '',
       exactPrice ? `Preço exato: ${exactPrice}` : 'Preço: não inserir preço, pois não há preço cadastrado para este criativo.',
+      realUrgency ? `Urgência real cadastrada: ${realUrgency}` : '',
       exactCta
         ? (useSubtleCta
           ? `CTA sutil: "${exactCta}" como texto pequeno, sem botão/selo.`
@@ -3190,10 +4208,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte; é um post de conteúdo, não uma oferta.',
       topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
       [
-        isGoalTopic ? 'Não alterar preço' : 'Não alterar título, preço',
+        isFreeTitleTopic || useSalesHookTitle ? 'Não alterar preço' : 'Não alterar título, preço',
         exactCta ? ' ou CTA' : '',
         '. Não criar telefone, endereço, desconto ou informação extra.',
       ].join(''),
+      realUrgency
+        ? 'Não inventar outra urgência além da cadastrada.'
+        : useSalesHookTitle ? 'Não criar urgência, estoque, prazo, desconto ou garantia falsa.' : '',
     ]),
     section('ATIVOS OFICIAIS', logoReferences.length ? [
       'Utilizar a logo oficial anexada.',
@@ -3230,7 +4251,20 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       buildBrandColorLine(project),
       ...productFocus.visualLines,
       ...quantityRules.visualLines,
-      'Evitar visual infantil, plástico, artificial, genérico de IA, sobrecarregado ou com enfeites de template sem função.',
+      isFoodBusiness(project)
+        ? 'Comida: atenção real ao arroz/prato — grãos soltos, textura, brilho natural; evitar simetria/brilho de IA; luz quente e natural.'
+        : 'Evitar visual infantil, plástico, artificial, genérico de IA, sobrecarregado ou com enfeites de template sem função.',
+      // visualSummary above is pulled straight from the approved Raio-X
+      // text, which can itself describe a business/dashboard visual style
+      // as the brand's standing identity (confirmed on a real client: the
+      // approved visualIdentity block literally says "priorizar mockups de
+      // site/landing, quadros de diagnóstico"). That's correct for the
+      // brand's regular content but reads as a sales pitch on a
+      // commemorative post — override it here instead of trying to strip
+      // it out of the approved block text itself.
+      isSpecialDateFreeTitle
+        ? 'Esta peça é uma celebração de data comemorativa, não o conteúdo comercial padrão da marca — mesmo que a direção acima descreva um estilo de dashboard, gráfico, mockup de tela/software ou "quadro de diagnóstico" como identidade visual da marca, NÃO usar nada disso aqui. Priorize uma composição mais humana, calorosa e simples, mantendo as cores e a logo da marca, mas sem parecer peça de vendas ou apresentação de negócio.'
+        : '',
     ]),
     isVerticalStory ? section('ESTRUTURA VERTICAL OBRIGATÓRIA', [
       'Topo: logo + título principal.',
@@ -3244,7 +4278,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     section('HIERARQUIA', [
       quantityRules.heroLine || productFocus.heroLine || (productReferences.length ? '1. Produto/foto real em destaque.' : '1. Produto ou benefício principal em destaque.'),
       quantityRules.heroLine && productFocus.heroLine ? productFocus.heroLine : '',
-      isGoalTopic ? '2. Título chamativo criado pela IA (gancho ou pergunta específica do objetivo do post).' : `2. Título “${exactTitle}”.`,
+      isGoalTopic || useSalesHookTitle ? '2. Título chamativo criado pela IA (gancho curto e específico do assunto real).' : `2. Título “${exactTitle}”.`,
       exactPrice ? `3. Preço “${exactPrice}” em selo compacto de alto contraste.` : '',
       exactCta ? (useSubtleCta ? `4. Chamada sutil “${exactCta}” (sem botão).` : `4. CTA “${exactCta}”.`) : '',
       logoReferences.length ? '5. Logo oficial.' : '',
@@ -3263,7 +4297,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
     section('LIBERDADE CRIATIVA', [
       'A IA pode definir enquadramento, fundo, iluminação, tipografia, posição dos produtos, formato do selo de preço e elementos decorativos relacionados ao segmento.',
-      variation.length ? `Variação desejada: ${variation.join(' ')}` : 'Criar uma composição nova, limpa e profissional.',
+      variation.length
+        ? `Variação desejada: ${variation.join(' ')}`
+        : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe do prato.',
     ]),
     section('RESTRIÇÕES FINAIS', [
       isVerticalStory ? 'Não criar composição com aparência de flyer quadrado centralizado.' : '',
@@ -3296,12 +4332,13 @@ function normalizeCreativePrice(value) {
 // When the topic has a resolved pillar, its role (set by the operator per
 // project) takes over from the hardcoded offer-type list — a custom
 // "Convida" pillar behaves the same as combo/delivery/offer/product/rodizio
-// did. Anything else (orientation, institutional, desire, urgency, or a
+// did. Urgency posts are also sales topics when the operator registered a
+// real urgent offer. Anything else (orientation, institutional, desire, or a
 // pillar like "ensina"/"prova"/"posiciona") is not actually asking for an
 // order, so it shouldn't carry a hard sales CTA at all.
 function isSalesTopic(topic = {}) {
   if (topic.pillar) return topic.pillar.role === 'convida';
-  return ['combo', 'delivery', 'offer', 'product', 'rodizio'].includes(topic.type);
+  return ['combo', 'delivery', 'offer', 'product', 'rodizio', 'urgency'].includes(topic.type);
 }
 
 // chooseCreativeCta always honors an explicit topic.cta, sales or not — that
@@ -3315,13 +4352,8 @@ function salesGatedCta(topicWithoutCta, ctaIfSales) {
   return isSalesTopic(topicWithoutCta) ? ctaIfSales : '';
 }
 
-// Feed (Instagram/Facebook) is browsed as a brand's ongoing content, not
-// clicked through mid-scroll the way a Story is swiped — pushing the same
-// hard "Peça agora" action call onto every Feed post reads as pushy for a
-// channel that's mostly about staying present, not converting on the spot.
-// Story/Reels keep the direct action CTA; Feed gets a softer one, unless the
-// offer explicitly set its own CTA (that choice is respected on every
-// channel, feed included).
+// Explicit CTA wins. Otherwise real sales offers get a direct CTA on every
+// channel; Feed used to say "Saiba mais", but that was weak for conversion.
 //
 // Non-sales content (orientation/institutional/relationship posts, or a
 // pillar that isn't "convida") gets no CTA here at all — baking a "peça
@@ -3329,11 +4361,10 @@ function salesGatedCta(topicWithoutCta, ctaIfSales) {
 // promotion undercuts the content. The caption still closes with its own
 // natural, contextual call to action (autoGenerateCta) — that's a separate,
 // softer mechanism from the hard button rendered inside the creative.
-export function chooseCreativeCta(topic = {}, channel = '') {
+export function chooseCreativeCta(topic = {}) {
   const explicit = String(topic.cta || '').trim();
   if (explicit) return explicit;
   if (!isSalesTopic(topic)) return '';
-  if (creativeShapeGroupForChannel(channel) === 'feed') return 'Saiba mais';
   if (topic.type === 'rodizio') return 'Reserve agora';
   return 'Peça agora';
 }
@@ -3372,7 +4403,7 @@ function prioritizeReferencesByTopic(refs, focus) {
   return [...matching, ...rest];
 }
 
-function detectCreativeProductFocus(topic = {}) {
+function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false) {
   const text = normalizeComparableText([
     topic.offerName,
     topic.items,
@@ -3402,6 +4433,25 @@ function detectCreativeProductFocus(topic = {}) {
       assetLines: ['O produto principal deve ser visualmente reconhecível como pizza.'],
       visualLines: ['O foco visual desta peça são pizzas, com queijo, recheio e bordas bem definidos.'],
       restrictionLines: ['Não gerar produto ambíguo que pareça esfiha, pão ou prato genérico.'],
+    };
+  }
+  // Generic product line: fires for any project outside the food-specific
+  // branches above once a real, offer-linked photo is in play (e.g. a phone,
+  // shoe or appliance reseller with many distinct real SKUs) — names the
+  // exact product instead of leaving the AI to invent/guess a generic one.
+  if (hasLinkedProductPhoto && topic.offerName) {
+    return {
+      heroLine: `1. ${topic.offerName} real (foto anexada) em destaque como produto principal.`,
+      assetLines: [
+        `O produto principal é exatamente o item real da foto anexada: ${topic.offerName}. Não trocar por outro modelo, cor ou versão.`,
+        'Preservar fielmente formato, cor, textos, logotipos, botões e proporções reais do produto fotografado.',
+      ],
+      visualLines: [
+        `O foco visual desta peça é o produto real fotografado (${topic.offerName}), não uma reinterpretação genérica.`,
+      ],
+      restrictionLines: [
+        'Não substituir o produto por outro modelo, cor ou versão diferente da foto anexada. Não inventar um produto genérico no lugar da foto real.',
+      ],
     };
   }
   return {
@@ -3533,6 +4583,20 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   const allowedRoles = new Set(['brand_asset', 'product_photo', 'layout_model', 'visual_reference']);
   const isStory = isVerticalStoryChannel(options.channel);
   const topicFocus = detectReferenceTopicFocus(options.topic);
+  const linkedPhotoIds = new Set(options.topic?.photoReferenceIds || []);
+  // Photos explicitly linked to a DIFFERENT offer (see photoReferenceIds)
+  // must never be borrowed as this topic's fallback — with several distinct
+  // real products in one project (e.g. a phone reseller with dozens of
+  // models), a photo already claimed by "Redmi A7 Pro" showing up on a
+  // "Redmi Note 15" post isn't a stylistic mismatch, it's just the wrong
+  // product. Only photos nobody has claimed stay eligible for the
+  // keyword-based pool fallback below (single-product businesses like one
+  // pizzeria's dish photos, which were never claimed by any offer).
+  const claimedByOtherOffers = new Set(
+    (options.allOffers || [])
+      .filter((offer) => offer.id !== options.topic?.offerId)
+      .flatMap((offer) => offer.photoReferenceIds || [])
+  );
   const selected = [];
   for (const reference of references) {
     const usageRoles = normalizeReferenceUsageRoles(reference.usageRoles, reference.role);
@@ -3541,10 +4605,29 @@ function buildPrimaryAiImageReferences(references, options = {}) {
     selected.push(reference);
   }
   const brandAssets = selected.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
-  const productPhotos = prioritizeReferencesByTopic(
-    selected.filter((reference) => reference.role === 'product_photo'),
-    topicFocus
-  ).slice(0, 2);
+  const productPool = selected.filter((reference) => reference.role === 'product_photo' && !claimedByOtherOffers.has(reference.id));
+  // A topic/offer with its own explicitly linked photo(s) — e.g. a reseller
+  // with dozens of visually distinct real products (phone models, shoes,
+  // etc.) — must always show THAT exact product, never a guess from a
+  // shared pool. The keyword-based prioritizeReferencesByTopic below only
+  // knows a couple of hardcoded food terms and is the wrong tool once a
+  // project has more than one kind of physical product.
+  //
+  // This must be matched against `selected` (every product photo, before
+  // the other-offers exclusion), not `productPool` — otherwise a photo that
+  // happens to already be linked to some registered offer could never be
+  // explicitly requested for anything else (an institutional/ad-creative
+  // topic has no offerId, so claimedByOtherOffers above treats it as
+  // "belongs to every offer" and swallows nearly the whole catalog; an
+  // explicit photoReferenceIds request is a deliberate pick, not a fallback
+  // guess, so the "claimed by a different offer" guard — meant to stop the
+  // keyword fallback from grabbing the wrong product — must not apply to it).
+  const linkedPhotos = linkedPhotoIds.size
+    ? selected.filter((reference) => reference.role === 'product_photo' && linkedPhotoIds.has(reference.id)).slice(0, 2)
+    : [];
+  const productPhotos = linkedPhotos.length
+    ? linkedPhotos
+    : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
   const storyCompatibleLayouts = selected.filter((reference) => (
     reference.role === 'layout_model'
     && (!isStory || !isSquareLikeReference(reference))
@@ -3639,6 +4722,23 @@ function appendCreativeRescueCorrections(basePrompt, reviews, channel) {
         ...(review.errors || []).map((error) => `Erro: ${error}`),
         ...(review.warnings || []).map((warning) => `Alerta: ${warning}`),
       ]),
+    ]),
+  ].join('\n\n');
+}
+
+// Ad creative and organic post creative want different things from the same
+// composition rules — an ad has to win attention from someone who wasn't
+// looking for it, in a feed full of other ads, in under a couple seconds.
+// Appended on top of the normal brief (buildChatGptFinalCardPrompt already
+// gives it the real logo/photo/price/hierarchy rules); this only adds the
+// paid-specific direction.
+function appendAdCreativeFraming(basePrompt) {
+  return [
+    basePrompt,
+    section('ESTA É UMA PEÇA DE ANÚNCIO PAGO', [
+      'Não é um post orgânico — é um anúncio que vai competir com outros anúncios pela atenção de alguém que não estava procurando por isso. Precisa parar o scroll nos primeiros 2-3 segundos.',
+      'Gancho visual mais direto e de maior contraste do que um post social comum: hierarquia clara e imediata entre gancho, oferta/benefício e chamada.',
+      'A chamada para ação deve deixar claro que o próximo passo é chamar no WhatsApp — pode usar um ícone de WhatsApp reconhecível na composição, sem inventar número de telefone ou qualquer contato que não esteja cadastrado.',
     ]),
   ].join('\n\n');
 }
@@ -3794,6 +4894,7 @@ function normalizeCompanyProfile(input = {}) {
     segment: cleanText(input?.segment),
     description: cleanText(input?.description),
     audience: cleanText(input?.audience),
+    audienceType: normalizeAudienceType(input?.audienceType),
     location: cleanText(input?.location),
     productsOrServices: cleanText(input?.productsOrServices),
     differentiators: cleanText(input?.differentiators),
@@ -3808,12 +4909,35 @@ function normalizeCompanyProfile(input = {}) {
   };
 }
 
+// Every field here is either exactly what was visible in the prospect's
+// real screenshot or `null` — never a fabricated default (0 followers would
+// be indistinguishable from "the AI couldn't read this").
+function normalizeProspectSource(input = {}) {
+  // Number(null) is 0, not NaN — a stored `null` (nothing extracted) must
+  // stay null through a second normalization pass (loadProject re-running
+  // this over an already-normalized project), not flip into a fabricated
+  // "0 seguidores" the next time the project is loaded.
+  const cleanCount = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 ? Math.round(num) : null;
+  };
+  return {
+    handle: cleanText(input?.handle) || null,
+    bio: cleanText(input?.bio) || null,
+    realFollowers: cleanCount(input?.realFollowers),
+    realPosts: cleanCount(input?.realPosts),
+    realFollowing: cleanCount(input?.realFollowing),
+  };
+}
+
 function formatCompanyProfileLines(input = {}) {
   const profile = normalizeCompanyProfile(input);
   return [
     profile.segment ? `Segmento: ${profile.segment}.` : '',
     profile.description ? `Descrição da empresa: ${profile.description}.` : '',
     profile.productsOrServices ? `O que vende/presta: ${profile.productsOrServices}.` : '',
+    profile.audienceType ? `Foco comercial: ${audienceTypeLabel(profile.audienceType)}.` : '',
     profile.audience ? `Público-alvo: ${profile.audience}.` : '',
     profile.location ? `Região/cidade: ${profile.location}.` : '',
     profile.differentiators ? `Diferenciais: ${profile.differentiators}.` : '',
@@ -3834,6 +4958,7 @@ function formatCompanyFactLines(input = {}) {
     profile.segment ? `Segmento informado: ${profile.segment}.` : '',
     profile.description ? `Descrição fornecida: ${profile.description}.` : '',
     profile.productsOrServices ? `Produtos/serviços informados: ${profile.productsOrServices}.` : '',
+    profile.audienceType ? `Foco comercial informado: ${audienceTypeLabel(profile.audienceType)}.` : '',
     profile.location ? `Região/cidade informada: ${profile.location}.` : '',
     profile.differentiators ? `Diferenciais conhecidos: ${profile.differentiators}.` : '',
     profile.audience ? `Público conhecido pelo usuário: ${profile.audience}.` : '',
@@ -3864,6 +4989,7 @@ function normalizeBrandInput(input = {}) {
     mainDifferential: cleanText(input?.mainDifferential || input?.differentiators),
     contentGoals: normalizeContentGoalList(input?.contentGoals),
     audience: cleanText(input?.audience),
+    audienceType: normalizeAudienceType(input?.audienceType),
     tone: normalizeUniqueTextList(input?.tone),
     avoid: cleanText(input?.avoid),
     positioning: cleanText(input?.positioning),
@@ -3972,6 +5098,7 @@ function brandInputToCompanyProfile(input = {}, existingProfile = {}) {
     primaryObjective: brandInput.contentGoals.map(contentGoalLabel).join(', '),
     contentGoals: brandInput.contentGoals,
     audience: brandInput.audience,
+    audienceType: brandInput.audienceType,
     tone: brandInput.tone,
     avoid: brandInput.avoid,
     positioning: brandInput.positioning,
@@ -3990,6 +5117,7 @@ function companyProfileToBrandInput(profileInput = {}, fallbackName = '') {
     description: profile.description,
     serviceRegion: profile.location,
     audience: profile.audience,
+    audienceType: profile.audienceType,
     tone: profile.tone,
     avoid: profile.avoid,
     positioning: profile.positioning,
@@ -4365,6 +5493,16 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     notes: String(input?.notes || '').trim(),
     active: input?.active === false ? false : true,
     pillarId: String(input?.pillarId || '').trim() || null,
+    // Groups let the operator organize offers/products (e.g. "Geral",
+    // "Black Friday") and later choose which group(s) drive a specific
+    // schedule generation, without touching each offer's `active` flag —
+    // see generateContentSchedulePlan/generateContentBatch's groupIds option.
+    groupId: String(input?.groupId || '').trim() || null,
+    // Empty = valid every day (unchanged default behavior). Non-empty scopes
+    // this offer to only compete for a slot on those weekdays — e.g. a
+    // pizzeria's weekday rodízio price vs its separate weekend price, each
+    // as its own offer. See buildTopicPool's weekday filter.
+    daysOfWeek: normalizeDaysOfWeek(input?.daysOfWeek),
     // Catalog-mode projects (venda direta) tie an offer/product to one or
     // more uploaded reference photos, unlike marketing-mode offers which
     // just draw from the general reference pool. Each id points at a
@@ -4453,6 +5591,41 @@ function resolveTopicPillar(topic, pillars) {
 function uniqueOfferId(name, existingOffers = []) {
   const base = normalizeProjectId(name);
   const ids = new Set(existingOffers.map((offer) => offer.id));
+  if (!ids.has(base)) return base;
+  let index = 2;
+  while (ids.has(`${base}-${index}`)) index += 1;
+  return `${base}-${index}`;
+}
+
+function normalizeProjectOfferGroup(input, now = new Date(), existingGroups = []) {
+  const name = String(input?.name || '').trim();
+  if (!name) throw new Error('Nome do grupo é obrigatório');
+  const id = String(input?.id || uniqueOfferGroupId(name, existingGroups)).trim();
+  const createdAt = input?.createdAt || now.toISOString();
+  return {
+    id,
+    name,
+    createdAt,
+    updatedAt: now.toISOString(),
+  };
+}
+
+function normalizeProjectOfferGroups(groups) {
+  if (!Array.isArray(groups)) return [];
+  return groups
+    .map((group) => {
+      try {
+        return normalizeProjectOfferGroup(group, new Date(group.updatedAt || group.createdAt || Date.now()), []);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
+}
+
+function uniqueOfferGroupId(name, existingGroups = []) {
+  const base = normalizeProjectId(name);
+  const ids = new Set(existingGroups.map((group) => group.id));
   if (!ids.has(base)) return base;
   let index = 2;
   while (ids.has(`${base}-${index}`)) index += 1;
@@ -4745,6 +5918,14 @@ function addMinutesToTime(time, minutesToAdd) {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
+// Organic content always has a dayNumber/scheduledDate/scheduledTime; an ad
+// creative has none of those (no scheduling concept applies to it) — show
+// its objective there instead of "Dia undefined".
+function placeholderSubtitle(content) {
+  if (content.dayNumber === undefined) return content.objectiveLabel || 'Criativo de anúncio';
+  return `Dia ${content.dayNumber} · ${content.scheduledDate} · ${content.scheduledTime}`;
+}
+
 async function writeGeneratedImage(path, content, project) {
   const fallbackHook = extractPromptLine(content.image?.prompt, 'Conceito do teste:') || 'Rascunho visual gerado';
   const colorPair = pickFallbackColors(content.image?.prompt || content.contentId || '');
@@ -4756,7 +5937,7 @@ async function writeGeneratedImage(path, content, project) {
   <rect x="${margin}" y="${margin}" width="${width - margin * 2}" height="${height - margin * 2}" rx="48" fill="#09090bd6" stroke="#facc15" stroke-width="8"/>
   <text x="${margin + 38}" y="${margin + 108}" fill="#facc15" font-size="54" font-family="Arial, sans-serif" font-weight="700">${escapeXml(content.formatLabel || CHANNEL_LABELS[content.channel] || content.channel)}</text>
   <text x="${margin + 38}" y="${margin + 210}" fill="#ffffff" font-size="66" font-family="Arial, sans-serif" font-weight="800">${escapeXml(project.name)}</text>
-  <text x="${margin + 38}" y="${margin + 302}" fill="#d4d4d8" font-size="38" font-family="Arial, sans-serif">Dia ${content.dayNumber} · ${escapeXml(content.scheduledDate)} · ${escapeXml(content.scheduledTime)}</text>
+  <text x="${margin + 38}" y="${margin + 302}" fill="#d4d4d8" font-size="38" font-family="Arial, sans-serif">${escapeXml(placeholderSubtitle(content))}</text>
   <text x="${margin + 38}" y="${margin + 410}" fill="#ffffff" font-size="44" font-family="Arial, sans-serif">${escapeXml(truncateSvgText(fallbackHook, 34))}</text>
   <text x="${margin + 38}" y="${margin + 486}" fill="#d4d4d8" font-size="34" font-family="Arial, sans-serif">Use como prévia/teste antes de publicar.</text>
   <text x="${margin + 38}" y="${height - margin - 52}" fill="#a1a1aa" font-size="30" font-family="Arial, sans-serif">${escapeXml(project.instagram.handle || '')}</text>
@@ -4900,6 +6081,21 @@ function addDays(dateString, days) {
   return formatDate(date);
 }
 
+const WEEKDAY_CODES = new Set(['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat']);
+// getUTCDay() order (0=Sunday..6=Saturday) — index maps directly.
+const WEEKDAY_BY_INDEX = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+function weekdayFromDate(dateString) {
+  const [year, month, day] = dateString.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return WEEKDAY_BY_INDEX[date.getUTCDay()];
+}
+
+function normalizeDaysOfWeek(value) {
+  const raw = Array.isArray(value) ? value : [];
+  return [...new Set(raw.map((item) => String(item || '').trim().toLowerCase()).filter((item) => WEEKDAY_CODES.has(item)))];
+}
+
 async function readJson(path, fallback) {
   try {
     return JSON.parse(await readFile(path, 'utf-8'));
@@ -4947,12 +6143,58 @@ async function writeJson(path, value) {
 // silently wins with no error, quietly dropping the other request's
 // change. Keyed by targetDir+projectId since tests run many isolated
 // temp-dir projects with the same id.
+//
+// This in-memory queue only protects two requests inside THIS process — it
+// does nothing for two separate server processes pointed at the same
+// targetDir (which really happens: a temp preview server on an alternate
+// port next to the operator's own running instance). The file lock below
+// adds that cross-process guarantee; the in-memory queue stays because it's
+// what keeps a single busy process from making concurrent processes acquire
+// attempts for work it already knows is serialized, and it's what queues up
+// fairly instead of every waiter racing the filesystem at once.
 const projectLocks = new Map();
+
+// A lock file older than this is treated as abandoned by a crashed process,
+// not a slow-but-alive operation — the Raio-X/web-research AI calls above
+// can legitimately hold the lock for tens of seconds, so this has to be
+// generous enough that a real one never gets its lock stolen out from
+// under it mid-write.
+const LOCK_STALE_MS = 120_000;
+const LOCK_POLL_MS = 50;
+
+async function acquireProjectFileLock(paths) {
+  await mkdir(paths.projectDir, { recursive: true }).catch(() => {});
+  const lockPath = join(paths.projectDir, '.lock');
+  for (;;) {
+    try {
+      await writeFile(lockPath, `${process.pid}\n${new Date().toISOString()}`, { flag: 'wx' });
+      return lockPath;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      const info = await stat(lockPath).catch(() => null);
+      if (!info || Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+        // Either it was just released (stat raced the other side's rm — try
+        // again immediately) or it's stale enough to reclaim outright.
+        await rm(lockPath, { force: true });
+        continue;
+      }
+      await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+    }
+  }
+}
 
 function withProjectLock(targetDir, projectId, fn) {
   const key = `${targetDir}::${projectId}`;
   const previous = projectLocks.get(key) || Promise.resolve();
-  const run = previous.catch(() => {}).then(fn);
+  const run = previous.catch(() => {}).then(async () => {
+    const paths = getCentralPaths(targetDir, projectId);
+    const lockPath = await acquireProjectFileLock(paths);
+    try {
+      return await fn();
+    } finally {
+      await rm(lockPath, { force: true });
+    }
+  });
   projectLocks.set(key, run.catch(() => {}));
   return run;
 }

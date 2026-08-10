@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { testPost, type ContentItem } from "@/api/client";
+import { ContentPipeline } from "./ContentPipeline";
 import { channelFullLabel, channelLabel, imageSource, isFeedChannel } from "./contentDisplay";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -35,7 +36,7 @@ export function TestPost() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 16px" }}>Teste rápido antes de programar</h2>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Teste rápido antes de programar</h2>
 
       <Card style={{ padding: 20 }}>
         <div className="notice">
@@ -96,6 +97,7 @@ export function TestPost() {
               <span className="pill">dry-run: {result.publish?.dryRun !== false ? "sim" : "não"}</span>
               <span className="pill">publicado: {result.publish?.realPublished ? "sim" : "não"}</span>
             </div>
+            <ContentPipeline item={result} />
 
             {result.publish?.creativeVariation ? (
               <div className="notice" style={{ marginTop: 10 }}>
