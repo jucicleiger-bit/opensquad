@@ -176,6 +176,36 @@ function execFileNoStdin(file, args, { timeout, maxBuffer = 10 * 1024 * 1024 } =
   });
 }
 
+// Pushes a project's Meta token (and IG/Page IDs) to GitHub Secrets so the
+// GitHub Actions publisher always has a fresh credential — no-op when
+// OPENSQUAD_GAVETA_REPO isn't set (local dev without GitHub configured).
+export async function syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pageId }, options = {}) {
+  const repo = process.env.OPENSQUAD_GAVETA_REPO;
+  if (!repo) return;
+  const run = options.execFileAsync || execFileAsync;
+  const prefix = projectId.toUpperCase().replace(/-/g, '_');
+  const entries = [
+    [`META_TOKEN_${prefix}`, token],
+    [`META_IG_USER_ID_${prefix}`, instagramUserId || ''],
+    [`META_PAGE_ID_${prefix}`, pageId || ''],
+  ];
+  for (const [name, value] of entries) {
+    await run('gh', ['secret', 'set', name, '--repo', repo, '--body', value]);
+  }
+}
+
+// Test-only seam: content-central-server.js computes `execFileAsync =
+// promisify(execFile)` once at import time (see above), so a global mock of
+// node:child_process's execFile never reaches call sites that already
+// closed over the original. This lets tests swap the function the token-save
+// *route* uses without touching global module state.
+let execFileAsyncForRoutes = execFileAsync;
+export function __setExecFileAsyncForTests(fn) {
+  const previous = execFileAsyncForRoutes;
+  execFileAsyncForRoutes = fn;
+  return previous;
+}
+
 export async function loadContentCentralEnv(targetDir = process.cwd(), env = process.env) {
   let raw;
   try {
@@ -463,6 +493,11 @@ async function handleRequest(req, res, targetDir, context = {}) {
         ...(body.handle ? { handle: body.handle } : {}),
       },
     }, targetDir);
+    await syncTokenSecretsToGitHub(projectId, {
+      token: body.token,
+      instagramUserId: body.account?.instagramUserId,
+      pageId: body.account?.pageId,
+    }, { execFileAsync: execFileAsyncForRoutes });
     return sendJson(res, 200, { project, validation });
   }
 

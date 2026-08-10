@@ -34,7 +34,9 @@ import {
   uploadGeneratedImagePublicly,
   uploadGeneratedVideoPublicly,
   xaiAspectRatioForChannel,
+  syncTokenSecretsToGitHub,
 } from '../src/content-central-server.js';
+import * as serverModule from '../src/content-central-server.js';
 import {
   approveContent,
   createCentralProject,
@@ -3297,4 +3299,61 @@ test('startPublishScheduler still starts the interval when OPENSQUAD_AUTO_PUBLIS
   } finally {
     delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
   }
+});
+
+test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configured', async () => {
+  process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
+  try {
+    const calls = [];
+    await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...', instagramUserId: '123', pageId: '456' }, {
+      execFileAsync: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '' }; },
+    });
+
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((c) => c.cmd === 'gh' && c.args[0] === 'secret' && c.args[1] === 'set'));
+    assert.ok(calls.some((c) => c.args.includes('META_TOKEN_BOSS_PIZZARIA') && c.args.includes('EAAB...')));
+    assert.ok(calls.some((c) => c.args.includes('META_IG_USER_ID_BOSS_PIZZARIA') && c.args.includes('123')));
+    assert.ok(calls.some((c) => c.args.includes('META_PAGE_ID_BOSS_PIZZARIA') && c.args.includes('456')));
+    assert.ok(calls.every((c) => c.args.includes('--repo') && c.args.includes('someuser/gaveta')));
+  } finally {
+    delete process.env.OPENSQUAD_GAVETA_REPO;
+  }
+});
+
+test('syncTokenSecretsToGitHub is a no-op when OPENSQUAD_GAVETA_REPO is unset', async () => {
+  const calls = [];
+  await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...' }, {
+    execFileAsync: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '' }; },
+  });
+  assert.equal(calls.length, 0);
+});
+
+test('POST .../token calls syncTokenSecretsToGitHub after saving', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
+    try {
+      const calls = [];
+      const originalExecFileAsync = serverModule.__setExecFileAsyncForTests((cmd, args) => { calls.push({ cmd, args }); return Promise.resolve({ stdout: '' }); });
+
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'gaveta-token', name: 'Gaveta Token', handle: '@gavetatoken', approvalEmail: 'a@example.com' }),
+      });
+      // expiresAt is supplied (unlike the brief's literal test body) so the
+      // route takes the local-validation branch instead of calling the real
+      // validateMetaToken -> graph.facebook.com, which would otherwise make
+      // a real network call in this test — see task-7-report.md.
+      const res = await request(server, '/api/projects/gaveta-token/token', {
+        method: 'POST',
+        body: JSON.stringify({ token: 'EAAB...', expiresAt: '2026-12-01T00:00:00.000Z', account: { handle: '@x', instagramUserId: '123', pageId: '456' } }),
+      });
+
+      assert.equal(res.response.status, 200);
+      const secretCalls = calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'secret');
+      assert.equal(secretCalls.length, 3);
+      serverModule.__setExecFileAsyncForTests(originalExecFileAsync);
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_REPO;
+    }
+  });
 });
