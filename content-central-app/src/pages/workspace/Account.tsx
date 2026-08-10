@@ -35,7 +35,12 @@ export function Account() {
       const res = await saveToken(project.projectId, token, handle);
       setToken("");
       await refreshProject();
-      setMessage(`Token validado e salvo: ${tokenExpiryMeta(res.project.token).label}.`);
+      const savedMessage = `Token validado e salvo: ${tokenExpiryMeta(res.project.token).label}.`;
+      setMessage(
+        res.githubSyncWarning
+          ? `${savedMessage} Aviso: falha ao sincronizar com o GitHub (${res.githubSyncWarning}).`
+          : savedMessage,
+      );
     } catch (err) {
       setError((err as Error).message);
     } finally {

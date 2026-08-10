@@ -653,7 +653,11 @@ export function updateCaption(
   });
 }
 
-export function saveToken(projectId: string, token: string, handle: string): Promise<{ project: ProjectSummary }> {
+export function saveToken(
+  projectId: string,
+  token: string,
+  handle: string,
+): Promise<{ project: ProjectSummary; githubSyncWarning?: string }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/token`, {
     method: "POST",
     body: JSON.stringify({ token, handle }),
