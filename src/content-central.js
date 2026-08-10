@@ -2928,6 +2928,14 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
 }
 
 async function publishOneItem(item, projectSummary, metaPublisher, now) {
+  // Idempotency guard: if a previous attempt's real publish already
+  // succeeded but the caller's follow-up (e.g. the gaveta push in
+  // publishWithGaveteSync) failed and surfaced as an error, a retry must
+  // not call metaPublisher again — that would post a real duplicate.
+  // runDuePublishSweep already pre-filters to !realPublished before ever
+  // calling this, so this is a no-op for it; it only matters for
+  // publishSingleContent's manual retry path.
+  if (item.publish?.realPublished) return true;
   try {
     const result = await metaPublisher({ content: item, project: projectSummary });
     item.publish = {

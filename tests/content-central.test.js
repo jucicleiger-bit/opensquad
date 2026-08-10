@@ -4442,6 +4442,35 @@ test('publishSingleContent publishes on demand even before the scheduled time', 
   });
 });
 
+test('publishSingleContent is idempotent: retrying an already-published item never calls metaPublisher again', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'publish-retry',
+      name: 'Publish Retry',
+      handle: '@publishretry',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('publish-retry', { days: 1, startDate: '2099-01-01', postTime: '09:00' }, dir);
+    await approveContent('publish-retry', batch.items[0].contentId, dir, batch.batchId);
+
+    const first = await publishSingleContent('publish-retry', batch.items[0].contentId, dir, {
+      metaPublisher: async () => ({ mediaId: 'media-3', permalink: 'https://instagram.com/p/xyz' }),
+    }, batch.batchId);
+    assert.equal(first.publish.realPublished, true);
+
+    // Simulates the operator retrying "Publicar agora" after the real Meta
+    // publish succeeded but something downstream (e.g. the gaveta push)
+    // failed and surfaced as an error — metaPublisher must not be called a
+    // second time, or the post would go live twice.
+    const retry = await publishSingleContent('publish-retry', batch.items[0].contentId, dir, {
+      metaPublisher: async () => { assert.fail('metaPublisher must not be called for an already-published item'); },
+    }, batch.batchId);
+
+    assert.equal(retry.publish.realPublished, true);
+    assert.equal(retry.publish.metaMediaId, 'media-3');
+  });
+});
+
 test('buildApprovalPayload creates a safe approval artifact for one content day', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
