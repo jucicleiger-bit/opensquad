@@ -2819,7 +2819,16 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   content.approval.approvedAt = now;
   content.approval.approvalSource = 'operator_panel';
   if (typeof options.mediaUploader === 'function') {
-    content.publish = { ...content.publish, mediaUrl: await options.mediaUploader(content) };
+    // A hosting hiccup (imgBB/Catbox) must not fail the whole approve or
+    // hold the project lock for the upload's duration — the item still gets
+    // marked aprovado, just without a public mediaUrl yet (queueSync then
+    // pushes it with mediaUrl: null, a visible degraded state the operator
+    // can retry, e.g. by re-approving).
+    try {
+      content.publish = { ...content.publish, mediaUrl: await options.mediaUploader(content) };
+    } catch (err) {
+      content.publish = { ...content.publish, mediaUrl: null, mediaUploadError: err.message };
+    }
   }
   content.updatedAt = now;
   await writeJson(contentPath, content);
@@ -2972,6 +2981,28 @@ export async function publishSingleContent(projectId, contentId, targetDir = pro
 
   const ok = await publishOneItem(item, projectSummary, options.metaPublisher, options.now || new Date());
   if (!ok) throw new Error(item.publish.error);
+  return item;
+}
+
+// Called by publishWithGaveteSync when the pulled gaveta queue item already
+// shows realPublished: true — GitHub Actions' hourly sweep beat the operator
+// to it. Syncs that outcome onto the local content record instead of
+// publishing again (which would be a real duplicate post). Mirrors the shape
+// publishOneItem writes on a successful publish.
+export async function applyExternalPublishResult(projectId, contentId, targetDir, batchId, publishResult) {
+  const paths = getCentralPaths(targetDir, projectId);
+  const contentPath = await findContentPath(paths.draftsDir, contentId, batchId);
+  const item = await readJson(contentPath);
+  item.publish = {
+    ...item.publish,
+    realPublished: true,
+    publishedAt: publishResult.publishedAt,
+    metaMediaId: publishResult.metaMediaId,
+    permalink: publishResult.permalink,
+    error: null,
+  };
+  item.updatedAt = new Date().toISOString();
+  await writeJson(item.filePath, item);
   return item;
 }
 
