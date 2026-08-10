@@ -231,7 +231,7 @@ export function References() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 4px" }}>Painel de referências</h2>
+      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>Painel de referências</h2>
       <p className="muted" style={{ marginTop: 0 }}>
         Referência não deve disputar com o Raio-X. Separe ativos oficiais, fotos reais/produtos e inspirações visuais.
       </p>

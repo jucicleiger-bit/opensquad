@@ -1,7 +1,7 @@
-import { exec, execFile } from 'node:child_process';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { exec, execFile, spawn } from 'node:child_process';
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { platform, tmpdir } from 'node:os';
+import { homedir, platform, tmpdir } from 'node:os';
 import { basename, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -11,9 +11,16 @@ import { Jimp, loadFont, measureText } from 'jimp';
 import sharp from 'sharp';
 import { uploadToImgBB } from '../skills/instagram-publisher/scripts/publish.js';
 import {
+  CONTENT_CENTRAL_PERSONAS,
+  contentCentralPersonaLine,
+  contentCentralPersonaResponsibilityLine,
+} from './content-central-personas.js';
+import {
   animateContentForReels,
   buildApprovalPayload,
   approveContent,
+  enqueueSegmentTemplateAdaptation,
+  listSegmentTemplates,
   analyzeProjectBrandXray,
   analyzeProjectBrandBriefing,
   approveProjectBrandXray,
@@ -29,8 +36,15 @@ import {
   enqueueBatchImageGeneration,
   enqueueCatalogImageGeneration,
   generateCatalogSchedulePlan,
+  deleteAdCreative,
+  enqueueAdCreativeImageGeneration,
+  generateAdCreative,
+  regenerateAdCreative,
   generateContentBatch,
   generateContentSchedulePlan,
+  generateSpecialDateContent,
+  listAdCreatives,
+  listCommemorativeDates,
   getCentralPaths,
   getGlobalRules,
   listCentralProjects,
@@ -46,6 +60,8 @@ import {
   runDuePublishSweep,
   saveProjectAsset,
   saveProjectOffer,
+  saveProjectOfferGroup,
+  deleteProjectOfferGroup,
   saveProjectPillar,
   saveProjectToken,
   suggestProjectPillars,
@@ -59,8 +75,50 @@ import {
   validateMetaToken,
 } from './content-central.js';
 
+export { CONTENT_CENTRAL_PERSONAS };
+
 const API_SUPPORTED_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story']);
 const execFileAsync = promisify(execFile);
+
+// execFile always pipes the child's stdin — fine for every other subprocess
+// call in this file (they never read stdin), but `codex exec` specifically
+// detects a piped-but-silent stdin and blocks waiting for EOF that never
+// comes (confirmed: a real run hung the full length of its timeout this
+// way). execFile's options don't let a caller override that; spawn's do.
+function execFileNoStdin(file, args, { timeout, maxBuffer = 10 * 1024 * 1024 } = {}) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(file, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timer = null;
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(arg);
+    };
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk;
+      if (stdout.length > maxBuffer) child.kill('SIGKILL');
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk;
+      if (stderr.length > maxBuffer) child.kill('SIGKILL');
+    });
+    child.on('error', (err) => finish(reject, err));
+    child.on('close', (code) => {
+      if (code === 0) finish(resolvePromise, { stdout, stderr });
+      else finish(reject, new Error(`Command failed with exit code ${code}: ${stderr || stdout}`.trim()));
+    });
+    if (timeout) {
+      timer = setTimeout(() => {
+        child.kill('SIGKILL');
+        finish(reject, new Error(`Command timed out after ${timeout}ms`));
+      }, timeout);
+    }
+  });
+}
 
 export async function loadContentCentralEnv(targetDir = process.cwd(), env = process.env) {
   let raw;
@@ -100,26 +158,32 @@ export async function startContentCentralServer({
   imageGenerator = null,
   imageReviewer = null,
   captionGenerator = null,
+  adCopyGenerator = null,
   brandAnalyzer = null,
   pillarSuggester = null,
   logoColorAnalyzer = null,
   siteAnalyzer = null,
   webResearcher = null,
   videoAnimator = null,
+  prospectScreenshotAnalyzer = null,
+  bioImprover = null,
 } = {}) {
   await loadContentCentralEnv(targetDir);
   await reconcileInterruptedGenerations(targetDir).catch((err) => console.error('[content-central] reconcile interrupted generations failed:', err.message));
   const context = {
     catalogImageComposer: (payload) => composeCatalogImage({ ...payload, targetDir }),
     imageGenerator: imageGenerator || (enableAiImages ? (payload) => generateAiImageForActiveProvider({ ...payload, targetDir }) : null),
-    imageReviewer: imageReviewer || (enableAiImages ? reviewAiImageWithHermes : null),
+    imageReviewer: imageReviewer || (enableAiImages ? reviewImageForActiveTextProvider : null),
     captionGenerator: captionGenerator || (enableAiImages ? writeAiCaptionWithHermes : null),
+    adCopyGenerator: adCopyGenerator || (enableAiImages ? writeAdCopyVariationsWithHermes : null),
     brandAnalyzer: brandAnalyzer || (enableAiImages ? generateBrandXrayWithAi : null),
     pillarSuggester: pillarSuggester || (enableAiImages ? generatePillarSuggestionsWithAi : null),
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
     videoAnimator: videoAnimator || (enableAiImages ? (payload) => animateImageForReelsWithFfmpeg(payload, targetDir) : null),
+    prospectScreenshotAnalyzer: prospectScreenshotAnalyzer || (enableAiImages ? analyzeProspectScreenshotWithHermes : null),
+    bioImprover: bioImprover || (enableAiImages ? improveProspectBioWithAi : null),
   };
   const server = createServer((req, res) => {
     handleRequest(req, res, targetDir, context).catch((err) => sendJson(res, 500, {
@@ -163,7 +227,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
   // sections not yet migrated (Referências e imagem, Agenda e geração, Teste
   // seguro) so nobody is stranded while the rewrite is still in progress.
   if (method === 'GET' && route === '/classic') return sendHtml(res, renderApp());
-  if (method === 'GET' && (route === '/' || route.startsWith('/assets/') || route === '/projects' || route.startsWith('/projects/'))) {
+  if (method === 'GET' && (route === '/' || route.startsWith('/assets/') || route.startsWith('/stock/') || route === '/projects' || route.startsWith('/projects/'))) {
     return sendReactApp(res, route === '/' ? '' : route);
   }
   if (method === 'GET' && route === '/api/state') return sendJson(res, 200, {
@@ -172,10 +236,96 @@ async function handleRequest(req, res, targetDir, context = {}) {
     alerts: await listSystemAlerts(targetDir),
   });
 
+  // Segment templates (e.g. "embalagens") — pre-approved art reused across
+  // prospects in the same business segment instead of generating from
+  // scratch every time. Registration is operator/script-driven for now (see
+  // registerSegmentTemplate); this only lists what's already registered, so
+  // the dashboard's segment picker degrades to an empty list, never an
+  // error, before the first template exists.
+  if (method === 'GET' && route === '/api/segment-templates') {
+    return sendJson(res, 200, { templates: await listSegmentTemplates(targetDir) });
+  }
+
+  // The fixed, already-approved art itself — served directly so the
+  // dashboard's preview can show real photography with zero per-prospect AI
+  // call (only a live CSS color overlay changes on top, client-side).
+  if (method === 'GET' && route.startsWith('/api/segment-templates/')) {
+    const segParts = route.split('/').filter(Boolean).map(decodeURIComponent);
+    // ['api', 'segment-templates', segmentId, 'images', filename]
+    if (segParts.length === 5 && segParts[3] === 'images') {
+      return sendSegmentTemplateImage(res, targetDir, segParts[2], segParts[4]);
+    }
+    return sendJson(res, 404, { error: 'Not found' });
+  }
+
   if (method === 'POST' && route === '/api/projects') {
     const body = await readBody(req);
     const project = await createCentralProject(body, targetDir);
     return sendJson(res, 201, { project });
+  }
+
+  // Turns one screenshot of a prospect's real Instagram profile into a
+  // throwaway "prospecção" project pre-filled with what the screenshot
+  // actually showed — see analyzeProspectScreenshotWithHermes. The vision
+  // read is best-effort: any failure there still creates the project (with
+  // blank fields the operator fills in by hand) instead of failing the
+  // request, same "never block the user on an AI call" contract as
+  // saveProjectAsset's logo-color extraction.
+  if (method === 'POST' && route === '/api/prospects') {
+    const body = await readBody(req);
+    const dataUrlMatch = /^data:([^;]+);base64,(.+)$/s.exec(String(body?.dataUrl || ''));
+    if (!dataUrlMatch) return sendJson(res, 400, { error: 'Envie um print (dataUrl de imagem) do perfil do prospect.' });
+    const [, mimeType, base64] = dataUrlMatch;
+    const buffer = Buffer.from(base64, 'base64');
+
+    let extracted = null;
+    try {
+      if (typeof context.prospectScreenshotAnalyzer === 'function') {
+        extracted = await context.prospectScreenshotAnalyzer({ buffer, mimeType });
+      }
+    } catch (err) {
+      console.error('[content-central] prospect screenshot analysis failed:', err.message);
+    }
+
+    let project = await createCentralProject({
+      // A failed vision read still needs a project to land in — fall back
+      // to a name unique enough that a second failed upload right after
+      // doesn't collide on the same slug (normalizeProjectId is
+      // deterministic from the name).
+      name: extracted?.businessName || `Nova prospecção ${Date.now()}`,
+      handle: extracted?.handle || '',
+      isProspect: true,
+      companyProfile: {
+        segment: extracted?.nicheGuess || '',
+        description: extracted?.bioText || '',
+        differentiators: (extracted?.differentiators || []).join('; '),
+      },
+      prospectSource: extracted ? {
+        handle: extracted.handle,
+        bio: extracted.bioText,
+        realFollowers: extracted.realFollowers,
+        realPosts: extracted.realPosts,
+        realFollowing: extracted.realFollowing,
+      } : null,
+    }, targetDir);
+
+    if (extracted?.avatarCrop) {
+      try {
+        const avatarDataUrl = await cropCircularAvatar(buffer, extracted.avatarCrop);
+        if (avatarDataUrl) {
+          const saved = await saveProjectAsset(project.projectId, {
+            kind: 'logo',
+            filename: 'logo.png',
+            dataUrl: avatarDataUrl,
+          }, targetDir, new Date(), { logoColorAnalyzer: context.logoColorAnalyzer });
+          project = saved.project;
+        }
+      } catch (err) {
+        console.error('[content-central] prospect avatar crop failed:', err.message);
+      }
+    }
+
+    return sendJson(res, 201, { project, extracted });
   }
 
   const parts = route.split('/').filter(Boolean).map(decodeURIComponent);
@@ -192,6 +342,23 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendProjectAsset(res, targetDir, projectId, parts.slice(4).join('/'));
   }
 
+  if (method === 'GET' && parts.length >= 5 && parts[3] === 'assets-preview') {
+    return sendProjectAssetPreview(res, targetDir, projectId, parts.slice(4).join('/'));
+  }
+
+  if (method === 'GET' && parts.length === 4 && parts[3] === 'commemorative-dates') {
+    const months = Math.min(12, Math.max(1, Number(url.searchParams.get('months')) || 3));
+    const now = new Date();
+    const from = now.toISOString().slice(0, 10);
+    const toDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + months, now.getUTCDate()));
+    const to = toDate.toISOString().slice(0, 10);
+    return sendJson(res, 200, { dates: listCommemorativeDates(from, to) });
+  }
+
+  if (method === 'GET' && parts.length === 4 && parts[3] === 'ad-creatives') {
+    return sendJson(res, 200, { adCreatives: await listAdCreatives(projectId, targetDir) });
+  }
+
   if (method === 'GET' && parts.length === 4 && parts[3] === 'briefing') {
     const [projects, content] = await Promise.all([
       listCentralProjects(targetDir),
@@ -201,6 +368,18 @@ async function handleRequest(req, res, targetDir, context = {}) {
     if (!project) return sendJson(res, 404, { error: 'Project not found' });
     const items = content.filter((item) => item.status !== 'aprovado');
     return sendHtml(res, renderBriefingPage(project, items));
+  }
+
+  if (method === 'GET' && parts.length === 4 && parts[3] === 'prospect-mockup') {
+    const [projects, content] = await Promise.all([
+      listCentralProjects(targetDir),
+      listProjectContent(projectId, targetDir),
+    ]);
+    const project = projects.find((entry) => entry.projectId === projectId);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const feedItems = content.filter((item) => item.channel === 'instagram_feed');
+    const storyItems = content.filter((item) => item.channel === 'instagram_story');
+    return sendHtml(res, renderProspectMockupPage(project, feedItems, storyItems));
   }
 
   if (method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
@@ -241,6 +420,23 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const project = await updateProjectBrandInput(projectId, body, targetDir);
     return sendJson(res, 200, { project });
+  }
+
+  // "Melhorar bio" — the operator's rough draft goes through one AI pass to
+  // tighten/polish it; the caller drops the result straight into the same
+  // state the live preview already reads from, no extra fetch needed.
+  if (parts.length === 4 && parts[3] === 'improve-bio') {
+    const body = await readBody(req);
+    if (typeof context.bioImprover !== 'function') {
+      return sendJson(res, 501, { error: 'Melhoria de bio por IA não está disponível neste servidor.' });
+    }
+    const bio = await context.bioImprover({
+      bio: String(body.bio || ''),
+      segment: String(body.segment || ''),
+      businessName: String(body.businessName || ''),
+    });
+    if (!bio) return sendJson(res, 502, { error: 'A IA não retornou uma bio melhorada.' });
+    return sendJson(res, 200, { bio });
   }
 
   if (parts.length === 4 && parts[3] === 'site-analyze') {
@@ -332,6 +528,18 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, result);
   }
 
+  if (parts.length === 4 && parts[3] === 'offer-groups') {
+    const body = await readBody(req);
+    const result = await saveProjectOfferGroup(projectId, body, targetDir);
+    return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 4 && parts[3] === 'offer-groups-delete') {
+    const body = await readBody(req);
+    const result = await deleteProjectOfferGroup(projectId, body.groupId, targetDir);
+    return sendJson(res, 200, result);
+  }
+
   if (parts.length === 4 && parts[3] === 'pillars') {
     const body = await readBody(req);
     const result = await saveProjectPillar(projectId, body, targetDir);
@@ -363,6 +571,8 @@ async function handleRequest(req, res, targetDir, context = {}) {
         startDate: body.startDate,
         formats,
         contentRules: splitRules(body.contentRules),
+        groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
+        offersOnly: Boolean(body.offersOnly),
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       return sendJson(res, 201, { batch, batches: [batch] });
@@ -375,11 +585,106 @@ async function handleRequest(req, res, targetDir, context = {}) {
         startDate: body.startDate,
         channel,
         contentRules: splitRules(body.contentRules),
+        groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
+        offersOnly: Boolean(body.offersOnly),
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       batches.push(batch);
     }
     return sendJson(res, 201, { batch: batches[0], batches });
+  }
+
+  // A one-off creative for a national holiday or commercial date (Dia das
+  // Mães, Black Friday...), independent of the normal offer/pillar
+  // rotation — see generateSpecialDateContent.
+  if (parts.length === 4 && parts[3] === 'generate-special-date') {
+    const body = await readBody(req);
+    const imageOptions = { imageGenerator: context.imageGenerator, imageReviewer: context.imageReviewer, captionGenerator: context.captionGenerator, videoAnimator: context.videoAnimator };
+    const batch = await generateSpecialDateContent(projectId, {
+      date: body.date,
+      label: body.label,
+      // Accepts either the original singular `channel` or a plural
+      // `channels` list — picking several formats for the same date must
+      // reach generateSpecialDateContent as one call so it can share a
+      // creative across same-shape channels, instead of the caller looping
+      // and paying for a separate AI generation per format.
+      channels: (body.channel || body.channels) ? normalizeChannels(body) : undefined,
+      offerId: body.offerId,
+      postTime: body.postTime,
+    }, targetDir);
+    enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
+    return sendJson(res, 201, { batch });
+  }
+
+  // Adapts a registered segment template (see registerSegmentTemplate) for
+  // this project instead of generating art from scratch — the fast path for
+  // a new prospecting lead in a segment we already have approved art for.
+  // Fire-and-forget, same shape as generate-special-date/ad-creatives above:
+  // the panel polls listProjectContent for the resulting items.
+  if (parts.length === 4 && parts[3] === 'adapt-segment-template') {
+    const body = await readBody(req);
+    const segmentId = String(body.segmentId || '').trim();
+    if (!segmentId) return sendJson(res, 400, { error: 'Informe o segmentId do template.' });
+    if (typeof context.imageGenerator !== 'function') return sendJson(res, 202, { queued: false });
+    enqueueSegmentTemplateAdaptation(projectId, segmentId, { imageGenerator: context.imageGenerator }, targetDir);
+    return sendJson(res, 202, { queued: true });
+  }
+
+  // Ad creatives (paid traffic) — a separate concept from every organic
+  // route above: no scheduledDate, no approval, no calendar. The operator
+  // runs the campaign themselves in Ads Manager; this only produces the
+  // creative asset + copy variations. (GET listing lives up with the other
+  // GET routes, above the POST-only guard.)
+  if (parts.length === 4 && parts[3] === 'ad-creatives') {
+    const body = await readBody(req);
+    // "format" resolves to one or two AI generations — "ambos" runs Story
+    // and Feed as two independent ad creatives (each gets its own
+    // composition rules), not one image reused across both shapes.
+    const channels = body.format === 'story'
+      ? ['instagram_story']
+      : body.format === 'both' || body.format === 'ambos'
+        ? ['instagram_story', 'instagram_feed']
+        : ['instagram_feed'];
+    const imageOptions = {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      adCopyGenerator: context.adCopyGenerator,
+      note: body.note,
+      noteMode: body.noteMode,
+    };
+    const adCreatives = [];
+    for (const channel of channels) {
+      const adCreative = await generateAdCreative(projectId, {
+        objective: body.objective,
+        offerId: body.offerId,
+        note: body.note,
+        noteMode: body.noteMode,
+        channel,
+      }, targetDir);
+      enqueueAdCreativeImageGeneration(projectId, adCreative, imageOptions, targetDir);
+      adCreatives.push(adCreative);
+    }
+    return sendJson(res, 201, { adCreatives });
+  }
+
+  if (parts.length === 5 && parts[3] === 'ad-creatives-delete') {
+    await deleteAdCreative(projectId, parts[4], targetDir);
+    return sendJson(res, 200, { deleted: true });
+  }
+
+  // "Regenerar só a imagem" (no note) or "Pedido de alteração" (with note —
+  // targeted edit of the existing image) for one already-generated ad
+  // creative. Copy variations stay untouched.
+  if (parts.length === 5 && parts[3] === 'ad-creatives-regenerate') {
+    const body = await readBody(req);
+    const adCreative = await regenerateAdCreative(projectId, parts[4], targetDir);
+    enqueueAdCreativeImageGeneration(projectId, adCreative, {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      note: body.note,
+      skipCopy: true,
+    }, targetDir);
+    return sendJson(res, 200, { adCreative });
   }
 
   // Parallel endpoint for catalog (venda direta) projects: no formats/channels
@@ -523,15 +828,90 @@ function normalizeExpiry(value) {
   return value;
 }
 
-async function sendProjectAsset(res, targetDir, projectId, relativePath) {
+// Shared by sendProjectAsset and sendProjectAssetPreview — resolves a
+// requested relative path to the real file on disk, or null if it escapes
+// the project's own asset folder.
+function resolveSafeAssetPath(targetDir, projectId, relativePath) {
   const safeRelative = normalize(relativePath).replace(/^([/\\])+/, '');
-  if (!safeRelative.startsWith('assets')) return sendJson(res, 400, { error: 'Asset inválido' });
+  if (!safeRelative.startsWith('assets')) return { safeRelative: null, filePath: null };
   const projectRoot = resolve(targetDir, '_opensquad', 'content-central', 'projects', projectId);
   const filePath = resolve(join(projectRoot, safeRelative));
-  if (!filePath.startsWith(projectRoot)) return sendJson(res, 400, { error: 'Asset inválido' });
+  if (!filePath.startsWith(projectRoot)) return { safeRelative: null, filePath: null };
+  return { safeRelative, filePath, projectRoot };
+}
+
+async function sendProjectAsset(res, targetDir, projectId, relativePath) {
+  const { filePath } = resolveSafeAssetPath(targetDir, projectId, relativePath);
+  if (!filePath) return sendJson(res, 400, { error: 'Asset inválido' });
   const body = await readFile(filePath);
   res.writeHead(200, { 'content-type': assetContentType(filePath), 'cache-control': 'no-store' });
   res.end(body);
+}
+
+// Segment-template art is shared and reused across many prospects, but NOT
+// immutable — a piece gets overwritten in place (same filename) whenever the
+// operator regenerates it (new price, logo fix, swapped product, etc.), and
+// a long cache here means a browser that already loaded the old bytes keeps
+// showing them for a day. Confirmed live: after regenerating a piece, the
+// same browser session kept rendering the stale version until this was
+// changed to no-store. Same policy as sendProjectAsset above.
+async function sendSegmentTemplateImage(res, targetDir, segmentId, filename) {
+  const safeSegment = String(segmentId || '').replace(/[^a-z0-9-]/gi, '');
+  const safeFile = basename(String(filename || ''));
+  if (!safeSegment || !safeFile) return sendJson(res, 400, { error: 'Peça inválida' });
+  const dir = resolve(targetDir, '_opensquad', 'content-central', 'segment-templates', safeSegment, 'images');
+  const filePath = resolve(join(dir, safeFile));
+  if (!filePath.startsWith(dir)) return sendJson(res, 400, { error: 'Peça inválida' });
+  let body;
+  try {
+    body = await readFile(filePath);
+  } catch {
+    return sendJson(res, 404, { error: 'Peça não encontrada' });
+  }
+  res.writeHead(200, { 'content-type': assetContentType(filePath), 'cache-control': 'no-store' });
+  res.end(body);
+}
+
+const BRIEFING_PREVIEW_MAX_WIDTH = 640;
+const BRIEFING_PREVIEW_JPEG_QUALITY = 78;
+
+// The panel/calendar always shows the full-resolution generated PNG (2-4MB
+// each — fine for one card at a time in the app). The client-facing
+// presentation page shows every pending card on one page and offers a PDF
+// export, so those same full-res images add up fast: a project with ~20
+// pending posts produced a 50MB+ PDF before this existed. This serves a
+// resized, compressed JPEG instead — generated once per source image and
+// cached to disk under assets/previews/, not recomputed on every request.
+async function sendProjectAssetPreview(res, targetDir, projectId, relativePath) {
+  const { safeRelative, filePath, projectRoot } = resolveSafeAssetPath(targetDir, projectId, relativePath);
+  if (!filePath) return sendJson(res, 400, { error: 'Asset inválido' });
+  const ext = extname(filePath).toLowerCase();
+  if (!['.png', '.jpg', '.jpeg', '.webp'].includes(ext)) {
+    // Not a raster photo we know how to shrink (e.g. the SVG placeholder
+    // used before a real image finishes generating) — serve it untouched.
+    return sendProjectAsset(res, targetDir, projectId, relativePath);
+  }
+
+  const previewDir = join(projectRoot, 'assets', 'previews');
+  const previewPath = join(previewDir, `${safeRelative.replace(/[\\/]/g, '__')}.jpg`);
+  try {
+    const cached = await readFile(previewPath);
+    res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
+    return res.end(cached);
+  } catch {
+    // No cached preview yet — fall through and generate one.
+  }
+
+  const original = await readFile(filePath);
+  const image = await Jimp.read(original);
+  if (image.bitmap.width > BRIEFING_PREVIEW_MAX_WIDTH) {
+    image.resize({ w: BRIEFING_PREVIEW_MAX_WIDTH });
+  }
+  const jpegBuffer = await image.getBuffer('image/jpeg', { quality: BRIEFING_PREVIEW_JPEG_QUALITY });
+  await mkdir(previewDir, { recursive: true });
+  await writeFile(previewPath, jpegBuffer).catch(() => {});
+  res.writeHead(200, { 'content-type': 'image/jpeg', 'cache-control': 'no-store' });
+  res.end(jpegBuffer);
 }
 
 function assetContentType(filePath) {
@@ -581,7 +961,48 @@ async function sendReactApp(res, subPath) {
   }
 }
 
-export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false } = {}) {
+// An operator's "Pedido de alteração" is a fix to one thing, not a request
+// for a new piece — the full brief below (used for a from-scratch
+// composition) explicitly tells the model to change "at least 3 items" on
+// every pass, which is exactly what turns a small correction into an
+// unrelated new image. When there's a real image to edit, skip that whole
+// brief and ask for a narrow edit instead, so everything not named in the
+// note stays as it was.
+// The realism/anti-AI-look technique guidance below normally only reaches
+// the model as part of the full from-scratch brief — a targeted edit skips
+// that brief entirely (see buildAiImageGenerationPrompt), so a correction
+// like "isso ficou com cara de IA" had nothing but the bare note to act on.
+// Repeating it here means an edit note asking for more realism actually has
+// the same concrete technique vocabulary (texture, uneven lighting, no
+// plastic sheen) to work with, not just an abstract complaint.
+const TARGETED_EDIT_REALISM_LINES = [
+  'Ao aplicar o ajuste, evite aparência de IA: nada de plástico, brilho falso, comida perfeita/simétrica demais, textura lisa demais, letras embaralhadas ou texto duplicado.',
+  'Detalhes que denunciam IA e devem ser evitados: ingredientes distribuídos de forma simétrica/perfeita como render 3D, brilho artificial de "verniz", superfície sem nenhuma imperfeição, saturação de cor exagerada tipo anúncio genérico de banco de imagens, luz de "estúdio perfeito" sem ambiente real.',
+  'Prefira: textura real e levemente irregular (grãos, fibras, cortes desiguais como comida de verdade), iluminação um pouco mais quente/natural, leve profundidade de campo como foto tirada em ambiente real.',
+];
+
+function buildTargetedEditPrompt({ content, note }) {
+  const isVertical = content.channel === 'instagram_story' || content.channel === 'instagram_reels' || content.channel === 'facebook_story';
+  return [
+    'Esta é uma EDIÇÃO pontual da imagem anexada (primeira imagem de referência) — não é uma peça nova.',
+    'Preserve exatamente o restante da composição: mesmo layout, mesmo produto/foto, mesmas cores, mesma tipografia, mesmo texto e a mesma posição de cada elemento.',
+    `Ajuste solicitado (mude apenas isso, nada mais): ${note}`,
+    'Não gere uma composição nova nem varie ângulo, fundo, enquadramento ou qualquer outro elemento além do pedido acima.',
+    ...TARGETED_EDIT_REALISM_LINES,
+    isVertical ? 'Mantenha o formato Story vertical 9:16 exatamente como está.' : 'Mantenha o formato de Feed exatamente como está.',
+    // Confirmed live (2026-08-07): the raw image_gen output doesn't always
+    // land on the exact target aspect ratio, and when it doesn't, the
+    // pipeline pads the gap with a blurred/stretched extension of the image
+    // instead of cropping — showing up as visible blur bars on the edges of
+    // real ad creatives. Same fix already proven for segment-template art.
+    'Gere preenchendo o quadro inteiro de ponta a ponta, sem nenhuma barra, faixa ou borda desfocada/esticada adicionada em qualquer lado — o conteúdo precisa ir até a borda da imagem nos quatro lados.',
+    'Não publique nada. Não chame API Meta. Só gere a imagem.',
+    'Retorne no final apenas a URL direta da imagem gerada, sem markdown e sem explicação.',
+  ].filter(Boolean).join('\n');
+}
+
+export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false, targetedEdit = false } = {}) {
+  if (targetedEdit && !rescueMode && note) return buildTargetedEditPrompt({ content, note });
   const referencePaths = Array.isArray(content.image?.references)
     ? content.image.references
       .filter((reference) => String(reference.mimeType || '').startsWith('image/'))
@@ -592,6 +1013,8 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     ? `${content.image.dimensions.width}x${content.image.dimensions.height}`
     : 'formato definido pelo briefing';
   return [
+    contentCentralPersonaLine('clara'),
+    contentCentralPersonaResponsibilityLine('clara'),
     'Use o ChatGPT/OpenAI Images para criar a arte final completa no formato solicitado pelo briefing.',
     `Canal solicitado no Teste seguro: ${content.formatLabel || content.channel}. Não trocar por outro canal.`,
     `Formato obrigatório: composição ${aspectRatio}; tamanho planejado: ${dimensions}.`,
@@ -608,6 +1031,12 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     'Gere um criativo final completo e bonito: layout, produto, título, preço, CTA e logo integrados na própria imagem.',
     'Não haverá overlay automático de texto depois. Tipografia, preço, CTA e logo precisam ficar bonitos, legíveis e naturais dentro da arte.',
     'Use as referências como direção visual/produto/estilo, mas não copie textos, preços, logos ou marcas das referências.',
+    // Confirmed live (2026-08-07): the raw image_gen output doesn't always
+    // land on the exact target aspect ratio, and when it doesn't, the
+    // pipeline pads the gap with a blurred/stretched extension of the image
+    // instead of cropping — showing up as visible blur bars on the edges of
+    // real ad creatives. Same fix already proven for segment-template art.
+    'Gere preenchendo o quadro inteiro de ponta a ponta, sem nenhuma barra, faixa ou borda desfocada/esticada adicionada em qualquer lado — o conteúdo precisa ir até a borda da imagem nos quatro lados.',
     'Não publique nada. Não chame API Meta. Só gere a imagem.',
     'Retorne no final apenas a URL direta da imagem gerada, sem markdown e sem explicação.',
     '',
@@ -634,11 +1063,19 @@ export async function generateAiImageForActiveProvider(payload) {
   if (provider === 'xai' || provider === 'grok') return generateAiImageWithXai(payload);
   if (provider === 'nous' || provider === 'nous-fal' || provider === 'fal') return generateAiImageWithNousFal(payload);
   if (provider === 'codex' || provider === 'openai-codex' || provider === 'chatgpt') return generateAiImageWithCodex(payload);
+  // Opt-in alternate to 'codex' above — same account/login, different
+  // transport (a real `codex exec` agent turn instead of a direct HTTP call
+  // to an internal endpoint). See generateAiImageWithCodexAgent for why.
+  if (provider === 'codex-agent' || provider === 'codex_agent') return generateAiImageWithCodexAgent(payload);
   return generateAiImageWithChatGpt(payload);
 }
 
-async function generateAiImageWithChatGpt({ content, projectId, targetDir, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false }) {
-  const prompt = buildAiImageGenerationPrompt({ content, note, attempt, maxAttempts, reviewFeedback, rescueMode });
+async function generateAiImageWithChatGpt({ content, projectId, targetDir, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false, targetedEdit = false }) {
+  const editBasePath = targetedEdit
+    ? await resolveExistingGeneratedImagePath(content, projectId, targetDir)
+    : null;
+  const isTargetedEdit = Boolean(editBasePath);
+  const prompt = buildAiImageGenerationPrompt({ content, note, attempt, maxAttempts, reviewFeedback, rescueMode, targetedEdit: isTargetedEdit });
   const apiKey = process.env.OPENSQUAD_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
   if (!apiKey) {
     throw new Error('ChatGPT/OpenAI Images não configurado. Defina OPENAI_API_KEY ou OPENSQUAD_OPENAI_API_KEY antes de gerar imagens IA.');
@@ -649,9 +1086,15 @@ async function generateAiImageWithChatGpt({ content, projectId, targetDir, note,
   const imageReferences = Array.isArray(content.image?.references)
     ? content.image.references.filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     : [];
+  // The image being edited must lead the list — /images/edits has no other
+  // way to say "this one is the canvas, the rest are just style/identity
+  // references".
+  const editImages = isTargetedEdit
+    ? [{ absolutePath: editBasePath, mimeType: 'image/png' }, ...imageReferences]
+    : imageReferences;
 
-  const response = imageReferences.length
-    ? await requestOpenAiImageEdit({ apiKey, model, prompt, imageSize, imageReferences })
+  const response = editImages.length
+    ? await requestOpenAiImageEdit({ apiKey, model, prompt, imageSize, imageReferences: editImages })
     : await requestOpenAiImageGeneration({ apiKey, model, prompt, imageSize });
   const image = response?.data?.[0];
   if (!image?.url && !image?.b64_json) throw new Error('ChatGPT/OpenAI Images não retornou uma imagem. Tente novamente.');
@@ -1008,6 +1451,102 @@ export async function identifyLogoColorsWithAi({ buffer, mimeType }) {
   }
 }
 
+// Reads a screenshot of a prospect's real Instagram profile — same
+// vision-call shape as identifyLogoColorsWithAi above, different prompt.
+// Everything returned here is meant to be a literal readout of what's on
+// screen (name, bio, real follower/post counts), never an invention — the
+// prospecting mockup quotes these verbatim in its profile header. Returns
+// null on any failure so the caller falls back to a blank form the operator
+// fills in by hand instead of failing the whole "criar prospecção" request.
+// The first version of this called xAI's HTTP API directly (same shape as
+// identifyLogoColorsWithAi below) — but that needs its own XAI_API_KEY/
+// OPENSQUAD_XAI_API_KEY, which turned out not to be configured on the
+// operator's machine even though every other AI feature here (image
+// generation, the creative reviewer, ad copy) already works, because those
+// all go through the `hermes` CLI's own provider config instead. `hermes
+// chat` genuinely supports a real local image attachment (`--image PATH`,
+// confirmed via `hermes chat --help` — not a URL reference embedded in
+// prompt text), so this uses that same already-working credential path
+// instead of requiring a second, separately-configured one.
+export async function analyzeProspectScreenshotWithHermes({ buffer, mimeType }) {
+  const ext = mimeType === 'image/png' ? '.png' : mimeType === 'image/webp' ? '.webp' : '.jpg';
+  const imageFile = join(tmpdir(), `opensquad-prospect-screenshot-${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
+  await writeFile(imageFile, buffer);
+  const prompt = [
+    'Este é um print de tela de um perfil real do Instagram (visto pelo app no celular) — imagem anexada.',
+    'Leia como uma pessoa rolando o perfil leria — não é OCR mecânico, é pra entender o que o perfil comunica.',
+    'Extraia SÓ o que está literalmente visível nesse print. Não invente nada que não apareça na tela.',
+    'Retorne APENAS JSON válido, sem markdown, neste formato exato:',
+    '{"businessName":"","handle":"","nicheGuess":"","bioText":"","differentiators":["",""],"realFollowers":0,"realPosts":0,"realFollowing":0,"avatarCrop":{"xPct":0,"yPct":0,"sizePct":0}}',
+    '- businessName: o nome do perfil como está escrito (não o @handle).',
+    '- handle: o @handle exatamente como aparece.',
+    '- nicheGuess: 2-4 palavras do ramo/nicho do negócio, inferido do que está visível (bio, categoria, fotos).',
+    '- bioText: o texto da bio, literal.',
+    '- differentiators: até 4 frases curtas, só o que está literalmente na bio/destaques (ex: "Aberto de segunda a sábado", "Melhor preço de Cuiabá") — não resuma nem invente diferencial que não esteja escrito.',
+    '- realFollowers/realPosts/realFollowing: os números reais mostrados na tela, como inteiros simples (sem pontuação de milhar).',
+    '- avatarCrop: a caixa delimitadora aproximada da FOTO DE PERFIL CIRCULAR, em percentual da largura/altura total da imagem do print inteiro (xPct/yPct = canto superior esquerdo da caixa, sizePct = lado da caixa quadrada que contém o círculo). Se não conseguir identificar, retorne null nesse campo.',
+    'Se algum campo não estiver visível/legível no print, retorne null nesse campo em vez de adivinhar.',
+  ].join('\n');
+
+  try {
+    // Same fix as the other callAiText call sites: hermes' openai-codex
+    // plugin hits the same 429 usage-limit wall regardless of whether the
+    // call carries an attached image, so this reads the print through the
+    // real codex-agent path (which does support -i/--image for a real
+    // attachment) instead of hermes' own --image flag.
+    const raw = await callCodexAgentText(prompt, 'OPENSQUAD_PROSPECT_ANALYZE_TIMEOUT_MS', [imageFile]);
+    if (!raw) return null;
+    const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
+    if (!jsonText) return null;
+    return normalizeProspectExtraction(JSON.parse(jsonText));
+  } catch {
+    return null;
+  } finally {
+    await rm(imageFile, { force: true }).catch(() => {});
+  }
+}
+
+// Real counts sometimes come back as locale-formatted strings ("4.388")
+// despite the prompt asking for plain integers — strip everything but
+// digits rather than trust the model's number formatting.
+function cleanProspectCount(value) {
+  if (value === null || value === undefined) return null;
+  const digitsOnly = String(value).replace(/[^\d]/g, '');
+  if (!digitsOnly) return null;
+  const num = Number(digitsOnly);
+  return Number.isFinite(num) ? num : null;
+}
+
+function cleanProspectText(value) {
+  const text = String(value ?? '').trim();
+  return text ? text : null;
+}
+
+export function normalizeProspectExtraction(raw) {
+  const box = raw?.avatarCrop;
+  const pct = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 0 && num <= 100 ? num : null;
+  };
+  const avatarCrop = box && pct(box.xPct) !== null && pct(box.yPct) !== null && pct(box.sizePct) !== null
+    ? { xPct: pct(box.xPct), yPct: pct(box.yPct), sizePct: pct(box.sizePct) }
+    : null;
+  return {
+    businessName: cleanProspectText(raw?.businessName),
+    handle: cleanProspectText(raw?.handle),
+    nicheGuess: cleanProspectText(raw?.nicheGuess),
+    bioText: cleanProspectText(raw?.bioText),
+    differentiators: Array.isArray(raw?.differentiators)
+      ? raw.differentiators.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 4)
+      : [],
+    realFollowers: cleanProspectCount(raw?.realFollowers),
+    realPosts: cleanProspectCount(raw?.realPosts),
+    realFollowing: cleanProspectCount(raw?.realFollowing),
+    avatarCrop,
+  };
+}
+
 // Strips a raw HTML document down to plain readable text good enough to
 // hand an LLM — not a real readability algorithm, just enough to drop
 // script/style noise and tag soup so the prompt isn't dominated by markup.
@@ -1174,14 +1713,14 @@ export async function analyzeSiteWithAi({ url, text }) {
     'Regras obrigatórias:',
     '- Extraia SOMENTE o que está explicitamente no texto acima. Nunca invente nome, preço, endereço, produto ou qualquer dado que não apareça.',
     '- Se não encontrar uma informação, devolva string vazia "" para o campo.',
-    '- Se o texto tiver uma lista de produtos/pratos com preço (cardápio, catálogo), preencha "offers" com cada item encontrado. Caso contrário, devolva "offers": [].',
+    '- Se o texto tiver uma lista de produtos, serviços ou itens de catálogo — com ou sem preço (ex: catálogo de atacado onde o preço só é combinado por WhatsApp) — preencha "offers" com cada item encontrado. Coloque o preço no campo "price" quando ele aparecer no texto; deixe "price": "" quando não aparecer, mas ainda assim inclua o item. Só devolva "offers": [] se o texto realmente não tiver nenhuma lista de produtos/itens.',
     '- Preços devem vir exatamente como aparecem no texto (ex: "R$ 49,90"), sem recalcular ou arredondar.',
     '',
     'Responda APENAS com um JSON válido neste formato exato, sem markdown e sem texto fora do JSON:',
     '{"brandName":"","segment":"","productsOrServices":"","description":"","serviceRegion":"","mainDifferential":"","offers":[{"name":"","price":"","items":""}]}',
   ].join('\n');
 
-  const raw = await callHermesChatText(prompt, 'OPENSQUAD_SITE_ANALYZE_TIMEOUT_MS');
+  const raw = await callAiText(prompt, 'OPENSQUAD_SITE_ANALYZE_TIMEOUT_MS');
   if (!raw) throw new Error('Não foi possível analisar o site agora. Tente de novo em instantes.');
 
   const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
@@ -1308,8 +1847,16 @@ async function generateAiImageWithNousFal({ content, projectId, targetDir, note,
 // That plugin lives outside Hermes' normal package layout (a discovered
 // plugin file, not an importable module path), so it's loaded via
 // importlib.util.spec_from_file_location rather than a plain `import`.
-async function generateAiImageWithCodex({ content, projectId, targetDir, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false }) {
-  const prompt = buildAiImageGenerationPrompt({ content, note, attempt, maxAttempts, reviewFeedback, rescueMode });
+async function generateAiImageWithCodex({ content, projectId, targetDir, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false, targetedEdit = false }) {
+  // Resolve the existing image *before* building the prompt — if it isn't
+  // actually one of our own generated assets (or is missing on disk), fall
+  // back to a normal from-scratch prompt/generation instead of asking the
+  // model to "edit" nothing.
+  const editBasePath = targetedEdit
+    ? await resolveExistingGeneratedImagePath(content, projectId, targetDir)
+    : null;
+  const isTargetedEdit = Boolean(editBasePath);
+  const prompt = buildAiImageGenerationPrompt({ content, note, attempt, maxAttempts, reviewFeedback, rescueMode, targetedEdit: isTargetedEdit });
   const aspectRatio = nousFalAspectRatioForChannel(content?.channel);
   const { hermesHome, pythonBin } = resolveHermesPython();
 
@@ -1341,7 +1888,10 @@ async function generateAiImageWithCodex({ content, projectId, targetDir, note, a
       `with open(${JSON.stringify(promptFile)}, 'r', encoding='utf-8') as f:`,
       '    prompt_text = f.read()',
       `reference_paths = ${JSON.stringify(referencePaths)}`,
-      `result = provider.generate(prompt=prompt_text, aspect_ratio=${JSON.stringify(aspectRatio)}, reference_image_urls=reference_paths)`,
+      // JSON has no way to spell Python's None — a JS null must become the
+      // bare Python literal here, not the JSON text "null".
+      `image_url = ${editBasePath ? JSON.stringify(editBasePath) : 'None'}`,
+      `result = provider.generate(prompt=prompt_text, aspect_ratio=${JSON.stringify(aspectRatio)}, image_url=image_url, reference_image_urls=reference_paths)`,
       'print(json.dumps(result))',
     ].join('\n');
     ({ stdout } = await execFileAsync(pythonBin, ['-c', script], {
@@ -1366,6 +1916,124 @@ async function generateAiImageWithCodex({ content, projectId, targetDir, note, a
     mimeType: 'image/png',
     prompt: content.image.prompt,
     provider: 'openai_codex',
+  };
+}
+
+// Kept entirely separate from generateAiImageWithCodex above rather than
+// replacing it, on purpose — that one calls an unofficial internal ChatGPT
+// backend endpoint directly (single HTTP request pretending to be a Codex
+// agent turn), which turned out to draw from a much smaller, separate usage
+// bucket than a genuine interactive Codex session: a live side-by-side test
+// on the very same account showed the account's own installed `imagegen`
+// skill (a real `codex exec`/agent session using the built-in `image_gen`
+// tool) still worked while the direct-HTTP path was already rate-limited.
+// This shells out to a real `codex exec` agent turn instead, asking it to
+// use that same built-in tool — same prompt content as the other providers
+// (buildAiImageGenerationPrompt), just a different transport to the model.
+// Opt in via OPENSQUAD_IMAGE_PROVIDER=codex-agent; the existing 'codex'
+// value is untouched, so reverting is a one-line env change, not a code
+// change, if this path turns out to be unreliable.
+async function generateAiImageWithCodexAgent({ content, projectId, targetDir, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false, targetedEdit = false }) {
+  // content.templateEditBasePath lets a caller point the edit base at a
+  // file that isn't this project's own prior generation — e.g. a segment
+  // template's approved reference image (see adaptSegmentTemplateForProspect)
+  // — instead of the normal in-project lookup, which is URL-gated to this
+  // exact project and would reject a foreign path.
+  const editBasePath = targetedEdit
+    ? (content.templateEditBasePath || await resolveExistingGeneratedImagePath(content, projectId, targetDir))
+    : null;
+  const isTargetedEdit = Boolean(editBasePath);
+  const prompt = buildAiImageGenerationPrompt({ content, note, attempt, maxAttempts, reviewFeedback, rescueMode, targetedEdit: isTargetedEdit });
+
+  const imageReferences = Array.isArray(content.image?.references)
+    ? content.image.references.filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
+    : [];
+  const referencePaths = [
+    editBasePath,
+    ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1).map((reference) => reference.absolutePath),
+    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2).map((reference) => reference.absolutePath),
+  ].filter(Boolean);
+
+  const outputDir = resolve(targetDir, '_opensquad', 'content-central', 'projects', projectId, 'assets', 'generated');
+  await mkdir(outputDir, { recursive: true });
+
+  // Asking the agent to copy its own output (the original approach) routes
+  // through the same command-execution sandbox as any other shell command —
+  // and on this Windows setup that sandbox is broken outside a real
+  // interactive desktop session: every command_execution attempt failed with
+  // "windows sandbox: orchestrator_helper_launch_canceled: ShellExecuteExW
+  // failed to launch setup helper: 1223" (a UAC/elevation dialog with no UI
+  // to answer it), confirmed via a live manual run. The image_gen tool call
+  // itself is unaffected by that — it's not routed through command
+  // execution — so instead of fighting the sandbox, we skip asking the agent
+  // to move anything at all and read the result straight from where
+  // image_gen already saves it: $CODEX_HOME/generated_images/<thread_id>/.
+  const agentPrompt = [
+    'Gere UMA imagem usando a ferramenta nativa "image_gen" (built-in), seguindo exatamente esta especificação:',
+    '',
+    prompt,
+    '',
+    'Não faça mais nada além disso: não peça confirmação, não explique o resultado, não gere variações extras, não crie ou copie nenhum arquivo, não rode comandos.',
+  ].join('\n');
+
+  let stdout;
+  try {
+    ({ stdout } = await execFileNoStdin('codex', [
+      'exec',
+      agentPrompt,
+      '-C', outputDir,
+      // The agent is instructed above to never run a command, only call
+      // image_gen — so the sandbox that -s would set up protects nothing
+      // here. On this machine that setup is also broken (the installed
+      // Codex build is missing its codex-windows-sandbox-setup.exe
+      // companion), which surfaced as a real Windows "file not found"
+      // dialog every time a sandboxed command was attempted. Bypassing the
+      // sandbox/approval setup entirely skips that broken step instead of
+      // fighting it.
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--skip-git-repo-check',
+      '--json',
+      ...(referencePaths.length ? ['-i', ...referencePaths] : []),
+    ], {
+      timeout: Number(process.env.OPENSQUAD_CODEX_AGENT_TIMEOUT_MS || 300000),
+      maxBuffer: 10 * 1024 * 1024,
+    }));
+  } catch (err) {
+    throw new Error(`Codex (agente) falhou: ${err.message}`, { cause: err });
+  }
+
+  const threadStartedLine = String(stdout || '').split('\n').find((line) => line.includes('"thread.started"'));
+  const threadId = threadStartedLine ? JSON.parse(threadStartedLine)?.thread_id : null;
+  if (!threadId) {
+    throw new Error(`Codex (agente) não retornou o ID da sessão. Últimas linhas da saída: ${String(stdout || '').trim().slice(-500)}`);
+  }
+
+  const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex');
+  const generatedDir = join(codexHome, 'generated_images', threadId);
+  let generatedFiles = [];
+  for (let attemptNumber = 0; attemptNumber < 5; attemptNumber += 1) {
+    generatedFiles = await readdir(generatedDir).catch(() => []);
+    if (generatedFiles.length) break;
+    await new Promise((resolvePromise) => { setTimeout(resolvePromise, 300); });
+  }
+  if (!generatedFiles.length) {
+    throw new Error(`Codex (agente) não gerou nenhuma imagem em ${generatedDir}. Últimas linhas da saída: ${String(stdout || '').trim().slice(-500)}`);
+  }
+
+  const generatedStats = await Promise.all(generatedFiles.map(async (filename) => {
+    const filePath = join(generatedDir, filename);
+    const stats = await stat(filePath);
+    return { filePath, mtimeMs: stats.mtimeMs };
+  }));
+  generatedStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const rawBuffer = await readFile(generatedStats[0].filePath);
+  const croppedBuffer = await cropOpenAiImageToChannel(rawBuffer, content.image?.dimensions);
+  const url = await saveOpenAiGeneratedImage({ buffer: croppedBuffer, projectId, targetDir, filenamePrefix: 'codexagent' });
+  return {
+    url,
+    mimeType: 'image/png',
+    prompt: content.image.prompt,
+    provider: 'codex_agent',
   };
 }
 
@@ -1543,6 +2211,37 @@ function buildCircleBadge({ diameter, color }) {
     }
   }
   return badge;
+}
+
+// Crops the prospect's real circular profile photo out of a full profile
+// screenshot, for use as a rough logo reference on the prospecting mockup —
+// same zero-alpha-outside-the-radius technique as buildCircleBadge above,
+// just applied to a photo crop instead of a solid fill. box is in percent
+// of the full screenshot's width/height (see analyzeProspectScreenshotWithHermes
+// above); returns a PNG data URL, or null if the box doesn't describe a
+// real square region (never guesses a crop that wasn't actually identified).
+export async function cropCircularAvatar(buffer, box) {
+  if (!box) return null;
+  const source = await Jimp.read(buffer);
+  const { width: imgWidth, height: imgHeight } = source.bitmap;
+  const size = Math.round((box.sizePct / 100) * Math.min(imgWidth, imgHeight));
+  const x = Math.round((box.xPct / 100) * imgWidth);
+  const y = Math.round((box.yPct / 100) * imgHeight);
+  if (size < 8 || x < 0 || y < 0 || x + size > imgWidth || y + size > imgHeight) return null;
+
+  const square = source.clone().crop({ x, y, w: size, h: size });
+  const radius = size / 2;
+  for (let cy = 0; cy < size; cy += 1) {
+    const dy = cy - radius + 0.5;
+    for (let cx = 0; cx < size; cx += 1) {
+      const dx = cx - radius + 0.5;
+      if (dx * dx + dy * dy > radius * radius) {
+        square.bitmap.data[(cy * size + cx) * 4 + 3] = 0;
+      }
+    }
+  }
+  const pngBuffer = await square.getBuffer('image/png');
+  return `data:image/png;base64,${pngBuffer.toString('base64')}`;
 }
 
 // A solid-color rectangle with rounded corners — used for the name/price
@@ -2116,12 +2815,14 @@ async function normalizeUploadedImageAsset(assetInput) {
   };
 }
 
-export function buildAiImageReviewPrompt({ content, project, note } = {}) {
+export function buildAiImageReviewPrompt({ content, project, note, attachedAsFile = false } = {}) {
   const expected = content?.contentTopic || {};
   return [
-    'Você é o Agente Revisor de Criativo da Central de Conteúdo Opensquad.',
-    'Analise visualmente a imagem final abaixo antes de qualquer aprovação/publicação.',
-    `Imagem: ${content?.image?.url || ''}`,
+    contentCentralPersonaLine('renata'),
+    contentCentralPersonaResponsibilityLine('renata'),
+    attachedAsFile
+      ? 'Analise visualmente a imagem final anexada a este turno antes de qualquer aprovação/publicação.'
+      : `Analise visualmente a imagem final abaixo antes de qualquer aprovação/publicação.\nImagem: ${content?.image?.url || ''}`,
     '',
     'Dados obrigatórios do card:',
     `Projeto: ${project?.name || ''}`,
@@ -2136,10 +2837,12 @@ export function buildAiImageReviewPrompt({ content, project, note } = {}) {
     '- texto principal, preço, logo ou CTA cortado nas bordas;',
     '- preço diferente do preço autorizado;',
     '- oferta extra não pertencente ao assunto atual, como rodízio em card de combo ou combo em card de rodízio;',
+    '- qualquer item listado em "Itens autorizados" (ex: um combo com 4 produtos) que não apareça visualmente reconhecível na peça — todos os itens listados precisam estar representados, não só parte deles;',
     '- texto embaralhado, ilegível ou com palavra importante faltando;',
     '- formato visual claramente incompatível com o canal solicitado.',
     '- se Story/Reels parecer quadrado ou 1:1, mesmo dentro de prévia vertical;',
     '- se Story/Reels tiver massa visual concentrada apenas no centro, pouco uso da área superior e inferior ou aparência de card 1:1 dentro de 9:16;',
+    '- barras, faixas ou bordas desfocadas/esticadas nas laterais, topo ou base da imagem (sinal de que a arte não preencheu o quadro inteiro);',
     '- preço em box/moldura grande demais, simples demais, desalinhado ou cobrindo o produto principal;',
     '- se o selo de preço cobrir mais destaque que o produto, esconder parte importante do produto ou ficar dominante demais no centro;',
     '- se a oferta disser esfiha e imagem parecer pizza, mini pizza genérica, fatia de pizza ou produto ambíguo;',
@@ -2153,6 +2856,65 @@ export function buildAiImageReviewPrompt({ content, project, note } = {}) {
   ].filter(Boolean).join('\n');
 }
 
+// Derives the generated image's real absolute file path from the content
+// item's own on-disk location — content.filePath is always
+// <targetDir>/_opensquad/content-central/..., so targetDir never has to be
+// threaded separately through the generation/review call chain just for
+// this lookup.
+export function resolveContentImageAbsolutePath(content) {
+  const filePath = String(content?.filePath || '');
+  const marker = '_opensquad';
+  const idx = filePath.lastIndexOf(marker);
+  const projectId = content?.projectId;
+  const imageUrl = String(content?.image?.url || '');
+  if (idx === -1 || !projectId) return null;
+  const targetDir = filePath.slice(0, idx).replace(/[\\/]+$/, '');
+  const urlMarker = `/api/projects/${projectId}/assets/`;
+  if (!imageUrl.startsWith(urlMarker)) return null;
+  const { filePath: absolutePath } = resolveSafeAssetPath(targetDir, projectId, imageUrl.slice(urlMarker.length));
+  return absolutePath;
+}
+
+// Replaces reviewAiImageWithHermes below — that path (a) only ever gave the
+// reviewer a URL mentioned in text, never real pixels (Hermes had nothing to
+// actually look at through the 'openai-codex' provider chat), and (b)
+// crashed with a UnicodeDecodeError inside its own subprocess handling
+// whenever the prompt contained Portuguese accented characters — confirmed
+// live (2026-08-07) on real ad-creative review calls, which meant "revisão
+// automática" silently never ran and every card fell back to "revise
+// manualmente" without anyone reading the actual image. This attaches the
+// real generated file via codex exec's vision support (-i), the same
+// mechanism already proven reliable for prospect-screenshot reading.
+async function reviewAiImageWithCodexAgent({ content, project, note }) {
+  if (!content.image?.url) return null;
+  const imagePath = resolveContentImageAbsolutePath(content);
+  if (!imagePath) return null;
+  const prompt = buildAiImageReviewPrompt({ content, project, note, attachedAsFile: true });
+  const raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath]);
+  if (!raw) {
+    return {
+      status: 'warning',
+      summary: 'Revisor automático indisponível (a IA não retornou resposta).',
+      checks: [],
+      warnings: ['Faça revisão visual manual antes de aprovar.'],
+      errors: [],
+    };
+  }
+  return parseReviewJson(raw);
+}
+
+// Same dispatch pattern/env var as callAiText — OPENSQUAD_TEXT_PROVIDER=hermes
+// reverts the reviewer back to the old hermes-chat path in one line, no code
+// change, if the codex-agent path ever needs to be backed out.
+function reviewImageForActiveTextProvider(payload) {
+  const provider = String(process.env.OPENSQUAD_TEXT_PROVIDER || 'codex-agent').trim().toLowerCase();
+  if (provider === 'hermes') return reviewAiImageWithHermes(payload);
+  return reviewAiImageWithCodexAgent(payload);
+}
+
+// Kept working and in place (not deleted) as the documented rollback for
+// reviewAiImageWithCodexAgent above — same reversibility contract as every
+// other hermes/codex-agent pair in this file.
 async function reviewAiImageWithHermes({ content, project, note }) {
   if (!content.image?.url) return null;
   const prompt = buildAiImageReviewPrompt({ content, project, note });
@@ -2187,7 +2949,11 @@ async function reviewAiImageWithHermes({ content, project, note }) {
 
 // Shared one-shot hermes-chat text call used by the caption pipeline below.
 // Returns trimmed plain text, or null on any failure — callers decide their
-// own fallback (keep a draft, skip a stage, etc.).
+// own fallback (keep a draft, skip a stage, etc.). Kept working and in
+// place (not deleted) as the documented rollback for callCodexAgentText
+// below — same reversibility contract as the image providers: if the
+// agent-based path ever needs to be backed out, callers just switch back to
+// calling this function again, no other code changes required.
 async function callHermesChatText(prompt, timeoutEnvVar) {
   try {
     const { stdout } = await execFileAsync('hermes', [
@@ -2210,6 +2976,52 @@ async function callHermesChatText(prompt, timeoutEnvVar) {
   } catch {
     return null;
   }
+}
+
+// Same fix as generateAiImageWithCodexAgent, for text: callHermesChatText
+// above goes through Hermes' own 'openai-codex' plugin, which calls the same
+// unofficial internal backend-api endpoint that hit the 429 usage-limit wall
+// for images — confirmed live (2026-08-06) that this exact call
+// ("hermes chat ... --provider openai-codex") still 429s even after the
+// image fix, since it's a separate code path hitting the same restricted
+// bucket. This instead shells out to a real `codex exec` agent turn (the
+// mechanism proven NOT subject to that limit) and reads its final message
+// back from -o/--output-last-message instead of stdout, since a plain text
+// answer has no generated_images directory to read from the way an image
+// does.
+async function callCodexAgentText(prompt, timeoutEnvVar, imagePaths = []) {
+  const outputFile = join(tmpdir(), `opensquad-codex-agent-text-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  try {
+    await execFileNoStdin('codex', [
+      'exec',
+      prompt,
+      '-C', tmpdir(),
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--skip-git-repo-check',
+      '-o', outputFile,
+      ...(imagePaths.length ? ['-i', ...imagePaths] : []),
+    ], {
+      timeout: Number(process.env[timeoutEnvVar] || 120000),
+      maxBuffer: 1024 * 1024,
+    });
+    const text = await readFile(outputFile, 'utf-8').catch(() => '');
+    return text.trim() || null;
+  } catch {
+    return null;
+  } finally {
+    await rm(outputFile, { force: true }).catch(() => {});
+  }
+}
+
+// Same dispatch pattern as generateAiImageForActiveProvider — codex-agent is
+// the default now that it's confirmed working where Hermes' openai-codex
+// plugin 429s, but OPENSQUAD_TEXT_PROVIDER=hermes reverts every text call
+// site (site analysis, captions, ad copy) back to callHermesChatText with a
+// one-line env change, no code change.
+async function callAiText(prompt, timeoutEnvVar) {
+  const provider = String(process.env.OPENSQUAD_TEXT_PROVIDER || 'codex-agent').trim().toLowerCase();
+  if (provider === 'hermes') return callHermesChatText(prompt, timeoutEnvVar);
+  return callCodexAgentText(prompt, timeoutEnvVar);
 }
 
 // Real "webResearcher" injected into researchOnlineVisualTrends() — pulls
@@ -2264,36 +3076,171 @@ function buildOnlineVisualResearchPrompt({ segment, productsOrServices }) {
 // reviewAiImageWithHermes, just applied to text instead of image review.
 // Captions previously only ever got a fill-in-the-blank skeleton from
 // buildCaptionDraft; this replaces that with real, ready-to-publish copy.
-async function writeAiCaptionWithHermes({ content, project, note }) {
-  const draft = await callHermesChatText(
+export async function writeAiCaptionWithHermes({ content, project, note }) {
+  const draft = await callAiText(
     buildSofiaSocialCaptionPrompt({ content, project, note }),
     'OPENSQUAD_COPY_TIMEOUT_MS'
   );
   if (!draft) return null;
 
-  const optimized = await callHermesChatText(
+  const optimized = await callAiText(
     buildDanteOptimizerPrompt({ content, project, draft }),
     'OPENSQUAD_COPY_OPTIMIZE_TIMEOUT_MS'
   );
   return optimized || draft;
 }
 
-function buildSofiaSocialCaptionPrompt({ content, project, note }) {
+// "Melhorar bio" for the instant prospecting preview — a single AI pass over
+// the operator's draft, same callAiText dispatch (free codex-agent by
+// default) as every other text generation site. Deliberately not allowed to
+// invent facts (address, phone, promos, numbers) that aren't already in the
+// draft — only rewrites what's there for clarity/persuasion, same discipline
+// InstagramMockup itself follows for counts that were never confirmed.
+function buildBioImprovePrompt({ bio, segment, businessName }) {
+  return [
+    'Melhore esta bio de Instagram para ficar mais atrativa e persuasiva, mantendo o formato curto de bio (poucas linhas, sem parágrafos longos, no máximo ~150 caracteres).',
+    '',
+    `Negócio: ${businessName || 'não informado'}`,
+    `Segmento: ${segment || 'não informado'}`,
+    `Bio atual: ${bio || '(vazia)'}`,
+    '',
+    'IMPORTANTE: não invente fatos que não estejam na bio atual (endereço, telefone, promoção, prêmio, número de clientes, anos de mercado etc.) — só reescreva o que já está lá de forma mais clara e atrativa. Pode usar emoji com moderação se combinar com o tom do negócio.',
+    '',
+    'Responda só com o texto final da bio, sem aspas, sem explicação, sem markdown.',
+  ].join('\n');
+}
+
+export async function improveProspectBioWithAi({ bio, segment, businessName }) {
+  const result = await callAiText(buildBioImprovePrompt({ bio, segment, businessName }), 'OPENSQUAD_BIO_IMPROVE_TIMEOUT_MS');
+  return result ? result.trim() : null;
+}
+
+const AD_COPY_ANGLE_LABELS = { dor: 'Dor', desejo: 'Desejo/Resultado', urgencia: 'Urgência' };
+
+// 125 characters is where Feed/Stories truncates primaryText behind "ver
+// mais" on mobile — not a hard technical cap, just the point where the rest
+// goes unseen unless the reader taps through. Budgeting for ~200 lets a
+// second sentence (a concrete benefit/detail) follow the hook without
+// relying on that tap; the prompt below still requires the hook alone to
+// close inside the first ~100 chars so the truncated preview still works.
+const AD_COPY_LIMITS = { headline: 40, primaryText: 200, description: 30 };
+
+// Each real Meta objective wants a different kind of ask — a Vendas ad can
+// push hard for a purchase, an Engajamento ad should invite a reaction
+// instead of a sale, a Reconhecimento ad shouldn't hard-sell at all. This is
+// the thing that actually changes copy tone when the objective changes.
+const AD_OBJECTIVE_COPY_GUIDANCE = {
+  whatsapp: 'CTA direto pro WhatsApp (ex: "Chame agora no WhatsApp"). Tom comercial, sem enrolação.',
+  awareness: 'Sem venda dura — o objetivo é ser lembrado/reconhecido, não fechar agora. CTA suave (ex: "Conheça a [marca]", "Siga pra ver mais"), foco em identidade/diferencial, não em urgência de compra.',
+  engagement: 'CTA que convida reação, não compra (ex: "Comenta aqui embaixo", "Marca quem também curte isso"). Tom de conversa, não de anúncio de venda.',
+  leads: 'CTA de cadastro (ex: "Cadastre-se", "Garanta sua vaga", "Fale com a gente e receba mais informações"). Foco em baixar a barreira de entrada, não em fechar venda na hora.',
+  sales: 'CTA direto de compra/pedido (ex: "Compre agora", "Peça já", "Garanta o seu"). Pode usar urgência real (sem inventar prazo/estoque).',
+  app_promotion: 'CTA de instalação/uso do app (ex: "Baixe o app", "Instale agora"). Foco no benefício de usar pelo app.',
+};
+
+export function buildAdCopyPrompt({ adCreative, project, note, noteMode }) {
+  const topic = adCreative.contentTopic || {};
+  const subject = topic.offerName || `${project.name} (institucional)`;
+  const objectiveGuidance = AD_OBJECTIVE_COPY_GUIDANCE[adCreative.objective] || AD_OBJECTIVE_COPY_GUIDANCE.whatsapp;
+  const isBaseTotal = noteMode === 'base_total' && note;
+  // Same learnings the organic image prompt already reads (buildImagePrompt
+  // in content-central.js) — copy never saw this signal before, even though
+  // it's the one place a wrong angle costs real media spend, not just a
+  // rejected post.
+  const avoidLearnings = Array.isArray(project.learnings?.avoid) ? project.learnings.avoid : [];
+  const approvedLearnings = Array.isArray(project.learnings?.approved) ? project.learnings.approved : [];
+  const learningLines = [
+    ...avoidLearnings.map((line) => `- Evitar (motivo real já registrado numa rejeição anterior): ${line}`),
+    ...approvedLearnings.map((line) => `- Já aprovado antes, pode reforçar o que funcionou: ${line}`),
+  ];
+  return [
+    contentCentralPersonaLine('diego'),
+    contentCentralPersonaResponsibilityLine('diego'),
+    isBaseTotal
+      ? 'Escreva 3 variações de anúncio para o mesmo criativo, todas baseadas na MESMA ideia central do operador (veja "Ideia do operador" abaixo) — varie a redação e o gancho de abertura, não o conceito. Ainda assim, rotule cada uma com o ângulo que mais combina (dor, desejo ou urgencia).'
+      : 'Escreva 3 variações de anúncio para o mesmo criativo, cada uma partindo de um ângulo diferente: "dor" (o problema/incômodo que o produto resolve), "desejo" (o resultado/benefício que a pessoa quer) e "urgencia" (motivo real para agir agora, sem inventar prazo/estoque que não existe).',
+    'Cada variação precisa soar como um anúncio de verdade, não como três textos genéricos com uma palavra trocada — mude o gancho, não só o adjetivo.',
+    '',
+    'EMPRESA',
+    `- Nome: ${project.name}`,
+    `- Segmento: ${project.brandInput?.segment || project.companyProfile?.segment || 'não informado'}`,
+    audienceTypeToneLine(project),
+    '',
+    'ANÚNCIO',
+    `- Assunto: ${subject}`,
+    topic.price ? `- Preço: ${topic.price}` : '- Preço: não informado — não inventar preço nem desconto.',
+    topic.items ? `- Itens/detalhes: ${topic.items}` : '',
+    `- Objetivo: ${adCreative.objectiveLabel || 'Tráfego para o WhatsApp'}. ${objectiveGuidance}`,
+    note ? `- Ideia do operador (${isBaseTotal ? 'baseie tudo nela' : 'use como inspiração adicional'}): ${note}` : '',
+    '',
+    learningLines.length ? 'APRENDIZADOS DE CONTEÚDOS ANTERIORES DESTE PROJETO' : '',
+    ...learningLines,
+    learningLines.length ? '' : '',
+    'REGRAS',
+    '- Nunca inventar preço, promoção, prazo, quantidade em estoque, depoimento, avaliação ou número que não foi passado acima.',
+    '- Clareza acima de esperteza: frase direta em vez de trocadilho. Linguagem específica do negócio, não genérica.',
+    `- "headline" (título, aparece abaixo da imagem): no máximo ${AD_COPY_LIMITS.headline} caracteres.`,
+    `- "primaryText" (texto principal, aparece acima da imagem): no máximo ${AD_COPY_LIMITS.primaryText} caracteres, em até 2 frases. A 1ª frase sozinha precisa fechar o gancho completo em até uns 100 caracteres (é o que aparece no feed/story antes do "ver mais" no celular); a 2ª frase é opcional e reforça um detalhe concreto (prazo, quantidade, diferencial) antes do CTA.`,
+    `- "description" (linha curta de apoio abaixo do título, pode não aparecer em todo lugar): no máximo ${AD_COPY_LIMITS.description} caracteres.`,
+    '- "cta" é uma chamada curta coerente com o objetivo acima, nunca um link ou telefone inventado.',
+    '',
+    'Responda APENAS com um JSON válido, sem markdown e sem texto fora do JSON, neste formato exato:',
+    '[{"angle":"dor","headline":"","primaryText":"","description":"","cta":""},{"angle":"desejo","headline":"","primaryText":"","description":"","cta":""},{"angle":"urgencia","headline":"","primaryText":"","description":"","cta":""}]',
+  ].filter(Boolean).join('\n');
+}
+
+async function writeAdCopyVariationsWithHermes({ adCreative, project, note, noteMode }) {
+  const raw = await callAiText(buildAdCopyPrompt({ adCreative, project, note, noteMode }), 'OPENSQUAD_COPY_TIMEOUT_MS');
+  if (!raw) return null;
+  const jsonText = raw.match(/\[[\s\S]*\]/)?.[0];
+  if (!jsonText) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const cleanText = (value, limit) => {
+    const text = String(value || '').trim();
+    return limit ? text.slice(0, limit + 20) : text;
+  };
+  return parsed
+    .map((entry) => ({
+      angle: AD_COPY_ANGLE_LABELS[entry?.angle] ? entry.angle : 'dor',
+      angleLabel: AD_COPY_ANGLE_LABELS[entry?.angle] || AD_COPY_ANGLE_LABELS.dor,
+      headline: cleanText(entry?.headline, AD_COPY_LIMITS.headline),
+      primaryText: cleanText(entry?.primaryText, AD_COPY_LIMITS.primaryText),
+      description: cleanText(entry?.description, AD_COPY_LIMITS.description),
+      cta: cleanText(entry?.cta),
+    }))
+    .filter((entry) => entry.headline && entry.primaryText);
+}
+
+function audienceTypeToneLine(project) {
+  const audienceType = project.brandInput?.audienceType || project.companyProfile?.audienceType;
+  if (audienceType === 'b2b') {
+    return '- Foco comercial: B2B — quem lê é dono/gerente/comprador de outro negócio (revenda, atacado, operação). Tom consultivo e direto, sem hype de consumidor final, sem urgência artificial nem linguagem de e-commerce; fale de reposição, disponibilidade, praticidade para a operação dele.';
+  }
+  if (audienceType === 'b2c') {
+    return '- Foco comercial: B2C — quem lê é o consumidor final. Pode usar desejo, benefício pessoal e um tom mais caloroso, sem precisar soar corporativo.';
+  }
+  return '';
+}
+
+export function buildSofiaSocialCaptionPrompt({ content, project, note }) {
   const topic = content.contentTopic || {};
   const subject = topic.offerName || topic.objective || topic.label || 'este post';
   return [
-    // Persona adapted from squads/conteudo-multicanal/agents/social-copywriter.custom.md
-    // ("Sofia Social — Copywriter Social"): same identity/responsibilities,
-    // without the squad's file-output conventions (output/social-posts.md
-    // etc.) which don't apply to Content Central's own data model.
-    'Você é Sofia Social, copywriter especialista em posts, legendas e conteúdo social para redes como Instagram.',
-    'Você escreve com clareza, utilidade e cria CTAs adequados ao objetivo de cada post, adaptando a linguagem ao canal.',
+    contentCentralPersonaLine('sofia'),
+    contentCentralPersonaResponsibilityLine('sofia'),
     'Escreva a legenda FINAL deste post — não é rascunho, é o texto que vai direto pro Instagram.',
     '',
     'EMPRESA',
     `- Nome: ${project.name}`,
     `- Segmento: ${project.brandInput?.segment || project.companyProfile?.segment || 'não informado'}`,
     `- Direção de tom aprovada: ${topic.objective || 'tom comercial, próximo e confiável, coerente com o segmento.'}`,
+    audienceTypeToneLine(project),
     '',
     'POST',
     `- Canal: ${content.formatLabel || content.channel}`,
@@ -2315,15 +3262,11 @@ function buildSofiaSocialCaptionPrompt({ content, project, note }) {
   ].filter(Boolean).join('\n');
 }
 
-function buildDanteOptimizerPrompt({ content, project, draft }) {
+export function buildDanteOptimizerPrompt({ content, project, draft }) {
   const topic = content.contentTopic || {};
   return [
-    // Persona adapted from squads/conteudo-multicanal/agents/direct-response-content-optimizer.custom.md
-    // ("Dante Conteúdo — Otimizador Direct Response"): same identity, 10-point
-    // method and safety rules, without the squad's project-specific mentions
-    // (a fixed price/guarantee from a different client) and file-output
-    // conventions, neither of which apply here.
-    'Você é Dante Conteúdo, especialista em transformar conteúdo social em conteúdo com intenção comercial clara, sem perder naturalidade e sem deixar "vendedor demais".',
+    contentCentralPersonaLine('dante'),
+    contentCentralPersonaResponsibilityLine('dante'),
     'Sua tarefa: auditar a legenda abaixo e devolver a versão otimizada, garantindo que ela tenha gancho forte, promessa clara, uma dor ou desejo real, conexão com a oferta e um CTA simples.',
     '',
     'MÉTODO DE ANÁLISE (aplicar mentalmente, não escrever a análise)',
@@ -2350,6 +3293,7 @@ function buildDanteOptimizerPrompt({ content, project, draft }) {
     '- Não usar escassez falsa.',
     '- Se faltar prova para uma afirmação, remova a afirmação em vez de inventar prova.',
     '- Preservar tom humano e útil — persuasão sem parecer golpe.',
+    audienceTypeToneLine(project),
     '',
     'Responda APENAS com o texto final da legenda otimizada — sem aspas, sem markdown, sem explicação, sem mostrar a análise ou o score.',
   ].filter(Boolean).join('\n');
@@ -2370,6 +3314,22 @@ function resolveGeneratedImageAbsolutePath(content, projectId, targetDir) {
   const relativePath = url.slice(marker.length);
   const projectRoot = resolve(targetDir, '_opensquad', 'content-central', 'projects', projectId);
   return resolve(join(projectRoot, relativePath));
+}
+
+// Same resolution as above, plus an existence check — used to hand the
+// existing image to the AI provider as an edit base for a targeted
+// correction. Returns null (never throws) for anything that isn't a real
+// file on disk, so a stale/foreign/missing URL just falls back to a normal
+// fresh generation instead of failing the whole regenerate.
+async function resolveExistingGeneratedImagePath(content, projectId, targetDir) {
+  const filePath = resolveGeneratedImageAbsolutePath(content, projectId, targetDir);
+  if (!filePath) return null;
+  try {
+    await access(filePath);
+    return filePath;
+  } catch {
+    return null;
+  }
 }
 
 // Real "videoAnimator" injected into animateContentForReels() — "Animar
@@ -2722,6 +3682,76 @@ function briefingImageSource(item) {
   return item.image?.previewDataUrl || item.image?.previewUrl || item.image?.url || '';
 }
 
+// Rewrites one of our own served asset URLs to the resized-preview route
+// (see sendProjectAssetPreview) so the presentation page — and the PDF it
+// prints to — stays a reasonable size instead of embedding the full 2-4MB
+// generated PNGs. Anything that isn't one of our own asset URLs (a data:
+// placeholder, or an external URL in tests) passes through untouched.
+function briefingPreviewImageSource(item, projectId) {
+  const src = briefingImageSource(item);
+  const marker = `/api/projects/${projectId}/assets/`;
+  return src && src.startsWith(marker) ? `/api/projects/${projectId}/assets-preview/${src.slice(marker.length)}` : src;
+}
+
+const IG_ICON_HEART = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.8 6.6a5.5 5.5 0 0 0-7.8 0L12 7.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21.2l7.8-7.8 1-1a5.5 5.5 0 0 0 0-5.8z"/></svg>';
+const IG_ICON_COMMENT = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-8.9 8.4 8.7 8.7 0 0 1-3.8-.9L3 21l1.9-5.3a8.4 8.4 0 0 1-.9-3.7A8.4 8.4 0 0 1 12.6 3a8.4 8.4 0 0 1 8.4 8.5z"/></svg>';
+const IG_ICON_SHARE = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+const IG_ICON_BOOKMARK = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>';
+
+function briefingUsername(project) {
+  return String(project?.instagram?.handle || project?.name || 'sua_marca').replace(/^@/, '');
+}
+
+function briefingAvatarInitial(project) {
+  return (String(project?.name || '?').trim()[0] || '?').toUpperCase();
+}
+
+// A phone-screenshot mockup — real Instagram chrome (top bar, avatar,
+// action icons), not just a bare rounded-corner image frame — so the client
+// sees the post the same way it'll actually look once it's live, the same
+// treatment reference agency decks use. Feed and Story get different real
+// Instagram chrome (a Feed post has a top app bar + icon row below the
+// image; a Story has its progress bar/handle/close overlaid on the image
+// itself), so this branches on `variant` instead of using one generic frame.
+function renderIgMockup(item, project, variant) {
+  const src = briefingPreviewImageSource(item, project.projectId);
+  const image = src
+    ? `<img src="${escapeHtml(src)}" alt="Prévia do card">`
+    : '<div class="ig-empty">Sem imagem de prévia</div>';
+  const username = escapeHtml(briefingUsername(project));
+  const initial = escapeHtml(briefingAvatarInitial(project));
+
+  if (variant === 'story') {
+    return `<div class="ig-mock ig-mock-story">
+      <div class="ig-story-progress"><span></span></div>
+      <div class="ig-story-header">
+        <span class="ig-avatar ig-avatar-sm">${initial}</span>
+        <span class="ig-story-user">${username}</span>
+        <span class="ig-story-time">agora</span>
+        <span class="ig-story-close">&#10005;</span>
+      </div>
+      <div class="ig-image ig-image-story">${image}</div>
+    </div>`;
+  }
+
+  return `<div class="ig-mock ig-mock-feed">
+    <div class="ig-topbar">
+      <span class="ig-wordmark">Instagram</span>
+      <span class="ig-topicons">${IG_ICON_HEART}${IG_ICON_SHARE}</span>
+    </div>
+    <div class="ig-postheader">
+      <span class="ig-avatar">${initial}</span>
+      <span class="ig-username">${username}</span>
+    </div>
+    <div class="ig-image ig-image-feed">${image}</div>
+    <div class="ig-actionbar">
+      ${IG_ICON_HEART}${IG_ICON_COMMENT}${IG_ICON_SHARE}
+      <span class="ig-spacer"></span>
+      ${IG_ICON_BOOKMARK}
+    </div>
+  </div>`;
+}
+
 // Standalone read-only page (not part of the main SPA tabs) listing every
 // card not yet approved for a project, with a one-click approve per card —
 // the link an operator can open with/for the client during a review call
@@ -2750,30 +3780,45 @@ function groupBriefingItems(items) {
   return groups;
 }
 
-function renderBriefingGroupCard(group) {
+const BRIEFING_MONTH_NAMES = [
+  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+];
+
+// Client-facing date, matched to how an agency would write it on a proposal
+// slide ("20 de julho de 2026") rather than the raw ISO date an operator
+// works with internally.
+function formatBriefingDate(dateStr) {
+  const parsed = new Date(`${dateStr}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return dateStr;
+  return `${parsed.getDate()} de ${BRIEFING_MONTH_NAMES[parsed.getMonth()]} de ${parsed.getFullYear()}`;
+}
+
+// This page is a presentation artifact only — it shows the client what's
+// coming, it does not let them (or anyone browsing the link) change real
+// system state. The actual approve decision always happens inside the
+// operator's own panel (PendingApproval), never from a page that could be
+// forwarded outside the team.
+function renderBriefingGroupCard(group, project, variant) {
   const leader = group.leader;
-  const src = briefingImageSource(leader);
-  const preview = src
-    ? `<div class="briefing-preview channel-${escapeHtml(leader.channel || 'instagram_feed')}"><img src="${escapeHtml(src)}" alt="Prévia do card"></div>`
-    : '<div class="briefing-preview empty">Sem imagem de prévia</div>';
   const channelTags = group.members.map((member) => `<span class="pill">${escapeHtml(member.formatLabel || member.channel)}</span>`).join('');
-  const approveLabel = group.members.length > 1 ? `Aprovar estes ${group.members.length} formatos` : 'Aprovar este card';
-  const approvalPayload = group.members.map((member) => ({ contentId: member.contentId, batchId: member.batchId }));
   return `<div class="briefing-card">
-      ${preview}
+      <div class="ig-mock-wrap">${renderIgMockup(leader, project, variant)}</div>
       <div class="briefing-body">
-        <div class="briefing-meta"><span class="pill">Dia ${escapeHtml(leader.dayNumber)} · ${escapeHtml(leader.scheduledDate)} ${escapeHtml(leader.scheduledTime || '')}</span>${channelTags}</div>
+        <div class="briefing-status">Aguardando aprovação</div>
+        <div class="briefing-date">Dia ${escapeHtml(leader.dayNumber)} · ${escapeHtml(formatBriefingDate(leader.scheduledDate))}${leader.scheduledTime ? ` · ${escapeHtml(leader.scheduledTime)}` : ''}</div>
+        <div class="briefing-meta">${channelTags}</div>
+        <h3 class="briefing-caption-label">Descrição da publicação</h3>
         <div class="briefing-caption">${escapeHtml(leader.caption?.text || 'Sem legenda')}</div>
-        <button class="briefing-approve" data-items='${escapeHtml(JSON.stringify(approvalPayload))}' onclick="approveBriefingCard(this)">${escapeHtml(approveLabel)}</button>
       </div>
     </div>`;
 }
 
-function renderBriefingSection(title, groups) {
+function renderBriefingSection(title, groups, project, variant) {
   if (!groups.length) return '';
   return `<section class="briefing-section">
     <h2 class="briefing-section-title">${escapeHtml(title)}</h2>
-    <div class="briefing-section-list">${groups.map(renderBriefingGroupCard).join('')}</div>
+    <div class="briefing-section-list">${groups.map((group) => renderBriefingGroupCard(group, project, variant)).join('')}</div>
   </section>`;
 }
 
@@ -2781,14 +3826,14 @@ function renderBriefingPage(project, items) {
   const groups = groupBriefingItems(items);
   const storyGroups = groups.filter((group) => creativeShapeGroupForChannel(group.leader.channel) !== 'feed');
   const feedGroups = groups.filter((group) => creativeShapeGroupForChannel(group.leader.channel) === 'feed');
-  const sections = `${renderBriefingSection('Stories, Reels e Facebook Story', storyGroups)}${renderBriefingSection('Feed e Facebook Feed', feedGroups)}`;
+  const sections = `${renderBriefingSection('Stories, Reels e Facebook Story', storyGroups, project, 'story')}${renderBriefingSection('Feed e Facebook Feed', feedGroups, project, 'feed')}`;
 
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Briefing de aprovação — ${escapeHtml(project.name)}</title>
+<title>${escapeHtml(project.name)} — próximos posts</title>
 <style>
 :root{color-scheme:dark;--bg:#050508;--accent:#8b6bff;--accent-2:#ff5fb8;--accent-gradient:linear-gradient(135deg,var(--accent) 0%,#c15fff 48%,var(--accent-2) 100%);--line:rgba(255,255,255,.09);--soft:#d6d4e0;--muted:#94939f;--text:#f8f7fb}
 *{box-sizing:border-box}
@@ -2798,18 +3843,46 @@ header h1{margin:0 0 8px;font-size:clamp(24px,3vw,32px);letter-spacing:-.03em}
 header p{margin:0;color:var(--muted)}
 .wrap{max-width:920px;margin:0 auto;display:grid;gap:28px}
 .briefing-section-title{margin:0 0 14px;font-size:18px;letter-spacing:-.02em;color:var(--soft)}
-.briefing-section-list{display:grid;gap:20px}
-.briefing-card{display:grid;grid-template-columns:minmax(180px,260px) minmax(0,1fr);gap:18px;border:1px solid var(--line);border-radius:22px;background:rgba(255,255,255,.03);padding:16px;transition:opacity .3s ease}
-.briefing-preview{border-radius:16px;overflow:hidden;background:#000;display:grid;place-items:center;min-height:200px;color:var(--muted)}
-.briefing-preview img{width:100%;height:100%;object-fit:cover;display:block}
-.briefing-preview.channel-instagram_story,.briefing-preview.channel-instagram_reels,.briefing-preview.channel-facebook_story{aspect-ratio:9/16}
-.briefing-preview.channel-instagram_feed,.briefing-preview.channel-facebook_feed{aspect-ratio:4/5}
-.briefing-preview.empty{padding:16px;text-align:center}
-.briefing-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.briefing-section-list{display:grid;gap:8px}
+.briefing-card+.briefing-card{border-top:1px solid var(--line)}
+.briefing-card{display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:18px;background:transparent;padding:10px 0;transition:opacity .3s ease}
+.ig-mock-wrap{display:flex;align-items:flex-start;justify-content:center;padding:14px}
+.ig-mock{width:100%;max-width:220px;border-radius:20px;overflow:hidden;background:#fff;color:#111;box-shadow:0 20px 44px rgba(0,0,0,.45)}
+.ig-image{background:#000;display:grid;place-items:center;color:#888;font-size:12px;overflow:hidden}
+.ig-image img{width:100%;height:100%;object-fit:cover;display:block}
+.ig-image-feed{aspect-ratio:4/5}
+.ig-image-story{aspect-ratio:9/16}
+.ig-empty{padding:16px;text-align:center}
+.ig-topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
+.ig-wordmark{font-family:'Segoe Script','Brush Script MT',cursive;font-style:italic;font-size:22px;font-weight:700}
+.ig-topicons{display:flex;gap:14px;color:#111}
+.ig-topicons svg,.ig-actionbar svg{display:block}
+.ig-postheader{display:flex;align-items:center;gap:8px;padding:0 12px 10px}
+.ig-avatar{width:28px;height:28px;border-radius:999px;background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af);color:#fff;display:grid;place-items:center;font-size:13px;font-weight:800;flex:0 0 auto}
+.ig-username{font-size:13px;font-weight:700}
+.ig-actionbar{display:flex;align-items:center;gap:14px;padding:10px 12px;color:#111}
+.ig-spacer{flex:1}
+.ig-mock-story{position:relative}
+/* Real Instagram Stories keep this header to a thin single row (progress
+   bar + a small avatar/username/time line) right at the very top edge —
+   the earlier version here was tall enough, with a wide dark gradient
+   band, that it fought with the creative's own title text underneath
+   (which the image prompt already places near the top of the canvas).
+   Kept small and the gradient limited to just behind the row itself. */
+.ig-mock-story::before{content:'';position:absolute;top:0;left:0;right:0;height:34px;background:linear-gradient(to bottom,rgba(0,0,0,.4),transparent);z-index:1;pointer-events:none}
+.ig-story-progress{position:absolute;top:5px;left:8px;right:8px;height:2px;border-radius:999px;background:rgba(255,255,255,.35);z-index:2}
+.ig-story-progress span{display:block;width:60%;height:100%;border-radius:999px;background:#fff}
+.ig-story-header{position:absolute;top:11px;left:8px;right:8px;display:flex;align-items:center;gap:5px;z-index:2;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7)}
+.ig-avatar-sm{width:16px;height:16px;font-size:8px}
+.ig-story-user{font-size:10px;font-weight:700}
+.ig-story-time{font-size:9px;opacity:.85}
+.ig-story-close{margin-left:auto;font-size:12px;opacity:.9}
+.briefing-status{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:4px 12px;font-size:12px;font-weight:700;color:var(--soft);background:rgba(255,255,255,.04);margin-bottom:10px}
+.briefing-date{font-size:16px;font-weight:750;letter-spacing:-.01em;margin-bottom:10px}
+.briefing-meta{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .pill{border:1px solid var(--line);border-radius:999px;padding:4px 10px;font-size:12px;font-weight:700;color:var(--soft)}
-.briefing-caption{white-space:pre-wrap;background:rgba(0,0,0,.24);border:1px solid var(--line);border-radius:14px;padding:12px;margin-bottom:14px;color:var(--soft)}
-.briefing-approve{min-height:42px;border:none;border-radius:12px;background:var(--accent-gradient);color:#fff;font-weight:750;padding:0 16px;cursor:pointer}
-.briefing-approve:disabled{opacity:.55;cursor:default}
+.briefing-caption-label{margin:0 0 8px;font-size:14px;font-weight:750;color:var(--soft)}
+.briefing-caption{white-space:pre-wrap;background:rgba(0,0,0,.24);border:1px solid var(--line);border-radius:14px;padding:12px;color:var(--soft)}
 .empty-state{max-width:920px;margin:60px auto;text-align:center;color:var(--muted)}
 .download-pdf{min-height:42px;border:1px solid var(--line);border-radius:12px;background:transparent;color:var(--text);font-weight:700;padding:0 16px;cursor:pointer;margin-top:12px}
 .download-pdf:hover{border-color:var(--accent)}
@@ -2817,10 +3890,14 @@ header p{margin:0;color:var(--muted)}
 @media print{
   body{background:#fff;color:#111;padding:0}
   body::before,body::after{display:none}
-  .briefing-approve,.download-pdf{display:none}
-  .briefing-card{border-color:#ddd;background:#fff;break-inside:avoid;page-break-inside:avoid}
-  .briefing-preview{background:#f4f4f4}
+  .download-pdf{display:none}
+  .briefing-card{break-inside:avoid;page-break-inside:avoid}
+  .briefing-card+.briefing-card{border-top-color:#e5e5e5}
+  .ig-mock{box-shadow:none;border:1px solid #eee}
+  .ig-image{background:#f4f4f4}
+  .briefing-status{border-color:#ccc;color:#333;background:#f4f4f4}
   .pill{border-color:#ccc;color:#333}
+  .briefing-caption-label{color:#111}
   .briefing-caption{background:#f7f7f7;border-color:#eee;color:#111}
   .briefing-section-title{color:#111}
   header p{color:#555}
@@ -2829,31 +3906,144 @@ header p{margin:0;color:var(--muted)}
 </head>
 <body>
 <header>
-  <h1>Briefing de aprovação — ${escapeHtml(project.name)}</h1>
-  <p>${escapeHtml(project.instagram?.handle || '')} · revise cada card abaixo e aprove o que estiver pronto para publicar.</p>
+  <h1>${escapeHtml(project.name)} — próximos posts</h1>
+  <p>${escapeHtml(project.instagram?.handle || '')} · prévia para alinhar com o cliente antes de publicar. A aprovação em si acontece no painel interno.</p>
   <button class="download-pdf" onclick="window.print()">Baixar em PDF</button>
 </header>
 <div class="wrap">
 ${items.length ? sections : '<div class="empty-state"><b>Nenhum card aguardando aprovação agora.</b><br>Prepare a aprovação de um card na Central de Conteúdo para ele aparecer aqui.</div>'}
 </div>
-<script>
-async function approveBriefingCard(btn){
-  var items = JSON.parse(btn.dataset.items);
-  btn.disabled = true;
-  btn.textContent = 'Aprovando...';
-  try {
-    for (var i = 0; i < items.length; i++) {
-      var res = await fetch('/api/projects/${escapeHtml(project.projectId)}/content/' + items[i].contentId + '/approve', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ batchId: items[i].batchId }) });
-      if (!res.ok) throw new Error('Falha ao aprovar');
-    }
-    btn.closest('.briefing-card').style.opacity = '0.4';
-    btn.textContent = 'Aprovado ✓';
-  } catch (e) {
-    btn.disabled = false;
-    btn.textContent = 'Erro — tentar de novo';
-  }
+</body>
+</html>`;
 }
-</script>
+
+// A number the prospect's real profile actually showed — displayed exactly
+// as Instagram itself would ("4.388"), never a fabricated stat. `null`
+// (nothing extracted/typed) renders as "—", never as 0 — 0 would claim the
+// account genuinely has zero followers instead of "we don't know".
+function formatProspectCount(value) {
+  return Number.isFinite(value) ? value.toLocaleString('pt-BR') : '—';
+}
+
+function prospectGridImage(item, projectId) {
+  const src = briefingPreviewImageSource(item, projectId);
+  return src
+    ? `<div class="ig-grid-cell"><img src="${escapeHtml(src)}" alt="Post gerado"></div>`
+    : '<div class="ig-grid-cell ig-grid-cell-empty">Gerando…</div>';
+}
+
+function prospectHighlightBubble(item, projectId, index) {
+  const src = briefingPreviewImageSource(item, projectId);
+  // A segment-template highlight piece carries a real short label (e.g.
+  // "Produtos") on its contentTopic — use it when present instead of the
+  // generic "Destaque N" every from-scratch story item still falls back to.
+  const label = String(item.contentTopic?.label || '').trim() || (index === 0 ? 'Destaque' : `Destaque ${index + 1}`);
+  return `<div class="ig-highlight">
+    <div class="ig-highlight-ring">${src ? `<img src="${escapeHtml(src)}" alt="${escapeHtml(label)}">` : ''}</div>
+    <span>${escapeHtml(label)}</span>
+  </div>`;
+}
+
+// The actual sales artifact for the "Instagram Sempre Ativo" prospecting
+// pitch: not a list of separate post cards (that's renderBriefingPage,
+// built for a real client reviewing real scheduled posts) but a single
+// screen that reads like the prospect's OWN profile, reformulated — a
+// header quoting their real name/bio/follower counts (project.prospectSource,
+// never the AI's own invention) topped with freshly generated content in
+// the exact shape Instagram itself displays it (highlight circles, 3-col
+// grid). Reuses the same .ig-* chrome primitives as renderIgMockup/
+// renderBriefingPage above instead of inventing a second visual language.
+export function renderProspectMockupPage(project, feedItems, storyItems) {
+  const source = project.prospectSource || {};
+  const username = escapeHtml(briefingUsername(project));
+  const initial = escapeHtml(briefingAvatarInitial(project));
+  // project.brand.logoPath is eagerly defaulted to 'assets/logo.png' at
+  // project creation regardless of whether a file was ever saved there —
+  // rendering an <img> against it unconditionally shows a broken-image icon
+  // for every prospect whose avatar crop failed/was skipped. brandIdentity's
+  // logoPath starts genuinely empty and is only ever set inside
+  // saveProjectAsset on a real upload, so it's the reliable "a real file
+  // exists" signal.
+  const logoPath = project.brandIdentity?.logoPath;
+  const avatarSrc = logoPath ? `/api/projects/${project.projectId}/assets/${logoPath}` : '';
+  const avatar = avatarSrc
+    ? `<img src="${escapeHtml(avatarSrc)}" alt="Foto de perfil">`
+    : `<span class="ig-profile-avatar-fallback">${initial}</span>`;
+
+  const highlights = storyItems.length
+    ? `<div class="ig-highlights">${storyItems.map((item, index) => prospectHighlightBubble(item, project.projectId, index)).join('')}</div>`
+    : '';
+  const grid = feedItems.length
+    ? `<div class="ig-grid">${feedItems.map((item) => prospectGridImage(item, project.projectId)).join('')}</div>`
+    : '<div class="empty-state"><b>Ainda gerando os posts de demonstração…</b><br>Atualize a página em alguns instantes.</div>';
+
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${escapeHtml(project.name)} — como o Instagram poderia ficar</title>
+<style>
+:root{color-scheme:dark;--bg:#050508;--accent:#8b6bff;--accent-2:#ff5fb8;--line:rgba(255,255,255,.09);--soft:#d6d4e0;--muted:#94939f;--text:#f8f7fb}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;line-height:1.55;padding:28px 20px 60px}
+header{max-width:420px;margin:0 auto 18px;text-align:center}
+header h1{margin:0 0 8px;font-size:clamp(20px,3vw,26px);letter-spacing:-.03em}
+header p{margin:0;color:var(--muted);font-size:14px}
+.download-pdf{min-height:42px;border:1px solid var(--line);border-radius:12px;background:transparent;color:var(--text);font-weight:700;padding:0 16px;cursor:pointer;margin-top:14px}
+.download-pdf:hover{border-color:var(--accent)}
+.ig-profile-mock{max-width:420px;margin:0 auto;background:#fff;color:#111;border-radius:26px;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+.ig-profile-topbar{padding:12px 16px;font-weight:700;font-size:15px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px}
+.ig-profile-header{display:flex;align-items:center;gap:22px;padding:18px 16px 6px}
+.ig-profile-avatar{width:78px;height:78px;border-radius:999px;flex:0 0 auto;overflow:hidden;background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af);display:grid;place-items:center}
+.ig-profile-avatar img{width:100%;height:100%;object-fit:cover;display:block}
+.ig-profile-avatar-fallback{color:#fff;font-size:26px;font-weight:800}
+.ig-profile-stats{display:flex;gap:22px;flex:1}
+.ig-profile-stats div{text-align:center}
+.ig-profile-stats b{display:block;font-size:17px;font-weight:800}
+.ig-profile-stats span{display:block;font-size:12px;color:#666}
+.ig-profile-name{padding:10px 16px 2px;font-weight:800;font-size:14px}
+.ig-profile-bio{padding:0 16px 14px;font-size:13px;color:#222;white-space:pre-wrap}
+.ig-highlights{display:flex;gap:14px;padding:4px 16px 16px;overflow-x:auto}
+.ig-highlight{display:flex;flex-direction:column;align-items:center;gap:5px;flex:0 0 auto;width:64px}
+.ig-highlight-ring{width:58px;height:58px;border-radius:999px;padding:2px;background:linear-gradient(135deg,#f58529,#dd2a7b,#8134af);overflow:hidden}
+.ig-highlight-ring img{width:100%;height:100%;object-fit:cover;border-radius:999px;display:block;border:2px solid #fff}
+.ig-highlight span{font-size:10px;color:#444;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:64px}
+.ig-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;border-top:1px solid #f0f0f0}
+.ig-grid-cell{aspect-ratio:1/1;background:#000;overflow:hidden}
+.ig-grid-cell img{width:100%;height:100%;object-fit:cover;display:block}
+.ig-grid-cell-empty{display:grid;place-items:center;color:#999;font-size:11px;background:#f4f4f4}
+.empty-state{padding:24px 16px;text-align:center;color:#666;font-size:13px}
+@media(max-width:460px){.ig-profile-mock{border-radius:0}body{padding:16px 0 40px}}
+@media print{
+  body{background:#fff;color:#111;padding:0}
+  .download-pdf{display:none}
+  .ig-profile-mock{box-shadow:none;border:1px solid #eee}
+  header p{color:#555}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>${escapeHtml(project.name)} — como o Instagram poderia ficar</h1>
+  <p>Mockup de demonstração, a partir do perfil real de @${username || 'prospect'}.</p>
+  <button class="download-pdf" onclick="window.print()">Baixar em PDF</button>
+</header>
+<div class="ig-profile-mock">
+  <div class="ig-profile-topbar">${username}</div>
+  <div class="ig-profile-header">
+    <div class="ig-profile-avatar">${avatar}</div>
+    <div class="ig-profile-stats">
+      <div><b>${formatProspectCount(source.realPosts)}</b><span>publicações</span></div>
+      <div><b>${formatProspectCount(source.realFollowers)}</b><span>seguidores</span></div>
+      <div><b>${formatProspectCount(source.realFollowing)}</b><span>seguindo</span></div>
+    </div>
+  </div>
+  <div class="ig-profile-name">${escapeHtml(project.name)}</div>
+  ${source.bio ? `<div class="ig-profile-bio">${escapeHtml(source.bio)}</div>` : ''}
+  ${highlights}
+  ${grid}
+</div>
 </body>
 </html>`;
 }

@@ -1,0 +1,94 @@
+.pipeline {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+
+.title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(96px, 1fr));
+  gap: 8px;
+}
+
+.step {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.025);
+  padding: 8px;
+  min-width: 0;
+}
+
+.stepHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  background: var(--line-strong);
+}
+
+.agent {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.label {
+  margin-top: 4px;
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.detail {
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.done .dot {
+  background: var(--ok);
+}
+
+.active .dot {
+  background: var(--accent-warm);
+}
+
+.blocked .dot {
+  background: var(--bad);
+}
+
+.waiting .dot {
+  background: var(--line-strong);
+}
+
+@media (max-width: 900px) {
+  .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .steps {
+    grid-template-columns: 1fr;
+  }
+}

@@ -45,7 +45,7 @@ export function Account() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 16px" }}>Conta e token</h2>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Conta e token</h2>
 
       <Card style={{ padding: 20, marginBottom: 20 }}>
         <b>Status atual</b>

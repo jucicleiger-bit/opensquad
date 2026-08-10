@@ -21,6 +21,7 @@ const SECTIONS = [
   { to: "ofertas", label: "Ofertas e assuntos", catalogLabel: "Produtos", group: "Configuração" },
   { to: "pilares", label: "Pilares", hideForCatalog: true, group: "Configuração" },
   { to: "gerar", label: "Agenda e geração", group: "Conteúdo" },
+  { to: "anuncios", label: "Criativos de Anúncio", group: "Conteúdo" },
   { to: "teste", label: "Teste seguro", group: "Conteúdo" },
   { to: "aguardando", label: "Aguardando aprovação", group: "Conteúdo" },
   { to: "calendario", label: "Calendário", group: "Conteúdo" },
@@ -54,7 +55,7 @@ export function ProjectWorkspaceLayout() {
 
   if (error) {
     return (
-      <div style={{ padding: 24 }}>
+      <div style={{ padding: "var(--space-xl)" }}>
         <EmptyState title="Não foi possível carregar o projeto" description={error} />
       </div>
     );
@@ -62,7 +63,7 @@ export function ProjectWorkspaceLayout() {
 
   if (project === undefined) {
     return (
-      <div style={{ padding: 24 }}>
+      <div style={{ padding: "var(--space-xl)" }}>
         <Skeleton height={140} />
       </div>
     );
@@ -70,7 +71,7 @@ export function ProjectWorkspaceLayout() {
 
   if (project === null) {
     return (
-      <div style={{ padding: 24 }}>
+      <div style={{ padding: "var(--space-xl)" }}>
         <EmptyState title="Projeto não encontrado" description={`Não existe projeto com o id "${projectId}".`} />
       </div>
     );

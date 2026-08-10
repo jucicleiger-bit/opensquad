@@ -69,6 +69,11 @@ describe("Calendar", () => {
 
     expect(await screen.findByText("Legenda de teste")).toBeInTheDocument();
     expect(screen.getByText("Aprovado")).toBeInTheDocument();
+    expect(screen.getByText("Pipeline deste criativo")).toBeInTheDocument();
+    expect(screen.getByText("Sofia")).toBeInTheDocument();
+    expect(screen.getByText("Dante")).toBeInTheDocument();
+    expect(screen.getByText("Clara")).toBeInTheDocument();
+    expect(screen.getByText("Renata")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publicar agora" })).toBeInTheDocument();
   });
 

@@ -46,6 +46,28 @@ const FILLED_BLOCKS = {
 };
 
 describe("Company", () => {
+  it("saves the B2B/B2C commercial focus through the real brand-input endpoint, defaulting to unset", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {} } },
+      { body: projectState({ brandInput: { audienceType: "b2b" } }) },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    const audienceTypeSelect = screen.getByLabelText("Foco comercial (opcional)") as HTMLSelectElement;
+    expect(audienceTypeSelect.value).toBe("");
+
+    await userEvent.type(screen.getByLabelText("Segmento"), "Atacado de embalagens");
+    await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "embalagens e descartáveis para revenda");
+    await userEvent.selectOptions(audienceTypeSelect, "b2b");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar informações" }));
+
+    expect(await screen.findByText("Informações salvas.")).toBeInTheDocument();
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(JSON.parse(saveCall[1].body as string).audienceType).toBe("b2b");
+  });
+
   it("blocks analysis until the required fields are filled", async () => {
     stubFetchSequence([{ body: projectState() }]);
     renderCompany();

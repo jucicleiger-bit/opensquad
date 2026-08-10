@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import {
+  AUDIENCE_TYPE_LABELS,
   BRAND_XRAY_BLOCK_IDS,
   BRAND_XRAY_BLOCK_LABELS,
   CONTENT_GOAL_LABELS,
@@ -29,6 +30,7 @@ export function Company() {
     mainDifferential: project.brandInput?.mainDifferential || "",
     contentGoals: project.brandInput?.contentGoals || ([] as string[]),
     audience: project.brandInput?.audience || "",
+    audienceType: (project.brandInput?.audienceType || "") as "" | "b2b" | "b2c",
     tone: project.brandInput?.tone || ([] as string[]),
     avoid: project.brandInput?.avoid || "",
     positioning: project.brandInput?.positioning || "",
@@ -196,7 +198,7 @@ export function Company() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 16px" }}>Empresa / Raio-X</h2>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Empresa / Raio-X</h2>
 
       <Card style={{ padding: 20, marginBottom: 20 }}>
         <b>Importar do site</b>
@@ -312,6 +314,21 @@ export function Company() {
 
         <div className="row">
           <div>
+            <label htmlFor="brand-audience-type">Foco comercial (opcional)</label>
+            <select
+              id="brand-audience-type"
+              value={form.audienceType}
+              onChange={(e) => setForm({ ...form, audienceType: e.target.value as "" | "b2b" | "b2c" })}
+            >
+              <option value="">Não definido</option>
+              {Object.entries(AUDIENCE_TYPE_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label htmlFor="brand-audience">Público-alvo</label>
             <input
               id="brand-audience"
@@ -319,6 +336,9 @@ export function Company() {
               onChange={(e) => setForm({ ...form, audience: e.target.value })}
             />
           </div>
+        </div>
+
+        <div className="row">
           <div>
             <label htmlFor="brand-tone">Tom de voz (separado por vírgula)</label>
             <input

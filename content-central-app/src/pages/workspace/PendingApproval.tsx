@@ -16,6 +16,7 @@ import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { Skeleton } from "@/components/Skeleton";
+import { ContentPipeline } from "./ContentPipeline";
 import { bucketForItem, channelLabel, groupSameCreativeItems, imageSource, isFeedChannel, statusMeta, type ContentGroup } from "./contentDisplay";
 import styles from "./PendingApproval.module.css";
 
@@ -364,6 +365,7 @@ export function PendingApproval() {
           <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
             Mesmo criativo — aprovar aqui publica em {group.members.length} formatos de uma vez.
           </div>
+          <ContentPipeline item={leader} />
           {anyImageError ? <div className={`${styles.feedback} ${styles.feedbackError}`} style={{ marginTop: 8 }}>⚠ Imagem: {anyImageError}</div> : null}
           {anyCaptionError ? <div className={`${styles.feedback} ${styles.feedbackError}`} style={{ marginTop: 8 }}>⚠ {anyCaptionError}</div> : null}
           <label htmlFor={`caption-${key}`}>Legenda (compartilhada entre esses formatos)</label>
@@ -458,6 +460,7 @@ export function PendingApproval() {
             <span className="pill">{statusMeta(item).label}</span>
             {renderPillarPill(item)}
           </div>
+          <ContentPipeline item={item} />
           {item.imageGenerationError ? (
             <div className={`${styles.feedback} ${styles.feedbackError}`} style={{ marginTop: 8 }}>⚠ Imagem: {item.imageGenerationError}</div>
           ) : null}
@@ -525,19 +528,19 @@ export function PendingApproval() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 16px" }}>Aguardando aprovação</h2>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Aguardando aprovação</h2>
 
       {pending.length > 0 ? (
         <div className="notice" style={{ marginBottom: 16 }}>
-          <b>Enviar para o cliente aprovar:</b>
+          <b>Mostrar para o cliente:</b>
           <br />
           <span className="muted">
-            Abre uma página com todos os cards aguardando aprovação (imagem + legenda + preço/CTA) para revisar com o cliente
-            e aprovar.
+            Abre uma página de apresentação com todos os posts aguardando aprovação (imagem + legenda). É só visual — dá pra
+            baixar em PDF ou mandar o link, mas a aprovação em si continua sendo feita aqui no painel.
           </span>
           <div style={{ marginTop: 10 }}>
             <a href={`/api/projects/${project.projectId}/briefing`} target="_blank" rel="noopener noreferrer">
-              <Button type="button">Abrir briefing de aprovação</Button>
+              <Button type="button">Abrir apresentação</Button>
             </a>
           </div>
         </div>

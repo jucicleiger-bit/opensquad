@@ -4,47 +4,45 @@
   padding: 28px 24px 60px;
 }
 
-.title {
-  margin: 0 0 4px;
-  font-size: 26px;
+/* Secondary in-page heading (the "Prospecção" section below the main
+   project grid) — smaller than the .page-head h1, not a second page title. */
+.sectionTitle {
+  font-size: 20px;
   font-weight: 800;
-  letter-spacing: -0.03em;
-}
-
-.subtitle {
-  margin: 0 0 24px;
-  color: var(--muted);
+  letter-spacing: -0.02em;
+  margin: 0 0 var(--space-3xs);
 }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
+  gap: var(--space-md);
 }
 
 .projectCard {
-  padding: 20px;
+  padding: var(--space-lg);
   text-decoration: none;
   display: block;
-  transition: transform 0.2s var(--ease), border-color 0.2s var(--ease);
+  transition: transform 0.2s var(--ease), border-color 0.2s var(--ease), box-shadow 0.2s var(--ease);
 }
 
 .projectCard:hover {
   transform: translateY(-2px);
   border-color: var(--line-strong);
+  box-shadow: var(--shadow-card), 0 0 0 1px var(--line-strong) inset;
 }
 
 .projectName {
   font-size: 18px;
   font-weight: 800;
   color: var(--text);
-  margin-bottom: 4px;
+  margin-bottom: var(--space-2xs);
 }
 
 .projectId {
   color: var(--muted);
   font-size: 13px;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-md);
 }
 
 .pills {
@@ -77,4 +75,75 @@
 .deleteButton:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.reviewSplit {
+  display: grid;
+  /* The preview column is floored at the card's own width (380px) so it
+     never squeezes thinner than the card actually needs — below that, the
+     media query stacks the columns instead of squeezing them. */
+  grid-template-columns: minmax(260px, 1fr) minmax(380px, 420px);
+  gap: 24px;
+  align-items: start;
+  margin-top: 8px;
+}
+
+.reviewForm {
+  min-width: 0;
+}
+
+.highlightInputs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.reviewPreview {
+  position: sticky;
+  top: 16px;
+}
+
+.colorRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.colorSwatch {
+  width: 44px;
+  min-width: 44px;
+  padding: 3px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.colorHexInput {
+  flex: 1;
+  text-transform: uppercase;
+}
+
+.improveBioButton {
+  background: none;
+  border: none;
+  color: var(--accent-strong, #8b7bff);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  padding: 0;
+}
+
+.improveBioButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+@media (max-width: 760px) {
+  .reviewSplit {
+    grid-template-columns: 1fr;
+  }
+
+  .reviewPreview {
+    position: static;
+    order: -1;
+  }
 }

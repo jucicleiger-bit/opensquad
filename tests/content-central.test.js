@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -8,27 +8,42 @@ import {
   buildApprovalPayload,
   calculateTokenDaysRemaining,
   createCentralProject,
+  buildSegmentTemplateContentItem,
+  deleteAdCreative,
   deleteProjectContent,
   deleteProjectReference,
+  enqueueSegmentTemplateAdaptation,
+  enrichAdCreativeWithRealImage,
   enrichBatchItemsWithRealImages,
+  enrichSegmentTemplateItemsForProspect,
+  generateAdCreative,
+  listAdCreatives,
   generateCatalogSchedulePlan,
   generateContentBatch,
   generateContentSchedulePlan,
+  generateSpecialDateContent,
   getCentralPaths,
   listCentralProjects,
+  listCommemorativeDates,
+  listSegmentTemplates,
   listSystemAlerts,
+  loadSegmentTemplate,
+  registerSegmentTemplate,
   reconcileInterruptedGenerations,
   sendDueAlertEmails,
   listProjectReferences,
   listProjectContent,
   publishSingleContent,
+  regenerateAdCreative,
   regenerateContentDay,
   regenerateContentGroup,
   researchOnlineVisualTrends,
   runDuePublishSweep,
   deleteProjectOffer,
+  deleteProjectOfferGroup,
   deleteProjectPillar,
   saveProjectOffer,
+  saveProjectOfferGroup,
   saveProjectPillar,
   suggestProjectPillars,
   saveProjectAsset,
@@ -94,6 +109,7 @@ test('company profile starts empty, can be updated, and feeds the image prompt r
       segment: '',
       description: '',
       audience: '',
+      audienceType: '',
       location: '',
       productsOrServices: '',
       differentiators: '',
@@ -162,6 +178,7 @@ test('brand xray input uses simple user facts and approved four-block analysis i
       mainDifferential: '',
       contentGoals: [],
       audience: '',
+      audienceType: '',
       tone: [],
       avoid: '',
       positioning: '',
@@ -226,6 +243,38 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     assert.match(prompt, /Receber pedidos no WhatsApp/);
     assert.match(prompt, /preto, vermelho, branco e dourado/);
     assert.match(prompt, /Referência visual nunca pode alterar preço, logo, produto, nome, promoção ou informação factual/i);
+  });
+});
+
+test('audienceType (B2B/B2C) normalizes, mirrors between brandInput/companyProfile, and reaches the image prompt as a fact', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'casa-de-embalagem',
+      name: 'Casa de Embalagem',
+      handle: '@casadeembalagem',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const updated = await updateProjectBrandInput('casa-de-embalagem', {
+      segment: 'Atacado de embalagens',
+      productsOrServices: 'embalagens, descartáveis e utilidades para revenda',
+      audienceType: 'B2B',
+    }, dir);
+    assert.equal(updated.brandInput.audienceType, 'b2b');
+    assert.equal(updated.companyProfile.audienceType, 'b2b');
+
+    const batch = await generateContentBatch('casa-de-embalagem', {
+      days: 1,
+      startDate: '2026-07-20',
+      channel: 'instagram_story',
+    }, dir);
+    assert.match(batch.items[0].image.prompt, /Foco comercial informado: B2B/);
+
+    const cleared = await updateProjectBrandInput('casa-de-embalagem', {
+      segment: 'Atacado de embalagens',
+      audienceType: 'not-a-real-value',
+    }, dir);
+    assert.equal(cleared.brandInput.audienceType, '');
   });
 });
 
@@ -1254,6 +1303,54 @@ test('deleteProjectContent without a reason does not record anything into learni
   });
 });
 
+test('deleteProjectContent ignores housekeeping reasons like tests or regenerate later', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'apagar-motivo-ruido',
+      name: 'Apagar Motivo Ruido',
+      handle: '@apagarmotivoruido',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('apagar-motivo-ruido', { days: 1, startDate: '2026-07-20' }, dir);
+    const content = batch.items[0];
+
+    await deleteProjectContent('apagar-motivo-ruido', content.contentId, dir, content.batchId, 'foi apenas um teste');
+
+    const project = (await listCentralProjects(dir)).find((p) => p.projectId === 'apagar-motivo-ruido');
+    assert.equal(project.learnings.avoid.length, 0);
+  });
+});
+
+test('deleteProjectContent saves Renata feedback instead of noisy operator reason', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'apagar-feedback-renata',
+      name: 'Apagar Feedback Renata',
+      handle: '@apagarfeedbackrenata',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('apagar-feedback-renata', { days: 1, startDate: '2026-07-20', channel: 'instagram_story' }, dir);
+    const content = {
+      ...batch.items[0],
+      creativeReview: {
+        status: 'blocked',
+        summary: 'Story parece flyer quadrado centralizado.',
+        warnings: ['Pouco uso de topo e base do Story.'],
+        errors: ['Formato 1:1 dentro do 9:16.'],
+      },
+    };
+    await writeFile(content.filePath, JSON.stringify(content, null, 2), 'utf-8');
+
+    await deleteProjectContent('apagar-feedback-renata', content.contentId, dir, content.batchId, 'vou gerar outro teste');
+
+    const project = (await listCentralProjects(dir)).find((p) => p.projectId === 'apagar-feedback-renata');
+    assert.equal(project.learnings.avoid.length, 1);
+    assert.match(project.learnings.avoid[0], /Formato 1:1 dentro do 9:16/);
+    assert.match(project.learnings.avoid[0], /Pouco uso de topo e base/);
+    assert.doesNotMatch(project.learnings.avoid[0], /vou gerar outro teste/);
+  });
+});
+
 test('simulateTestPost creates a real local image file, not only a prompt', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -1595,6 +1692,73 @@ test('AI safe test asks ChatGPT for a complete designed card and avoids automati
   });
 });
 
+test('Feed offer prompt uses a sales hook title, stronger CTA and blocks fake urgency', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'feed-conversao-real',
+      name: 'Boss Pizzaria',
+      handle: '@bosspizzaria',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await saveProjectOffer('feed-conversao-real', {
+      name: 'Combo Família',
+      type: 'combo',
+      price: '89,90',
+      items: 'pizza grande, refrigerante e borda recheada',
+      autoGenerateCta: true,
+      active: true,
+    }, dir, new Date('2026-07-18T09:00:00.000Z'));
+
+    const generatorCalls = [];
+    await simulateTestPost('feed-conversao-real', {
+      channel: 'instagram_feed',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/feed.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-07-18T09:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.match(prompt, /Título: criar um título-gancho curto.*Combo Família/i);
+    assert.match(prompt, /CTA exato: Peça agora/i);
+    assert.doesNotMatch(prompt, /CTA exato: Saiba mais/i);
+    assert.match(prompt, /Não criar urgência, estoque, prazo, desconto ou garantia falsa/i);
+  });
+});
+
+test('Urgency offer prompt uses only the real urgency written by the operator', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'urgencia-real-operador',
+      name: 'Boss Pizzaria',
+      handle: '@bosspizzaria',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await saveProjectOffer('urgencia-real-operador', {
+      name: 'Rodízio especial de sexta',
+      type: 'urgency',
+      price: '49,90',
+      items: 'rodízio completo no salão',
+      notes: 'Válido somente nesta sexta-feira no salão.',
+      active: true,
+    }, dir, new Date('2026-07-18T09:00:00.000Z'));
+
+    const generatorCalls = [];
+    await simulateTestPost('urgencia-real-operador', {
+      channel: 'instagram_feed',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/urgencia.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-07-18T09:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.match(prompt, /Urgência real cadastrada: Válido somente nesta sexta-feira no salão\.?/i);
+    assert.match(prompt, /Não inventar outra urgência além da cadastrada/i);
+    assert.match(prompt, /CTA exato: Peça agora/i);
+  });
+});
+
 test('AI final prompt is compiled into concise creative brief and limited references', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -1922,6 +2086,144 @@ test('product photo selection prefers a reference matching the offer\'s product 
     assert.match(prompt, /Foto selecionada: assets\/references\/esfiha-produto-aberta\.jpg/);
     assert.match(prompt, /Foto selecionada: assets\/references\/esfiha-produto-fechada\.jpg/);
     assert.doesNotMatch(prompt, /Foto selecionada: assets\/references\/pizza-produto\.jpg/);
+  });
+});
+
+test('a marketing offer with its own linked photo shows that exact real product, not a generic/guessed one, for a reseller with many distinct SKUs', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'rei-do-xiaomi-teste',
+      name: 'Rei do Xiaomi',
+      handle: '@reidoxiaomi',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
+    const redmiPhoto = await saveProjectAsset('rei-do-xiaomi-teste', {
+      kind: 'reference',
+      filename: 'redmi-note-15.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real do Redmi Note 15, autorizada pela marca.',
+    }, dir);
+    const pocoPhoto = await saveProjectAsset('rei-do-xiaomi-teste', {
+      kind: 'reference',
+      filename: 'poco-x8-pro.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real do Poco X8 Pro, autorizada pela marca.',
+    }, dir);
+
+    await saveProjectOffer('rei-do-xiaomi-teste', {
+      name: 'Redmi Note 15 8/256GB',
+      type: 'offer',
+      price: 'R$ 1.349',
+      photoReferenceIds: [redmiPhoto.metadata.id],
+      active: true,
+    }, dir, new Date('2026-08-01T12:00:00.000Z'));
+    await saveProjectOffer('rei-do-xiaomi-teste', {
+      name: 'Poco X8 Pro 12/512GB',
+      type: 'offer',
+      price: 'R$ 2.649',
+      photoReferenceIds: [pocoPhoto.metadata.id],
+      active: true,
+    }, dir, new Date('2026-08-01T12:01:00.000Z'));
+
+    const generatorCalls = [];
+    await simulateTestPost('rei-do-xiaomi-teste', {
+      channel: 'instagram_feed',
+      testSeed: 'rei-do-xiaomi-primeira-oferta',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/redmi.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-08-01T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    const offerName = generatorCalls[0].content.contentTopic.offerName;
+    const expectedPhoto = offerName.includes('Redmi') ? 'redmi-note-15.jpg' : 'poco-x8-pro.jpg';
+    const unexpectedPhoto = offerName.includes('Redmi') ? 'poco-x8-pro.jpg' : 'redmi-note-15.jpg';
+
+    // The linked photo for the actual offer being generated must be used —
+    // never the other product's photo, and never the "no real product,
+    // probably a service business" fallback that fires when nothing is
+    // selected.
+    assert.match(prompt, new RegExp(`Foto selecionada: assets/references/${expectedPhoto}`));
+    assert.doesNotMatch(prompt, new RegExp(`Foto selecionada: assets/references/${unexpectedPhoto}`));
+    assert.doesNotMatch(prompt, /provavelmente vende serviço, não produto físico/);
+    assert.match(prompt, new RegExp(`O produto principal é exatamente o item real da foto anexada: ${offerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  });
+});
+
+test('a marketing offer with NO photo of its own never borrows a photo already claimed by a different offer', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'rei-do-xiaomi-sem-foto',
+      name: 'Rei do Xiaomi',
+      handle: '@reidoxiaomi',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
+    const redmiPhoto = await saveProjectAsset('rei-do-xiaomi-sem-foto', {
+      kind: 'reference',
+      filename: 'redmi-a7-pro.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real do Redmi A7 Pro, autorizada pela marca.',
+    }, dir);
+
+    await saveProjectOffer('rei-do-xiaomi-sem-foto', {
+      name: 'Redmi A7 Pro 4/64GB',
+      type: 'offer',
+      price: 'R$ 749',
+      photoReferenceIds: [redmiPhoto.metadata.id],
+      active: true,
+    }, dir, new Date('2026-08-01T12:00:00.000Z'));
+    // No photoReferenceIds here — this is the offer that has no photo of
+    // its own, reproducing the real report: generating a post for it must
+    // never pick up the Redmi A7 Pro's photo just because it's the only one
+    // sitting in the project's reference pool.
+    await saveProjectOffer('rei-do-xiaomi-sem-foto', {
+      name: 'Redmi Note 15 8/256GB',
+      type: 'offer',
+      price: 'R$ 1.349',
+      active: true,
+    }, dir, new Date('2026-08-01T12:01:00.000Z'));
+
+    const batch = await generateContentBatch('rei-do-xiaomi-sem-foto', {
+      days: 2,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'rei-do-xiaomi-sem-foto');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'rei-do-xiaomi-sem-foto', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/img.png', mimeType: 'image/png' };
+      },
+    });
+
+    const notePayload = calls.find((call) => call.content.contentTopic.offerName === 'Redmi Note 15 8/256GB');
+    assert.ok(notePayload, 'expected a generation call for the photo-less offer');
+    const notePrompt = notePayload.content.image.prompt;
+    assert.doesNotMatch(notePrompt, /Foto selecionada: assets\/references\/redmi-a7-pro\.jpg/);
+    assert.doesNotMatch(notePrompt, /O produto principal é exatamente o item real da foto anexada: Redmi A7 Pro/);
+
+    const proPayload = calls.find((call) => call.content.contentTopic.offerName === 'Redmi A7 Pro 4/64GB');
+    if (proPayload) {
+      assert.match(proPayload.content.image.prompt, /Foto selecionada: assets\/references\/redmi-a7-pro\.jpg/);
+    }
   });
 });
 
@@ -2559,7 +2861,7 @@ test('content offers drive varied schedule topics with exact prices and post typ
   });
 });
 
-test('Feed gets a softer default CTA than Story/Reels when the offer has no explicit CTA', async () => {
+test('Feed gets a direct default CTA for sales offers when the offer has no explicit CTA', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'cta-feed-suave',
@@ -2579,14 +2881,14 @@ test('Feed gets a softer default CTA than Story/Reels when the offer has no expl
       channel: 'instagram_feed',
       imageGenerator: async (payload) => { feedCalls.push(payload); return { url: 'https://cdn.example.com/feed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(feedCalls[0].content.image.prompt, /CTA exato:\s*Saiba mais/i);
+    assert.match(feedCalls[0].content.image.prompt, /CTA exato:\s*Peça agora/i);
 
     const fbFeedCalls = [];
     await simulateTestPost('cta-feed-suave', {
       channel: 'facebook_feed',
       imageGenerator: async (payload) => { fbFeedCalls.push(payload); return { url: 'https://cdn.example.com/fbfeed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(fbFeedCalls[0].content.image.prompt, /CTA exato:\s*Saiba mais/i);
+    assert.match(fbFeedCalls[0].content.image.prompt, /CTA exato:\s*Peça agora/i);
 
     const storyCalls = [];
     await simulateTestPost('cta-feed-suave', {
@@ -2687,6 +2989,241 @@ test('schedule generation mixes registered offers with selected content goals in
     const sources = batch.items.map((item) => item.contentTopic.source);
     assert.ok(sources.includes('offer'), 'expected at least one offer-driven topic');
     assert.ok(sources.includes('goal'), 'expected at least one goal-driven topic');
+  });
+});
+
+test('marking a priced-intent goal (e.g. "Divulgar promoções") boosts how often real offer topics appear, instead of doing nothing', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boost-sem-intencao', name: 'Boost Sem Intencao' }, dir);
+    await updateProjectBrandInput('boost-sem-intencao', { brandName: 'Boost', segment: 'loja', contentGoals: ['engagement'] }, dir);
+    await saveProjectOffer('boost-sem-intencao', { name: 'Produto X', price: 'R$99' }, dir);
+    // Pool without sales intent: interleave([offer], [engagement]) = 2 slots, 1 offer + 1 goal.
+    const baseline = await generateContentBatch('boost-sem-intencao', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const baselineOfferCount = baseline.items.filter((item) => item.contentTopic.source === 'offer').length;
+    assert.equal(baselineOfferCount, 1);
+
+    await createCentralProject({ projectId: 'boost-com-intencao', name: 'Boost Com Intencao' }, dir);
+    await updateProjectBrandInput('boost-com-intencao', { brandName: 'Boost', segment: 'loja', contentGoals: ['engagement', 'promotions'] }, dir);
+    await saveProjectOffer('boost-com-intencao', { name: 'Produto X', price: 'R$99' }, dir);
+    // Pool with sales intent: interleave([offer, offer], [engagement]) = 3 slots, 2 offer + 1 goal —
+    // "Divulgar promoções" never spawns its own post (no template), but it
+    // makes the real offer show up twice as often relative to goal posts.
+    const boosted = await generateContentBatch('boost-com-intencao', { days: 3, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const boostedOfferCount = boosted.items.filter((item) => item.contentTopic.source === 'offer').length;
+    assert.equal(boostedOfferCount, 2);
+    assert.ok(boosted.items.every((item) => item.contentTopic.type !== 'promotions'), 'promotions goal must never spawn its own topic type');
+  });
+});
+
+test('a priced-intent goal has zero effect when there are no offers registered — no invented sales content', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-oferta-boost', name: 'Sem Oferta Boost' }, dir);
+    await updateProjectBrandInput('sem-oferta-boost', {
+      brandName: 'Sem Oferta',
+      segment: 'consultoria',
+      contentGoals: ['authority', 'sell_services', 'leads'],
+    }, dir);
+
+    const batch = await generateContentBatch('sem-oferta-boost', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const sources = batch.items.map((item) => item.contentTopic.source);
+    assert.ok(sources.every((source) => source === 'goal'), 'expected only the real "authority" goal topic, never an offer/invented topic');
+  });
+});
+
+test('offer groups can be created, edited and deleted, and an offer can be assigned to one', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'grupos-teste', name: 'Grupos Teste' }, dir);
+
+    const { group: geral } = await saveProjectOfferGroup('grupos-teste', { name: 'Geral' }, dir);
+    const { group: blackFriday } = await saveProjectOfferGroup('grupos-teste', { name: 'Black Friday' }, dir);
+    assert.notEqual(geral.id, blackFriday.id);
+
+    const { offer } = await saveProjectOffer('grupos-teste', { name: 'Produto X', groupId: blackFriday.id }, dir);
+    assert.equal(offer.groupId, blackFriday.id);
+
+    const renamed = await saveProjectOfferGroup('grupos-teste', { id: blackFriday.id, name: 'Black Friday 2026' }, dir);
+    assert.equal(renamed.group.name, 'Black Friday 2026');
+    assert.equal(renamed.project.contentStrategy.offerGroups.length, 2);
+
+    const deleted = await deleteProjectOfferGroup('grupos-teste', geral.id, dir);
+    assert.equal(deleted.deleted, true);
+    assert.equal(deleted.project.contentStrategy.offerGroups.length, 1);
+    // Deleting a group never touches offers that reference a DIFFERENT
+    // group — same precedent as deleting a pillar.
+    const stillLinked = deleted.project.contentStrategy.offers.find((entry) => entry.id === offer.id);
+    assert.equal(stillLinked.groupId, blackFriday.id);
+  });
+});
+
+test('generating a schedule with groupIds only pulls offers from the requested group(s), leaving goal topics untouched', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'grupos-geracao', name: 'Grupos Geracao' }, dir);
+    await updateProjectBrandInput('grupos-geracao', { brandName: 'Grupos', segment: 'loja', contentGoals: ['engagement'] }, dir);
+
+    const { group: blackFriday } = await saveProjectOfferGroup('grupos-geracao', { name: 'Black Friday' }, dir);
+    await saveProjectOfferGroup('grupos-geracao', { name: 'Geral' }, dir);
+    await saveProjectOffer('grupos-geracao', { name: 'Produto Black Friday', price: 'R$1', groupId: blackFriday.id }, dir);
+    await saveProjectOffer('grupos-geracao', { name: 'Produto Geral Sem Grupo' }, dir);
+
+    // Pool scoped to the Black Friday group: interleave([produtoBF], [engagement]) = 2 slots.
+    const batch = await generateContentBatch('grupos-geracao', {
+      days: 2,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [blackFriday.id],
+    }, dir);
+
+    const offerNames = batch.items.filter((item) => item.contentTopic.source === 'offer').map((item) => item.contentTopic.offerName);
+    assert.ok(offerNames.every((name) => name === 'Produto Black Friday'), 'only the Black Friday group offer should appear');
+    assert.ok(!offerNames.includes('Produto Geral Sem Grupo'), 'the ungrouped offer must never appear when a group filter is set');
+    assert.ok(batch.items.some((item) => item.contentTopic.source === 'goal'), 'goal-driven topics keep working regardless of the group filter');
+  });
+});
+
+test('offersOnly excludes goal-driven topics entirely, generating a batch that is 100% the requested group', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'grupo-exclusivo', name: 'Grupo Exclusivo' }, dir);
+    await updateProjectBrandInput('grupo-exclusivo', { brandName: 'Grupo Exclusivo', segment: 'loja', contentGoals: ['authority', 'engagement'] }, dir);
+
+    const { group: fimDeSemana } = await saveProjectOfferGroup('grupo-exclusivo', { name: 'Promoção fim de semana' }, dir);
+    await saveProjectOffer('grupo-exclusivo', { name: 'Combo Fim de Semana', price: 'R$29', groupId: fimDeSemana.id }, dir);
+
+    const batch = await generateContentBatch('grupo-exclusivo', {
+      days: 5,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [fimDeSemana.id],
+      offersOnly: true,
+    }, dir);
+
+    assert.equal(batch.items.length, 5);
+    assert.ok(batch.items.every((item) => item.contentTopic.source === 'offer' && item.contentTopic.offerName === 'Combo Fim de Semana'));
+  });
+});
+
+test('offersOnly with a group that has no active offers fails clearly instead of silently falling back to goal/default topics', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'grupo-vazio', name: 'Grupo Vazio' }, dir);
+    await updateProjectBrandInput('grupo-vazio', { brandName: 'Grupo Vazio', segment: 'loja', contentGoals: ['authority'] }, dir);
+    const { group: vazio } = await saveProjectOfferGroup('grupo-vazio', { name: 'Grupo Sem Ofertas' }, dir);
+
+    await assert.rejects(
+      generateContentBatch('grupo-vazio', {
+        days: 1,
+        startDate: '2026-08-03',
+        channel: 'instagram_feed',
+        groupIds: [vazio.id],
+        offersOnly: true,
+      }, dir),
+      /não têm nenhuma oferta ativa/,
+    );
+  });
+});
+
+test('offersOnly is also respected by generateContentSchedulePlan (the pillar-aware path)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'grupo-exclusivo-formatos', name: 'Grupo Exclusivo Formatos' }, dir);
+    await updateProjectBrandInput('grupo-exclusivo-formatos', { brandName: 'Grupo Exclusivo Formatos', segment: 'loja', contentGoals: ['authority'] }, dir);
+    const { group: fimDeSemana } = await saveProjectOfferGroup('grupo-exclusivo-formatos', { name: 'Promoção fim de semana' }, dir);
+    await saveProjectOffer('grupo-exclusivo-formatos', { name: 'Combo Fim de Semana', price: 'R$29', groupId: fimDeSemana.id }, dir);
+
+    const batch = await generateContentSchedulePlan('grupo-exclusivo-formatos', {
+      days: 3,
+      startDate: '2026-08-03',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      groupIds: [fimDeSemana.id],
+      offersOnly: true,
+    }, dir);
+
+    assert.equal(batch.items.length, 3);
+    assert.ok(batch.items.every((item) => item.contentTopic.source === 'offer' && item.contentTopic.offerName === 'Combo Fim de Semana'));
+  });
+});
+
+test('an offer restricted to specific weekdays only competes for a slot on those days', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'rodizio-dias', name: 'Boss Pizzaria' }, dir);
+    await saveProjectOffer('rodizio-dias', {
+      name: 'Rodízio Seg-Sex',
+      price: 'R$ 49,90',
+      daysOfWeek: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    }, dir);
+    await saveProjectOffer('rodizio-dias', {
+      name: 'Rodízio Fim de Semana',
+      price: 'R$ 69,90',
+      daysOfWeek: ['sat', 'sun'],
+    }, dir);
+
+    // 2026-08-03 is a Monday — 7 days covers a full week (Mon..Sun).
+    const batch = await generateContentBatch('rodizio-dias', {
+      days: 7,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+    }, dir);
+
+    const byDate = new Map(batch.items.map((item) => [item.scheduledDate, item.contentTopic.offerName]));
+    assert.equal(byDate.get('2026-08-03'), 'Rodízio Seg-Sex'); // mon
+    assert.equal(byDate.get('2026-08-04'), 'Rodízio Seg-Sex'); // tue
+    assert.equal(byDate.get('2026-08-05'), 'Rodízio Seg-Sex'); // wed
+    assert.equal(byDate.get('2026-08-06'), 'Rodízio Seg-Sex'); // thu
+    assert.equal(byDate.get('2026-08-07'), 'Rodízio Seg-Sex'); // fri
+    assert.equal(byDate.get('2026-08-08'), 'Rodízio Fim de Semana'); // sat
+    assert.equal(byDate.get('2026-08-09'), 'Rodízio Fim de Semana'); // sun
+  });
+});
+
+test('an offer with no daysOfWeek set stays eligible every day, unchanged from before the feature existed', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-restricao-dia', name: 'Sem Restricao' }, dir);
+    await saveProjectOffer('sem-restricao-dia', { name: 'Produto Sempre Ativo', price: 'R$10' }, dir);
+
+    const batch = await generateContentBatch('sem-restricao-dia', {
+      days: 7,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+    }, dir);
+
+    assert.ok(batch.items.every((item) => item.contentTopic.offerName === 'Produto Sempre Ativo'));
+  });
+});
+
+test('day-of-week offer restriction is also respected by generateContentSchedulePlan (the pillar-aware path)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'rodizio-dias-plano', name: 'Boss Pizzaria' }, dir);
+    await saveProjectOffer('rodizio-dias-plano', {
+      name: 'Rodízio Seg-Sex',
+      type: 'rodizio',
+      price: 'R$ 49,90',
+      daysOfWeek: ['mon', 'tue', 'wed', 'thu', 'fri'],
+    }, dir);
+    await saveProjectOffer('rodizio-dias-plano', {
+      name: 'Rodízio Fim de Semana',
+      type: 'rodizio',
+      price: 'R$ 69,90',
+      daysOfWeek: ['sat', 'sun'],
+    }, dir);
+
+    const batch = await generateContentSchedulePlan('rodizio-dias-plano', {
+      days: 7,
+      startDate: '2026-08-03',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '12:00', intervalMinutes: 0 }],
+    }, dir);
+
+    const byDate = new Map(batch.items.map((item) => [item.scheduledDate, item.contentTopic.offerName]));
+    assert.equal(byDate.get('2026-08-06'), 'Rodízio Seg-Sex'); // thu
+    assert.equal(byDate.get('2026-08-08'), 'Rodízio Fim de Semana'); // sat
+    assert.equal(byDate.get('2026-08-09'), 'Rodízio Fim de Semana'); // sun
+  });
+});
+
+test('saveProjectOffer normalizes daysOfWeek — keeps valid weekday codes, drops invalid ones, dedupes', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'dias-validacao', name: 'Dias Validacao' }, dir);
+    const { offer } = await saveProjectOffer('dias-validacao', {
+      name: 'Produto X',
+      daysOfWeek: ['mon', 'MON', 'sat', 'not-a-day', 'sun', ''],
+    }, dir);
+    assert.deepEqual(offer.daysOfWeek, ['mon', 'sat', 'sun']);
   });
 });
 
@@ -3472,6 +4009,119 @@ test('enrichBatchItemsWithRealImages records a videoGenerationError instead of f
   });
 });
 
+test('regenerating a card picks up a real photo attached to the offer AFTER the card was first generated', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'foto-anexada-depois',
+      name: 'Rei do Xiaomi Teste',
+      handle: '@reidoxiaomiteste',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const { offer } = await saveProjectOffer('foto-anexada-depois', {
+      name: 'Redmi A7 Pro 4/64GB',
+      type: 'offer',
+      price: 'R$ 749',
+      active: true,
+    }, dir, new Date('2026-08-02T10:00:00.000Z'));
+
+    // First generation happens with no photo attached yet — matches the
+    // real sequence: card generated, sits "aguardando aprovação", THEN the
+    // operator goes back and attaches the real product photo to the offer.
+    const batch = await generateContentBatch('foto-anexada-depois', {
+      days: 1,
+      startDate: '2026-08-02',
+      channel: 'instagram_feed',
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'foto-anexada-depois');
+    await enrichBatchItemsWithRealImages(batch, project, 'foto-anexada-depois', {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/generico.png', mimeType: 'image/png' }),
+    });
+    const beforePhoto = await listProjectContent('foto-anexada-depois', dir);
+    assert.doesNotMatch(beforePhoto[0].image.prompt, /Foto selecionada:/);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('redmi-a7-pro').toString('base64')}`;
+    const uploaded = await saveProjectAsset('foto-anexada-depois', {
+      kind: 'reference',
+      filename: 'redmi-a7-pro.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real do Redmi A7 Pro, autorizada pela marca.',
+    }, dir, new Date('2026-08-02T11:00:00.000Z'));
+    await saveProjectOffer('foto-anexada-depois', {
+      id: offer.id,
+      name: 'Redmi A7 Pro 4/64GB',
+      type: 'offer',
+      price: 'R$ 749',
+      active: true,
+      photoReferenceIds: [uploaded.metadata.id],
+    }, dir, new Date('2026-08-02T11:05:00.000Z'));
+
+    const generatorCalls = [];
+    await regenerateContentDay('foto-anexada-depois', beforePhoto[0].contentId, {
+      regenerate: 'creative',
+      batchId: beforePhoto[0].batchId,
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/redmi-real.png', mimeType: 'image/png' };
+      },
+    }, dir);
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.match(prompt, /Foto selecionada: assets\/references\/redmi-a7-pro\.jpg/);
+    assert.match(prompt, /O produto principal é exatamente o item real da foto anexada: Redmi A7 Pro 4\/64GB/);
+    assert.deepEqual(generatorCalls[0].content.contentTopic.photoReferenceIds, [uploaded.metadata.id]);
+  });
+});
+
+test('a "Pedido de alteração" note asks the image generator for a targeted edit; regenerating with no note does not', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'pedido-alteracao',
+      name: 'Casa de Embalagem Teste',
+      handle: '@casadeembalagemteste',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('pedido-alteracao', {
+      days: 1,
+      startDate: '2026-08-02',
+      channel: 'instagram_feed',
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'pedido-alteracao');
+    await enrichBatchItemsWithRealImages(batch, project, 'pedido-alteracao', {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
+    });
+    const [before] = await listProjectContent('pedido-alteracao', dir);
+
+    const withNoteCalls = [];
+    await regenerateContentDay('pedido-alteracao', before.contentId, {
+      regenerate: 'creative',
+      batchId: before.batchId,
+      note: 'aumentar o preço',
+      imageGenerator: async (payload) => {
+        withNoteCalls.push(payload);
+        return { url: 'https://cdn.example.com/edited.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    assert.equal(withNoteCalls[0].targetedEdit, true);
+
+    const [afterFirstEdit] = await listProjectContent('pedido-alteracao', dir);
+    const withoutNoteCalls = [];
+    await regenerateContentDay('pedido-alteracao', afterFirstEdit.contentId, {
+      regenerate: 'creative',
+      batchId: afterFirstEdit.batchId,
+      imageGenerator: async (payload) => {
+        withoutNoteCalls.push(payload);
+        return { url: 'https://cdn.example.com/fresh-take.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    assert.equal(withoutNoteCalls[0].targetedEdit, false);
+  });
+});
+
 test('regenerating one card\'s image individually unlinks it from its shared-creative siblings on both sides', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -3666,6 +4316,48 @@ test('runDuePublishSweep records the error and keeps the item unpublished when t
     const raw = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
     assert.notEqual(raw.publish.realPublished, true);
     assert.match(raw.publish.error, /Meta API rejected the request/);
+  });
+});
+
+test('runDuePublishSweep only publishes the earliest overdue (date, time) slot per call, instead of bursting every backlogged slot out at once', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'publish-backlog',
+      name: 'Publish Backlog',
+      handle: '@publishbacklog',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    // Two days worth of content, both left unpublished long enough that
+    // both slots are now overdue by the time the scheduler finally runs
+    // (e.g. the server was down/restarted) — this is the exact backlog
+    // shape confirmed live on a real client whose Stories all went out
+    // within the same second instead of spread across separate days.
+    const batch = await generateContentBatch('publish-backlog', { days: 2, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    await approveContent('publish-backlog', batch.items[0].contentId, dir, batch.batchId);
+    await approveContent('publish-backlog', batch.items[1].contentId, dir, batch.batchId);
+
+    const publisherCalls = [];
+    const firstSweep = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-25T12:00:00.000Z'),
+      metaPublisher: async (payload) => { publisherCalls.push(payload.content.contentId); return { mediaId: `media-${publisherCalls.length}` }; },
+    });
+
+    assert.deepEqual(firstSweep.published, [batch.items[0].contentId]);
+    assert.deepEqual(publisherCalls, [batch.items[0].contentId]);
+    const day1AfterFirst = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    const day2AfterFirst = JSON.parse(await readFile(batch.items[1].filePath, 'utf-8'));
+    assert.equal(day1AfterFirst.publish.realPublished, true);
+    assert.notEqual(day2AfterFirst.publish.realPublished, true);
+
+    // Next sweep cycle picks up the next backlogged slot — still one at a
+    // time, never dumping the whole remaining backlog in a single call.
+    const secondSweep = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-25T12:03:00.000Z'),
+      metaPublisher: async (payload) => { publisherCalls.push(payload.content.contentId); return { mediaId: `media-${publisherCalls.length}` }; },
+    });
+    assert.deepEqual(secondSweep.published, [batch.items[1].contentId]);
+    const day2AfterSecond = JSON.parse(await readFile(batch.items[1].filePath, 'utf-8'));
+    assert.equal(day2AfterSecond.publish.realPublished, true);
   });
 });
 
@@ -3992,6 +4684,71 @@ test('projectType defaults to marketing, is validated, and is echoed by loadProj
   });
 });
 
+test('isProspect defaults to false, forces manual mode when true, carries the real profile facts as prospectSource, and is echoed by loadProject/toProjectSummary/listCentralProjects', async () => {
+  await withTempProject(async (dir) => {
+    const client = await createCentralProject({
+      projectId: 'boss-pizzaria',
+      name: 'Boss Pizzaria',
+      mode: 'automatic',
+    }, dir);
+    assert.equal(client.isProspect, false);
+    assert.equal(client.prospectSource, null);
+    assert.equal(client.mode, 'automatic');
+
+    const prospect = await createCentralProject({
+      projectId: 'emporio-rei-da-mussarela',
+      name: 'Empório Rei da Mussarela',
+      isProspect: true,
+      mode: 'automatic', // must be overridden — a prospect never auto-publishes
+      prospectSource: {
+        handle: '@emporioreidamussarela',
+        bio: 'Serviço de entrega de comida. Loja de frios e Fatiados.',
+        realFollowers: 4388,
+        realPosts: 20,
+        realFollowing: 35,
+      },
+    }, dir);
+    assert.equal(prospect.isProspect, true);
+    assert.equal(prospect.mode, 'manual');
+    assert.deepEqual(prospect.prospectSource, {
+      handle: '@emporioreidamussarela',
+      bio: 'Serviço de entrega de comida. Loja de frios e Fatiados.',
+      realFollowers: 4388,
+      realPosts: 20,
+      realFollowing: 35,
+    });
+
+    const projects = await listCentralProjects(dir);
+    const clientSummary = projects.find((p) => p.projectId === 'boss-pizzaria');
+    const prospectSummary = projects.find((p) => p.projectId === 'emporio-rei-da-mussarela');
+    assert.equal(clientSummary.isProspect, false);
+    assert.equal(prospectSummary.isProspect, true);
+    assert.equal(prospectSummary.prospectSource.realFollowers, 4388);
+  });
+});
+
+test('a prospect with no extracted counts (vision read failed) stays null through a second load/save cycle instead of flipping to 0 — Number(null) is 0, not NaN', async () => {
+  await withTempProject(async (dir) => {
+    // Same shape POST /api/prospects writes when analyzeProspectScreenshotWithAi
+    // returns null: isProspect true, prospectSource explicitly null.
+    await createCentralProject({
+      projectId: 'prospect-sem-leitura',
+      name: 'Nova prospecção 123',
+      isProspect: true,
+      prospectSource: null,
+    }, dir);
+
+    // Anything that round-trips through loadProject + writeJson (the real
+    // Dashboard flow calls saveBrandInput right after upload, before
+    // generating the mockup) re-normalizes prospectSource a second time.
+    await updateProjectBrandInput('prospect-sem-leitura', { segment: 'delivery de frios' }, dir);
+
+    const projects = await listCentralProjects(dir);
+    const summary = projects.find((p) => p.projectId === 'prospect-sem-leitura');
+    assert.deepEqual(summary.prospectSource, { handle: null, bio: null, realFollowers: null, realPosts: null, realFollowing: null });
+  });
+});
+
 test('generateCatalogSchedulePlan round-robins only active products to Instagram Story and persists the rotation cursor', async () => {
   await withTempProject(async (dir) => {
     const projectId = 'catalogo-celulares';
@@ -4078,5 +4835,589 @@ test('simulateTestPost refuses to run for a catalog project instead of silently 
       () => simulateTestPost(projectId, { channel: 'instagram_story' }, dir),
       /Teste seguro.*não tem suporte para projetos de catálogo/,
     );
+  });
+});
+
+test('listCommemorativeDates computes national holidays and commercial dates correctly for a real year (2026)', () => {
+  const dates = listCommemorativeDates('2026-01-01', '2026-12-31');
+  const byLabel = new Map(dates.map((entry) => [entry.label, entry]));
+
+  // Fixed-date national holidays.
+  assert.equal(byLabel.get('Confraternização Universal')?.date, '2026-01-01');
+  assert.equal(byLabel.get('Independência do Brasil')?.date, '2026-09-07');
+  assert.equal(byLabel.get('Natal')?.date, '2026-12-25');
+  assert.equal(byLabel.get('Confraternização Universal')?.kind, 'holiday');
+
+  // Easter-derived movable holidays — 2026's real Easter Sunday is April 5.
+  assert.equal(byLabel.get('Páscoa')?.date, '2026-04-05');
+  assert.equal(byLabel.get('Carnaval')?.date, '2026-02-17');
+  assert.equal(byLabel.get('Sexta-feira Santa')?.date, '2026-04-03');
+  assert.equal(byLabel.get('Corpus Christi')?.date, '2026-06-04');
+
+  // Commercial dates computed by weekday rule.
+  assert.equal(byLabel.get('Dia das Mães')?.date, '2026-05-10'); // 2nd Sunday of May
+  assert.equal(byLabel.get('Dia dos Pais')?.date, '2026-08-09'); // 2nd Sunday of August
+  assert.equal(byLabel.get('Black Friday')?.date, '2026-11-27'); // last Friday of November
+  assert.equal(byLabel.get('Dia das Mães')?.kind, 'commercial');
+
+  // Filtering by range excludes anything outside it.
+  const may = listCommemorativeDates('2026-05-01', '2026-05-31');
+  assert.deepEqual(may.map((entry) => entry.label), ['Dia do Trabalho', 'Dia das Mães']);
+
+  // Results are sorted ascending by date.
+  const sorted = [...dates].sort((a, b) => a.date.localeCompare(b.date));
+  assert.deepEqual(dates.map((d) => d.date), sorted.map((d) => d.date));
+});
+
+test('generateSpecialDateContent creates a one-off themed post for a commemorative date, independent of the offer/goal rotation', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-comemorativa', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('data-comemorativa', { brandName: 'Boss Pizzaria', segment: 'pizzaria', contentGoals: ['authority'] }, dir);
+    await saveProjectOffer('data-comemorativa', { name: 'Rodízio', price: 'R$49,90' }, dir);
+
+    // A normal scheduled batch first, to give the rotation cursor a real,
+    // non-zero position — generating a special date afterward must not
+    // read from or advance that cursor.
+    const before = await generateContentBatch('data-comemorativa', {
+      days: 3,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+    }, dir);
+    const projectBefore = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-comemorativa');
+    const cursorBefore = projectBefore.contentStrategy?.nextScheduleTopicIndex;
+
+    const batch = await generateSpecialDateContent('data-comemorativa', {
+      date: '2026-05-10',
+      label: 'Dia das Mães',
+      channel: 'instagram_story',
+    }, dir);
+
+    assert.equal(batch.items.length, 1);
+    const item = batch.items[0];
+    assert.equal(item.scheduledDate, '2026-05-10');
+    assert.equal(item.channel, 'instagram_story');
+    assert.equal(item.contentTopic.source, 'special_date');
+    assert.equal(item.contentTopic.specialDateLabel, 'Dia das Mães');
+    assert.match(item.contentTopic.objective, /Dia das Mães/);
+    assert.match(item.title, /Dia das Mães/);
+    assert.equal(item.status, 'draft_generated');
+
+    const projectAfter = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-comemorativa');
+    assert.equal(projectAfter.contentStrategy?.nextScheduleTopicIndex, cursorBefore, 'the regular rotation cursor must be untouched');
+
+    // The normal batch's own items are still exactly what they were before —
+    // nothing about the special-date call altered them.
+    const allContent = await listProjectContent('data-comemorativa', dir);
+    assert.equal(allContent.length, before.items.length + 1);
+  });
+});
+
+test('an institutional special-date post (no offer linked) gets a warm, celebratory hook title about the occasion — not the raw project name, and not a commercial/pitch-style hook either', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-sem-oferta', name: 'CASA DE EMBALAGEM' }, dir);
+    const batch = await generateSpecialDateContent('data-sem-oferta', {
+      date: '2026-08-09',
+      label: 'Dia dos Pais',
+      channel: 'instagram_story',
+    }, dir);
+    assert.equal(batch.items[0].contentTopic.offerId, undefined);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-sem-oferta');
+    const generatorCalls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'data-sem-oferta', {
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/dia-dos-pais.png', mimeType: 'image/png' };
+      },
+      imageReviewer: async () => ({ status: 'ok', summary: 'ok', checks: [] }),
+    });
+
+    assert.equal(generatorCalls.length, 1);
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.doesNotMatch(prompt, /Título exato: CASA DE EMBALAGEM/i, 'must not force the raw project name as the whole headline — that was the bug (no real message, just the brand name)');
+    assert.match(prompt, /tom caloroso e comemorativo sobre "Dia dos Pais"/i, 'must build a warm, occasion-themed hook');
+    assert.match(prompt, /não uma oferta nem uma peça comercial/i, 'must explicitly steer away from a sales/pitch framing — a real client flagged an occasion post that read like a business pitch');
+    // The pillar/authority hook wording (tuned for a punchy business hook,
+    // not a celebration) must stay scoped to goal topics only.
+    assert.doesNotMatch(prompt, /gancho ou pergunta específica sobre "Dia dos Pais"/i);
+    // The title wording alone isn't enough — the brand's own approved Raio-X
+    // visualIdentity text can independently describe a business-dashboard
+    // visual style (confirmed on a real client), which the model then
+    // applies to the whole composition regardless of the title. Must be
+    // overridden explicitly for this occasion post too.
+    assert.match(prompt, /mesmo que a direção acima descreva um estilo de dashboard, gráfico, mockup de tela\/software/i, 'must override the brand\'s standing business-visual identity for this specific occasion piece');
+  });
+});
+
+test('generateSpecialDateContent can tie the post to a real registered offer instead of running purely institutional', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-com-oferta', name: 'Boss Pizzaria' }, dir);
+    const { offer } = await saveProjectOffer('data-com-oferta', { name: 'Combo Namorados', price: 'R$79,90' }, dir);
+
+    const batch = await generateSpecialDateContent('data-com-oferta', {
+      date: '2026-06-12',
+      label: 'Dia dos Namorados',
+      channel: 'instagram_feed',
+      offerId: offer.id,
+    }, dir);
+
+    const item = batch.items[0];
+    assert.equal(item.contentTopic.source, 'special_date');
+    assert.equal(item.contentTopic.offerName, 'Combo Namorados');
+    assert.equal(item.contentTopic.price, 'R$79,90');
+    assert.match(item.contentTopic.objective, /Dia dos Namorados/);
+  });
+});
+
+test('generateSpecialDateContent rejects an invalid date or a missing label instead of writing a broken card', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-invalida', name: 'Boss Pizzaria' }, dir);
+
+    await assert.rejects(
+      () => generateSpecialDateContent('data-invalida', { date: 'não é uma data', label: 'Black Friday' }, dir),
+      /Data inválida/,
+    );
+    await assert.rejects(
+      () => generateSpecialDateContent('data-invalida', { date: '2026-11-27', label: '' }, dir),
+      /Informe o nome da data comemorativa/,
+    );
+  });
+});
+
+test('generateSpecialDateContent shares one creative across same-shape channels when several formats are requested for the same date, instead of each format paying for its own AI generation', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-varios-formatos', name: 'Boss Pizzaria' }, dir);
+
+    const batch = await generateSpecialDateContent('data-varios-formatos', {
+      date: '2026-08-09',
+      label: 'Dia dos Pais',
+      channels: ['instagram_story', 'instagram_reels', 'facebook_story', 'instagram_feed', 'facebook_feed'],
+    }, dir);
+
+    assert.equal(batch.items.length, 5);
+    // All five formats of the same occasion live in one shared batch now
+    // (used to be one separate batchId per channel).
+    assert.ok(batch.items.every((item) => item.batchId === batch.batchId));
+
+    const story = batch.items.find((item) => item.channel === 'instagram_story');
+    const reels = batch.items.find((item) => item.channel === 'instagram_reels');
+    const fbStory = batch.items.find((item) => item.channel === 'facebook_story');
+    const feed = batch.items.find((item) => item.channel === 'instagram_feed');
+    const fbFeed = batch.items.find((item) => item.channel === 'facebook_feed');
+
+    assert.ok(story.creativeGroupKey, 'vertical-shape channels must get a shared group key');
+    assert.equal(story.creativeGroupKey, reels.creativeGroupKey);
+    assert.equal(story.creativeGroupKey, fbStory.creativeGroupKey);
+    assert.ok(feed.creativeGroupKey, 'feed-shape channels must get a shared group key');
+    assert.equal(feed.creativeGroupKey, fbFeed.creativeGroupKey);
+    assert.notEqual(story.creativeGroupKey, feed.creativeGroupKey);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-varios-formatos');
+    let imageCalls = 0;
+    await enrichBatchItemsWithRealImages(batch, project, 'data-varios-formatos', {
+      imageGenerator: async () => {
+        imageCalls += 1;
+        return { url: `https://cdn.example.com/dia-dos-pais-${imageCalls}.png`, mimeType: 'image/png' };
+      },
+    });
+
+    // One AI generation for the vertical group (Story/Reels/Facebook Story),
+    // one for the feed group (Feed/Facebook Feed) — 2 total, not 5.
+    assert.equal(imageCalls, 2);
+
+    const content = await listProjectContent('data-varios-formatos', dir);
+    const storyAfter = content.find((item) => item.channel === 'instagram_story');
+    const reelsAfter = content.find((item) => item.channel === 'instagram_reels');
+    const fbStoryAfter = content.find((item) => item.channel === 'facebook_story');
+    const feedAfter = content.find((item) => item.channel === 'instagram_feed');
+    const fbFeedAfter = content.find((item) => item.channel === 'facebook_feed');
+
+    assert.equal(storyAfter.image.url, reelsAfter.image.url);
+    assert.equal(storyAfter.image.url, fbStoryAfter.image.url);
+    assert.equal(feedAfter.image.url, fbFeedAfter.image.url);
+    assert.notEqual(storyAfter.image.url, feedAfter.image.url);
+  });
+});
+
+test('generateSpecialDateContent still defaults to a single channel (backward compatible with callers that only ever pass one)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-um-canal', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateSpecialDateContent('data-um-canal', {
+      date: '2026-08-09',
+      label: 'Dia dos Pais',
+      channel: 'instagram_story',
+    }, dir);
+    assert.equal(batch.items.length, 1);
+    assert.equal(batch.items[0].channel, 'instagram_story');
+  });
+});
+
+test('generateAdCreative builds a standalone ad creative — no scheduledDate/approval/publish fields, tied to an offer when one is given', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-oferta', name: 'Boss Pizzaria' }, dir);
+    const { offer } = await saveProjectOffer('anuncio-oferta', { name: 'Rodízio', price: 'R$49,90', items: 'pizzas salgadas e doces' }, dir);
+
+    const adCreative = await generateAdCreative('anuncio-oferta', { objective: 'whatsapp', offerId: offer.id }, dir);
+
+    assert.equal(adCreative.objective, 'whatsapp');
+    assert.equal(adCreative.channel, 'instagram_feed');
+    assert.equal(adCreative.offerId, offer.id);
+    assert.equal(adCreative.offerName, 'Rodízio');
+    assert.equal(adCreative.contentTopic.source, 'ad_creative');
+    assert.match(adCreative.contentTopic.objective, /anúncio pago/i);
+    assert.match(adCreative.image.prompt, /Rodízio/);
+    assert.equal(adCreative.variations.length, 0);
+    // Genuinely a different shape from organic content — no scheduling or
+    // approval concept applies to an ad creative.
+    assert.equal('scheduledDate' in adCreative, false);
+    assert.equal('approval' in adCreative, false);
+    assert.equal('publish' in adCreative, false);
+  });
+});
+
+test('generateAdCreative without an offer produces an institutional ad creative instead of failing', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-institucional', name: 'Boss Pizzaria' }, dir);
+
+    const adCreative = await generateAdCreative('anuncio-institucional', { objective: 'whatsapp' }, dir);
+
+    assert.equal(adCreative.offerId, null);
+    assert.equal(adCreative.contentTopic.source, 'ad_creative');
+    assert.match(adCreative.title, /Boss Pizzaria/);
+  });
+});
+
+test('an institutional ad creative (no offer linked) gets a real hook title based on the ad objective, instead of forcing the raw project name — same problem goal topics and special-date posts already had, now closed for the ad-creative pipeline too', async () => {
+  await withTempProject(async (dir) => {
+    // The project's own display name deliberately isn't the real brand
+    // name, mirroring a real case: "CASA DE EMBALAGEM" is a generic project
+    // label, the actual brand is "Hygi Comércio" — forcing project.name as
+    // a literal image headline was doubly wrong here, not just repetitive.
+    await createCentralProject({ projectId: 'anuncio-institucional-titulo', name: 'CASA DE EMBALAGEM' }, dir);
+    const adCreative = await generateAdCreative('anuncio-institucional-titulo', { objective: 'engagement' }, dir);
+    assert.equal(adCreative.offerId, null);
+
+    let receivedPrompt = null;
+    await enrichAdCreativeWithRealImage(adCreative, { name: 'CASA DE EMBALAGEM', mode: 'semi_automatic', rules: { project: [] } }, 'anuncio-institucional-titulo', {
+      imageGenerator: async (payload) => {
+        receivedPrompt = payload.content.image.prompt;
+        return { url: 'https://cdn.example.com/anuncio.png', mimeType: 'image/png' };
+      },
+    });
+
+    assert.doesNotMatch(receivedPrompt, /Título exato: CASA DE EMBALAGEM/i, 'must not force the raw project name as the whole headline');
+    assert.match(receivedPrompt, /gancho ou pergunta específica sobre "Engajamento"/i, 'must build a real hook keyed off the ad\'s real objective label');
+  });
+});
+
+test('enrichAdCreativeWithRealImage attaches the real image and the 3 angle-based copy variations, and persists them to disk', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-enriquecido', name: 'Boss Pizzaria' }, dir);
+    const adCreative = await generateAdCreative('anuncio-enriquecido', { objective: 'whatsapp' }, dir);
+
+    let receivedPrompt = null;
+    await enrichAdCreativeWithRealImage(adCreative, { name: 'Boss Pizzaria', mode: 'semi_automatic', rules: { project: [] } }, 'anuncio-enriquecido', {
+      imageGenerator: async (payload) => {
+        receivedPrompt = payload.content.image.prompt;
+        return { url: 'https://cdn.example.com/anuncio.png', mimeType: 'image/png' };
+      },
+      adCopyGenerator: async () => ([
+        { angle: 'dor', headline: 'Cansou de complicar o jantar?', primaryText: 'A Boss resolve rápido.', cta: 'Chame no WhatsApp' },
+        { angle: 'desejo', headline: 'Pizza quentinha em minutos', primaryText: 'Peça agora e relaxe.', cta: 'Chame no WhatsApp' },
+        { angle: 'urgencia', headline: 'Hoje tem rodízio', primaryText: 'Só até acabar o forno ligado.', cta: 'Chame no WhatsApp' },
+      ]),
+    });
+
+    assert.match(receivedPrompt, /ANÚNCIO PAGO/);
+    assert.equal(adCreative.image.url, 'https://cdn.example.com/anuncio.png');
+    assert.equal(adCreative.image.generating, false);
+    assert.equal(adCreative.variations.length, 3);
+    assert.deepEqual(adCreative.variations.map((v) => v.angle), ['dor', 'desejo', 'urgencia']);
+    assert.equal(adCreative.imageGenerationError, null);
+    assert.equal(adCreative.copyGenerationError, null);
+
+    const persisted = JSON.parse(await readFile(adCreative.filePath, 'utf-8'));
+    assert.equal(persisted.variations.length, 3);
+    assert.equal(persisted.image.url, 'https://cdn.example.com/anuncio.png');
+  });
+});
+
+test('listAdCreatives and deleteAdCreative round-trip real files on disk', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-lista', name: 'Boss Pizzaria' }, dir);
+    const a = await generateAdCreative('anuncio-lista', { objective: 'whatsapp' }, dir);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const b = await generateAdCreative('anuncio-lista', { objective: 'whatsapp' }, dir);
+
+    const listed = await listAdCreatives('anuncio-lista', dir);
+    assert.equal(listed.length, 2);
+    assert.equal(listed[0].adCreativeId, b.adCreativeId, 'newest first');
+
+    await deleteAdCreative('anuncio-lista', a.adCreativeId, dir);
+    const afterDelete = await listAdCreatives('anuncio-lista', dir);
+    assert.equal(afterDelete.length, 1);
+    assert.equal(afterDelete[0].adCreativeId, b.adCreativeId);
+  });
+});
+
+test('listAdCreatives returns an empty list for a project that never generated an ad creative', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-vazio', name: 'Boss Pizzaria' }, dir);
+    assert.deepEqual(await listAdCreatives('anuncio-vazio', dir), []);
+  });
+});
+
+test('generateAdCreative accepts a Story channel with the right dimensions, and exposes all 6 real Meta objectives', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-story', name: 'Boss Pizzaria' }, dir);
+
+    const story = await generateAdCreative('anuncio-story', { objective: 'sales', channel: 'instagram_story' }, dir);
+    assert.equal(story.channel, 'instagram_story');
+    assert.equal(story.image.aspectRatio, 'portrait');
+    assert.equal(story.objectiveLabel, 'Vendas/Conversão');
+
+    const feed = await generateAdCreative('anuncio-story', { objective: 'engagement', channel: 'instagram_feed' }, dir);
+    assert.equal(feed.channel, 'instagram_feed');
+    assert.equal(feed.objectiveLabel, 'Engajamento');
+
+    for (const objective of ['whatsapp', 'awareness', 'engagement', 'leads', 'sales', 'app_promotion']) {
+      const created = await generateAdCreative('anuncio-story', { objective }, dir);
+      assert.ok(created.objectiveLabel, `expected a label for objective "${objective}"`);
+    }
+  });
+});
+
+test('the operator\'s free-text idea is folded into the creative brief differently depending on noteMode', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-nota', name: 'Boss Pizzaria' }, dir);
+
+    const recomendacao = await generateAdCreative('anuncio-nota', {
+      objective: 'whatsapp',
+      note: 'por menos de R$5 por dia você pode movimentar seu Instagram',
+      noteMode: 'recomendacao',
+    }, dir);
+    assert.match(recomendacao.contentTopic.objective, /inspiração adicional/i);
+    assert.match(recomendacao.contentTopic.objective, /R\$5 por dia/);
+    assert.equal(recomendacao.contentTopic.adNoteMode, 'recomendacao');
+
+    const baseTotal = await generateAdCreative('anuncio-nota', {
+      objective: 'whatsapp',
+      note: 'por menos de R$5 por dia você pode movimentar seu Instagram',
+      noteMode: 'base_total',
+    }, dir);
+    assert.match(baseTotal.contentTopic.objective, /base totalmente/i);
+    assert.equal(baseTotal.contentTopic.adNoteMode, 'base_total');
+  });
+});
+
+test('regenerateAdCreative refreshes the image references from an already-generated ad creative on disk', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-regen', name: 'Boss Pizzaria' }, dir);
+    const created = await generateAdCreative('anuncio-regen', { objective: 'whatsapp' }, dir);
+
+    const reloaded = await regenerateAdCreative('anuncio-regen', created.adCreativeId, dir);
+    assert.equal(reloaded.adCreativeId, created.adCreativeId);
+    assert.ok(Array.isArray(reloaded.image.references));
+  });
+});
+
+test('a "Pedido de alteração" note on an existing ad creative triggers a targeted image edit; regenerating with no note does not, and copy variations are left untouched either way', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'anuncio-editar', name: 'Boss Pizzaria' }, dir);
+    const adCreative = await generateAdCreative('anuncio-editar', { objective: 'whatsapp' }, dir);
+    await enrichAdCreativeWithRealImage(adCreative, { name: 'Boss Pizzaria', mode: 'semi_automatic', rules: { project: [] } }, 'anuncio-editar', {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
+      adCopyGenerator: async () => ([
+        { angle: 'dor', angleLabel: 'Dor', headline: 'h', primaryText: 'p', description: 'd', cta: 'c' },
+      ]),
+    });
+    assert.equal(adCreative.variations.length, 1);
+
+    const withNoteCalls = [];
+    const reloadedForEdit = await regenerateAdCreative('anuncio-editar', adCreative.adCreativeId, dir);
+    await enrichAdCreativeWithRealImage(reloadedForEdit, { name: 'Boss Pizzaria', mode: 'semi_automatic', rules: { project: [] } }, 'anuncio-editar', {
+      imageGenerator: async (payload) => {
+        withNoteCalls.push(payload);
+        return { url: 'https://cdn.example.com/edited.png', mimeType: 'image/png' };
+      },
+      note: 'aumentar o preço',
+      skipCopy: true,
+    });
+    assert.equal(withNoteCalls[0].targetedEdit, true);
+    assert.equal(reloadedForEdit.variations.length, 1, 'copy variations must survive an image-only regenerate');
+
+    const withoutNoteCalls = [];
+    const reloadedForFresh = await regenerateAdCreative('anuncio-editar', adCreative.adCreativeId, dir);
+    await enrichAdCreativeWithRealImage(reloadedForFresh, { name: 'Boss Pizzaria', mode: 'semi_automatic', rules: { project: [] } }, 'anuncio-editar', {
+      imageGenerator: async (payload) => {
+        withoutNoteCalls.push(payload);
+        return { url: 'https://cdn.example.com/fresh.png', mimeType: 'image/png' };
+      },
+      skipCopy: true,
+    });
+    assert.equal(withoutNoteCalls[0].targetedEdit, false);
+  });
+});
+
+test('withProjectLock now guards against a second OS process too, via a real lock file, not just in-memory serialization', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'lock-teste', name: 'Boss Pizzaria' }, dir);
+    const paths = getCentralPaths(dir, 'lock-teste');
+    const lockPath = join(paths.projectDir, '.lock');
+
+    // A lock file left behind by a process that's still genuinely alive (a
+    // slow Raio-X call, or literally a second server process) must block a
+    // concurrent write — this is the actual cross-process race the file
+    // lock exists to close, simulated here by planting the lock by hand
+    // instead of spawning a second Node process.
+    await writeFile(lockPath, 'other-process\n' + new Date().toISOString());
+    let resolved = false;
+    const pending = saveProjectOffer('lock-teste', { name: 'Pizza Grande' }, dir).then((offer) => {
+      resolved = true;
+      return offer;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(resolved, false, 'must not write while a fresh lock file from another holder still exists');
+
+    await rm(lockPath, { force: true });
+    const { offer } = await pending;
+    assert.equal(resolved, true);
+    assert.equal(offer.name, 'Pizza Grande');
+
+    // A lock file abandoned by a crashed process (old mtime, nobody left to
+    // release it) must eventually be reclaimed instead of blocking forever.
+    await writeFile(lockPath, 'crashed-process\n' + new Date(0).toISOString());
+    const staleMtime = new Date(Date.now() - 5 * 60 * 1000);
+    await utimes(lockPath, staleMtime, staleMtime);
+    const { offer: offerAfterStaleLock } = await saveProjectOffer('lock-teste', { name: 'Pizza Média' }, dir);
+    assert.equal(offerAfterStaleLock.name, 'Pizza Média');
+  });
+});
+
+const TINY_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+async function writeTinyPngFile(path) {
+  const base64 = TINY_PNG_DATA_URL.split(',')[1];
+  await writeFile(path, Buffer.from(base64, 'base64'));
+}
+
+test('registerSegmentTemplate/loadSegmentTemplate/listSegmentTemplates round-trip real files on disk', async () => {
+  await withTempProject(async (dir) => {
+    const sourceFeed = join(dir, 'source-feed.png');
+    const sourceStory = join(dir, 'source-story.png');
+    await writeTinyPngFile(sourceFeed);
+    await writeTinyPngFile(sourceStory);
+
+    assert.deepEqual(await listSegmentTemplates(dir), [], 'no templates registered yet — empty list, not an error');
+    assert.equal(await loadSegmentTemplate('embalagens', dir), null);
+
+    const template = await registerSegmentTemplate('embalagens', {
+      label: 'Embalagens',
+      pieces: [
+        { key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', angleNote: 'atacado e varejo', sourceImagePath: sourceFeed },
+        { key: 'produtos', label: 'Destaque Produtos', channel: 'instagram_story', angleNote: 'vitrine de produtos', sourceImagePath: sourceStory },
+      ],
+    }, dir);
+    assert.equal(template.segmentId, 'embalagens');
+    assert.equal(template.pieces.length, 2);
+
+    const loaded = await loadSegmentTemplate('embalagens', dir);
+    assert.equal(loaded.pieces.length, 2);
+    const feedPiece = loaded.pieces.find((piece) => piece.key === 'sell-products');
+    assert.ok(feedPiece.imageAbsolutePath.endsWith(join('images', 'sell-products.png')));
+    const storedBytes = await readFile(feedPiece.imageAbsolutePath);
+    assert.deepEqual(storedBytes, Buffer.from(TINY_PNG_DATA_URL.split(',')[1], 'base64'), 'the copied file must be byte-identical to the source');
+
+    const listed = await listSegmentTemplates(dir);
+    assert.deepEqual(listed, [{
+      segmentId: 'embalagens',
+      label: 'Embalagens',
+      pieceCount: 2,
+      pieces: [
+        { key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', imagePath: 'images/sell-products.png' },
+        { key: 'produtos', label: 'Destaque Produtos', channel: 'instagram_story', imagePath: 'images/produtos.png' },
+      ],
+    }], 'listSegmentTemplates now includes the full piece list so the dashboard can render the fixed grid/highlight images directly');
+  });
+});
+
+test('enrichSegmentTemplateItemsForProspect adapts a registered template with a targeted edit, using the templateEditBasePath instead of any in-project lookup, and the note carries the project\'s real extracted logo colors', async () => {
+  await withTempProject(async (dir) => {
+    const sourceFeed = join(dir, 'source-feed.png');
+    await writeTinyPngFile(sourceFeed);
+    await registerSegmentTemplate('embalagens', {
+      label: 'Embalagens',
+      pieces: [{ key: 'sell_products', label: 'Venda direta', channel: 'instagram_feed', angleNote: 'atacado e varejo', sourceImagePath: sourceFeed }],
+    }, dir);
+
+    await createCentralProject({ projectId: 'prospect-embalagens', name: 'Nova Embalagens Prospect' }, dir);
+    // The real path is saveProjectAsset(logo)'s AI color analyzer, not
+    // configured in this unit test — stamp the field directly, same pattern
+    // used across this suite whenever a test only needs the field to exist.
+    const paths = getCentralPaths(dir, 'prospect-embalagens');
+    const projectJson = JSON.parse(await readFile(paths.projectPath, 'utf-8'));
+    projectJson.brandIdentity.extractedColors = ['#123456', '#abcdef'];
+    await writeFile(paths.projectPath, JSON.stringify(projectJson, null, 2));
+
+    const template = await loadSegmentTemplate('embalagens', dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'prospect-embalagens');
+    const items = template.pieces.map((piece) => {
+      const item = buildSegmentTemplateContentItem(piece, project, paths);
+      item.templateEditBasePath = piece.imageAbsolutePath;
+      return item;
+    });
+
+    const calls = [];
+    await enrichSegmentTemplateItemsForProspect(items, project, 'prospect-embalagens', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/adaptado.png', mimeType: 'image/png' };
+      },
+      note: 'Troque a paleta de cor de fundo original pela nova paleta baseada na logo anexada: #123456, #abcdef.',
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].content.templateEditBasePath, items[0].templateEditBasePath);
+    assert.equal(calls[0].targetedEdit, true);
+    assert.match(calls[0].note, /#123456, #abcdef/);
+    assert.equal(items[0].image.url, 'https://cdn.example.com/adaptado.png');
+    assert.equal(items[0].image.generatedSource, 'ai');
+    assert.equal(items[0].imageGenerationError, null);
+  });
+});
+
+test('enqueueSegmentTemplateAdaptation builds items for every piece and never invents a palette when the logo has no extracted colors yet', async () => {
+  await withTempProject(async (dir) => {
+    const sourceFeed = join(dir, 'source-feed.png');
+    const sourceStory = join(dir, 'source-story.png');
+    await writeTinyPngFile(sourceFeed);
+    await writeTinyPngFile(sourceStory);
+    await registerSegmentTemplate('embalagens', {
+      label: 'Embalagens',
+      pieces: [
+        { key: 'sell-products', label: 'Venda direta', channel: 'instagram_feed', angleNote: 'atacado e varejo', sourceImagePath: sourceFeed },
+        { key: 'produtos', label: 'Destaque Produtos', channel: 'instagram_story', angleNote: 'vitrine de produtos', sourceImagePath: sourceStory },
+      ],
+    }, dir);
+    await createCentralProject({ projectId: 'prospect-sem-cor', name: 'Prospect Sem Cor Extraída' }, dir);
+
+    const calls = [];
+    enqueueSegmentTemplateAdaptation('prospect-sem-cor', 'embalagens', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: `https://cdn.example.com/${calls.length}.png`, mimeType: 'image/png' };
+      },
+    }, dir);
+
+    for (let i = 0; i < 50 && calls.length < 2; i += 1) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(calls.length, 2);
+    assert.doesNotMatch(calls[0].note, /#[0-9a-fA-F]{6}/, 'must not invent a hex palette when the logo was never colour-analyzed');
+    const content = await listProjectContent('prospect-sem-cor', dir);
+    const channels = content.map((item) => item.channel).sort();
+    assert.deepEqual(channels, ['instagram_feed', 'instagram_story']);
+    assert.ok(content.every((item) => item.image.generatedSource === 'ai'));
   });
 });
