@@ -4388,6 +4388,21 @@ test('approveContent works with no queueSync provided (back-compat)', async () =
   });
 });
 
+test('approveContent still approves the item when mediaUploader throws, recording the error instead of failing the approve', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sync-upload-fail', name: 'Sync Upload Fail', handle: '@syncuploadfail', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('sync-upload-fail', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
+
+    const content = await approveContent('sync-upload-fail', batch.items[0].contentId, dir, batch.batchId, {
+      mediaUploader: async () => { throw new Error('imgBB is down'); },
+    });
+
+    assert.equal(content.status, 'aprovado');
+    assert.equal(content.publish.mediaUrl, null);
+    assert.equal(content.publish.mediaUploadError, 'imgBB is down');
+  });
+});
+
 test('regenerateContentDay calls queueSync with a remove when leaving aprovado status', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sync-regen', name: 'Sync Regen', handle: '@syncregen', approvalEmail: 'a@example.com' }, dir);

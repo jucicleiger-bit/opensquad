@@ -17,6 +17,7 @@ import {
 } from './content-central-personas.js';
 import {
   animateContentForReels,
+  applyExternalPublishResult,
   buildApprovalPayload,
   approveContent,
   enqueueSegmentTemplateAdaptation,
@@ -74,7 +75,7 @@ import {
   updateProjectImageRules,
   validateMetaToken,
 } from './content-central.js';
-import { upsertQueueItem, removeQueueItem, pullQueue } from './gaveta-sync.js';
+import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
 
 export { CONTENT_CENTRAL_PERSONAS };
 
@@ -116,10 +117,20 @@ export async function publishWithGaveteSync(projectId, contentId, targetDir, bat
   const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
   const pull = options.pullQueue || pullQueue;
   const upsert = options.upsertQueueItem || upsertQueueItem;
+  const readQueue = options.readQueueItem || readQueueItem;
   if (gaveteDir) await pull(gaveteDir);
-  const content = await publishSingleContent(projectId, contentId, targetDir, {
-    metaPublisher: options.metaPublisher || ((payload) => publishContentToInstagram(payload, targetDir)),
-  }, batchId);
+
+  // The gaveta is shared state — GitHub Actions' hourly sweep may have
+  // already published this exact item moments before this button was
+  // clicked. If the freshly-pulled queue item already shows a real publish,
+  // sync that fact onto the local record instead of publishing again (which
+  // would be a real duplicate post — the whole reason this feature exists).
+  const existingQueueItem = gaveteDir ? await readQueue(gaveteDir, projectId, contentId) : null;
+  const content = existingQueueItem?.publish?.realPublished
+    ? await applyExternalPublishResult(projectId, contentId, targetDir, batchId, existingQueueItem.publish)
+    : await publishSingleContent(projectId, contentId, targetDir, {
+        metaPublisher: options.metaPublisher || ((payload) => publishContentToInstagram(payload, targetDir)),
+      }, batchId);
   if (gaveteDir) {
     await upsert(gaveteDir, projectId, content.contentId, {
       channel: content.channel,
@@ -516,8 +527,13 @@ async function handleRequest(req, res, targetDir, context = {}) {
     try {
       await syncTokenSecretsToGitHub(projectId, {
         token: body.token,
-        instagramUserId: body.account?.instagramUserId,
-        pageId: body.account?.pageId,
+        // The real frontend (content-central-app/src/api/client.ts) only
+        // ever sends { token, handle } — never an `account` object. The real
+        // IDs live on the project record, populated by validateMetaToken
+        // inside saveProjectToken above; read them from its return value,
+        // not from a shape the client never sends.
+        instagramUserId: project.instagram?.instagramUserId,
+        pageId: project.instagram?.pageId,
       }, { execFileAsync: execFileAsyncForRoutes });
     } catch (err) {
       // The token is already saved to disk at this point — a gh failure
@@ -3688,9 +3704,17 @@ async function publishContentToInstagram({ content, project }, targetDir) {
   let lastError;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      const mediaUrl = isVideoChannel
-        ? await uploadGeneratedVideoPublicly(content.video.localPath)
-        : await uploadGeneratedImagePublicly(localImagePath);
+      // approveContent's mediaUploader hook already uploaded and validated
+      // this exact file at approve time — reuse that URL on the first
+      // attempt instead of uploading it again (saves a redundant upload and
+      // keeps this publish's mediaUrl from drifting from what's in the
+      // gaveta). A retry (attempt > 1) still uploads fresh, in case the
+      // reused URL itself was the problem.
+      const mediaUrl = attempt === 1 && content.publish?.mediaUrl
+        ? content.publish.mediaUrl
+        : isVideoChannel
+          ? await uploadGeneratedVideoPublicly(content.video.localPath)
+          : await uploadGeneratedImagePublicly(localImagePath);
       await delay(settleDelayMs);
       const payload = {
         publish_targets: [{

@@ -45,6 +45,7 @@ import {
   registerSegmentTemplate,
   saveProjectAsset,
   saveProjectOffer,
+  saveProjectToken,
 } from '../src/content-central.js';
 
 async function withServer(fn, options = {}) {
@@ -1541,6 +1542,58 @@ test('publishWithGaveteSync pulls the gaveta first and pushes the published resu
       const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'gaveta-publish', `${contentId}.json`), 'utf-8'));
       assert.equal(raw.publish.realPublished, true);
       await rm(checkDir, { recursive: true, force: true });
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_DIR;
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+test('publishWithGaveteSync skips the real publish and syncs local state when the pulled gaveta already shows the item published', async () => {
+  await withGaveta(async ({ workDir, bareDir }) => {
+    const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+    try {
+      await createCentralProject({ projectId: 'gaveta-already-published', name: 'Gaveta Already Published' }, dir);
+      const batch = await generateContentSchedulePlan('gaveta-already-published', {
+        days: 1,
+        startDate: '2026-08-10',
+        formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+      }, dir);
+      const contentId = batch.items[0].contentId;
+      await approveContent('gaveta-already-published', contentId, dir, batch.batchId);
+
+      // Simulate GitHub Actions' hourly sweep having already published this
+      // item — the gaveta queue item already carries a real publish result.
+      await upsertQueueItem(workDir, 'gaveta-already-published', contentId, {
+        channel: 'instagram_feed',
+        caption: 'x',
+        mediaUrl: 'https://i.ibb.co/x.jpg',
+        scheduledDate: '2026-08-10',
+        scheduledTime: '09:00',
+        publish: {
+          realPublished: true,
+          publishedAt: '2026-08-10T09:00:05.000Z',
+          metaMediaId: 'media-from-actions',
+          permalink: 'https://instagram.com/p/from-actions',
+          error: null,
+        },
+      });
+
+      process.env.OPENSQUAD_GAVETA_DIR = workDir;
+      const content = await publishWithGaveteSync('gaveta-already-published', contentId, dir, batch.batchId, {
+        metaPublisher: async () => { assert.fail('metaPublisher must not be called when the gaveta already shows this item published'); },
+      });
+
+      assert.equal(content.publish.realPublished, true);
+      assert.equal(content.publish.metaMediaId, 'media-from-actions');
+      assert.equal(content.publish.permalink, 'https://instagram.com/p/from-actions');
+
+      // The local content file on disk must reflect it too, not just the
+      // returned object — this is what stops a later "Publicar agora" click
+      // from ever reaching this branch again.
+      const onDisk = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+      assert.equal(onDisk.publish.realPublished, true);
+      assert.equal(onDisk.publish.metaMediaId, 'media-from-actions');
     } finally {
       delete process.env.OPENSQUAD_GAVETA_DIR;
       await rm(dir, { recursive: true, force: true });
@@ -3292,12 +3345,25 @@ test('startPublishScheduler does not start the interval when OPENSQUAD_AUTO_PUBL
 test('startPublishScheduler still starts the interval when OPENSQUAD_AUTO_PUBLISH_SCHEDULER is unset and OPENSQUAD_ENABLE_REAL_PUBLISHING=true', async () => {
   process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
   delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
+  // Real publishing is enabled here, so the interval this starts will
+  // actually sweep targetDir for due, approved content and try to publish
+  // it for real. Must never point at process.cwd() — in the main OPENSQUAD
+  // checkout (not this worktree) that's the real content-central tree with
+  // 6 live client projects and live Meta tokens.
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
   try {
-    const timer = startPublishScheduler(process.cwd());
+    const timer = startPublishScheduler(dir);
     assert.notEqual(timer, null);
     clearInterval(timer);
   } finally {
     delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+    // startPublishScheduler fires one sweep immediately (not just on the
+    // interval) — clearInterval only stops future ticks, so that first
+    // sweep's async listCentralProjects()/writeJson calls can still be
+    // in flight against `dir` right here. maxRetries/retryDelay lets rm's
+    // own recursive-delete retry loop absorb that transient ENOTEMPTY/ENOENT
+    // race instead of the cleanup itself failing the test.
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
 
@@ -3343,13 +3409,27 @@ test('POST .../token calls syncTokenSecretsToGitHub after saving', async () => {
         method: 'POST',
         body: JSON.stringify({ projectId: 'gaveta-token', name: 'Gaveta Token', handle: '@gavetatoken', approvalEmail: 'a@example.com' }),
       });
+      // Seed the project with a real Instagram User ID / Page ID the same
+      // way validateMetaToken's real branch would (see
+      // content-central.test.js's validateMetaToken tests for the shape) —
+      // the real frontend (content-central-app/src/api/client.ts) only ever
+      // sends { token, handle } on this route, never an `account` object, so
+      // this must not come from the request body.
+      await saveProjectToken('gaveta-token', {
+        token: 'EAAB-prior-token',
+        expiresAt: '2026-12-01T00:00:00.000Z',
+        account: { handle: '@gavetatoken', instagramUserId: '123', pageId: '456' },
+      }, dir);
       // expiresAt is supplied (unlike the brief's literal test body) so the
       // route takes the local-validation branch instead of calling the real
       // validateMetaToken -> graph.facebook.com, which would otherwise make
-      // a real network call in this test — see task-7-report.md.
+      // a real network call in this test — see task-7-report.md. No
+      // top-level `handle` and no `account` in the body — saveProjectToken
+      // preserves the instagramUserId/pageId seeded above when neither is
+      // supplied on this call, exactly like a real re-save of the same token.
       const res = await request(server, '/api/projects/gaveta-token/token', {
         method: 'POST',
-        body: JSON.stringify({ token: 'EAAB...', expiresAt: '2026-12-01T00:00:00.000Z', account: { handle: '@x', instagramUserId: '123', pageId: '456' } }),
+        body: JSON.stringify({ token: 'EAAB...', expiresAt: '2026-12-01T00:00:00.000Z' }),
       });
 
       assert.equal(res.response.status, 200);
@@ -3357,6 +3437,8 @@ test('POST .../token calls syncTokenSecretsToGitHub after saving', async () => {
       const secretCalls = calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'secret');
       assert.equal(secretCalls.length, 3);
       assert.ok(secretCalls.every((c) => !c.args.includes('EAAB...')));
+      assert.ok(secretCalls.some((c) => c.args.includes('META_IG_USER_ID_GAVETA_TOKEN') && c.input === '123'));
+      assert.ok(secretCalls.some((c) => c.args.includes('META_PAGE_ID_GAVETA_TOKEN') && c.input === '456'));
       serverModule.__setExecFileAsyncForTests(originalExecFileAsync);
     } finally {
       delete process.env.OPENSQUAD_GAVETA_REPO;
@@ -3378,7 +3460,7 @@ test('POST .../token still returns 200 with a githubSyncWarning when the GitHub 
       });
       const res = await request(server, '/api/projects/gaveta-token-fail/token', {
         method: 'POST',
-        body: JSON.stringify({ token: 'EAAB...', expiresAt: '2026-12-01T00:00:00.000Z', account: { handle: '@x', instagramUserId: '123', pageId: '456' } }),
+        body: JSON.stringify({ token: 'EAAB...', expiresAt: '2026-12-01T00:00:00.000Z' }),
       });
 
       assert.equal(res.response.status, 200);
