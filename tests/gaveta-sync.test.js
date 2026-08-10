@@ -55,10 +55,17 @@ test('upsertQueueItem writes the item and pushes it to the remote', async () => 
 test('removeQueueItem deletes the item and pushes the removal', async () => {
   await withGaveta(async ({ workDir, bareDir, checkDir }) => {
     await upsertQueueItem(workDir, 'boss-pizzaria', 'content-1', { channel: 'instagram_feed', caption: 'x', mediaUrl: null, scheduledDate: '2026-08-10', scheduledTime: '18:00' });
-    await removeQueueItem(workDir, 'boss-pizzaria', 'content-1');
 
+    // Verify the file was pushed to the remote
     await execFileAsync('git', ['clone', bareDir, checkDir]);
-    await assert.rejects(readFile(join(checkDir, 'queue', 'boss-pizzaria', 'content-1.json'), 'utf-8'));
+    const preRemovalContent = JSON.parse(await readFile(join(checkDir, 'queue', 'boss-pizzaria', 'content-1.json'), 'utf-8'));
+    assert.equal(preRemovalContent.caption, 'x');
+
+    // Remove the item and verify the removal was pushed
+    await removeQueueItem(workDir, 'boss-pizzaria', 'content-1');
+    const checkDir2 = join(checkDir, '..', 'check2');
+    await execFileAsync('git', ['clone', bareDir, checkDir2]);
+    await assert.rejects(readFile(join(checkDir2, 'queue', 'boss-pizzaria', 'content-1.json'), 'utf-8'));
   });
 });
 
