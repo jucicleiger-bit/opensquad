@@ -76,6 +76,16 @@ async function withGaveta(fn) {
   // upsertQueueItem's `git push` has a branch to push.
   await execFileAsync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: workDir });
   await execFileAsync('git', ['push', 'origin', 'HEAD:main'], { cwd: workDir });
+  // `git init --bare` leaves the bare repo's own HEAD pointing at
+  // refs/heads/master (the local default branch name) even though the only
+  // branch that actually gets pushed here is `main` — a bug caught live
+  // during Task 1's fix loop: any *fresh* clone of the bare repo (as the
+  // tests below do, to verify what the "remote" really has) checks out
+  // whatever HEAD points to, so it silently checked out the nonexistent
+  // `master` and came back empty even when `main` had the real commits.
+  // Repointing HEAD makes a fresh clone check out the branch that's
+  // actually in use.
+  await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: bareDir });
   await execFileAsync('git', ['checkout', 'main'], { cwd: workDir });
   try {
     await fn({ workDir, bareDir, checkDir });
@@ -483,6 +493,16 @@ export async function withGaveta(fn) {
   await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: workDir });
   await execFileAsync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: workDir });
   await execFileAsync('git', ['push', 'origin', 'HEAD:main'], { cwd: workDir });
+  // `git init --bare` leaves the bare repo's own HEAD pointing at
+  // refs/heads/master (the local default branch name) even though the only
+  // branch that actually gets pushed here is `main` — a bug caught live
+  // during Task 1's fix loop: any *fresh* clone of the bare repo (as the
+  // tests below do, to verify what the "remote" really has) checks out
+  // whatever HEAD points to, so it silently checked out the nonexistent
+  // `master` and came back empty even when `main` had the real commits.
+  // Repointing HEAD makes a fresh clone check out the branch that's
+  // actually in use.
+  await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: bareDir });
   await execFileAsync('git', ['checkout', 'main'], { cwd: workDir });
   try {
     await fn(workDir, bareDir);
