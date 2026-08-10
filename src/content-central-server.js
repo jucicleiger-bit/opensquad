@@ -74,7 +74,7 @@ import {
   updateProjectImageRules,
   validateMetaToken,
 } from './content-central.js';
-import { upsertQueueItem, removeQueueItem } from './gaveta-sync.js';
+import { upsertQueueItem, removeQueueItem, pullQueue } from './gaveta-sync.js';
 
 export { CONTENT_CENTRAL_PERSONAS };
 
@@ -103,6 +103,34 @@ function resolveGaveteSync(targetDir, projectId) {
       return localPath ? uploadGeneratedImagePublicly(localPath) : null;
     },
   };
+}
+
+// Manual "Publicar agora" still runs the real publish directly from this
+// PC, but the gaveta is shared state now — GitHub Actions' hourly sweep
+// (or another operator) might publish the same item moments before this
+// button is clicked. Pull first so publishSingleContent sees the latest
+// state, push the published result after so the next sweep sees it's done
+// and skips it. Extracted from the route so it's directly unit-testable
+// with a fake metaPublisher — see tests/content-central-server.test.js.
+export async function publishWithGaveteSync(projectId, contentId, targetDir, batchId, options = {}) {
+  const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
+  const pull = options.pullQueue || pullQueue;
+  const upsert = options.upsertQueueItem || upsertQueueItem;
+  if (gaveteDir) await pull(gaveteDir);
+  const content = await publishSingleContent(projectId, contentId, targetDir, {
+    metaPublisher: options.metaPublisher || ((payload) => publishContentToInstagram(payload, targetDir)),
+  }, batchId);
+  if (gaveteDir) {
+    await upsert(gaveteDir, projectId, content.contentId, {
+      channel: content.channel,
+      caption: content.caption.text,
+      mediaUrl: content.publish?.mediaUrl || null,
+      scheduledDate: content.scheduledDate,
+      scheduledTime: content.scheduledTime,
+      publish: content.publish,
+    });
+  }
+  return content;
 }
 
 const API_SUPPORTED_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story']);
@@ -814,9 +842,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
       return sendJson(res, 403, { error: 'Publicação real desligada. Defina OPENSQUAD_ENABLE_REAL_PUBLISHING=true no .env pra ativar.' });
     }
     const body = await readBody(req);
-    const content = await publishSingleContent(projectId, parts[4], targetDir, {
-      metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
-    }, body.batchId);
+    const content = await publishWithGaveteSync(projectId, parts[4], targetDir, body.batchId);
     return sendJson(res, 200, { content });
   }
 

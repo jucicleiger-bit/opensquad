@@ -8,6 +8,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import vm from 'node:vm';
 import { withGaveta } from './helpers/with-gaveta.js';
+import { upsertQueueItem } from '../src/gaveta-sync.js';
 import {
   animateImageForReelsWithFfmpeg,
   buildAiImageGenerationPrompt,
@@ -26,6 +27,7 @@ import {
   nousFalAspectRatioForChannel,
   normalizeProspectExtraction,
   openAiImageSizeForChannel,
+  publishWithGaveteSync,
   resolveContentImageAbsolutePath,
   startContentCentralServer,
   startPublishScheduler,
@@ -34,6 +36,7 @@ import {
   xaiAspectRatioForChannel,
 } from '../src/content-central-server.js';
 import {
+  approveContent,
   createCentralProject,
   generateCatalogSchedulePlan,
   generateContentSchedulePlan,
@@ -1507,6 +1510,38 @@ test('POST .../approve upserts the queue item into the configured gaveta', async
       });
     } finally {
       delete process.env.OPENSQUAD_GAVETA_DIR;
+    }
+  });
+});
+
+test('publishWithGaveteSync pulls the gaveta first and pushes the published result after', async () => {
+  await withGaveta(async ({ workDir, bareDir }) => {
+    const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+    try {
+      await createCentralProject({ projectId: 'gaveta-publish', name: 'Gaveta Publish' }, dir);
+      const batch = await generateContentSchedulePlan('gaveta-publish', {
+        days: 1,
+        startDate: '2026-08-10',
+        formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+      }, dir);
+      const contentId = batch.items[0].contentId;
+      await approveContent('gaveta-publish', contentId, dir, batch.batchId);
+      await upsertQueueItem(workDir, 'gaveta-publish', contentId, { channel: 'instagram_feed', caption: 'x', mediaUrl: 'https://i.ibb.co/x.jpg', scheduledDate: '2026-08-10', scheduledTime: '09:00' });
+
+      process.env.OPENSQUAD_GAVETA_DIR = workDir;
+      const content = await publishWithGaveteSync('gaveta-publish', contentId, dir, batch.batchId, {
+        metaPublisher: async () => ({ mediaId: 'media-1', permalink: 'https://instagram.com/p/abc' }),
+      });
+      assert.equal(content.publish.realPublished, true);
+
+      const checkDir = `${workDir}-check`;
+      await execFileAsync('git', ['clone', bareDir, checkDir]);
+      const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'gaveta-publish', `${contentId}.json`), 'utf-8'));
+      assert.equal(raw.publish.realPublished, true);
+      await rm(checkDir, { recursive: true, force: true });
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_DIR;
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
