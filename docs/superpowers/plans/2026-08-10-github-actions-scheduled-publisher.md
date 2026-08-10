@@ -1190,11 +1190,13 @@ No commit needed in `OPENSQUAD` itself for this task; its deliverable lives enti
 
 ## One-time setup (manual, after all tasks land)
 
-1. Create a fine-grained GitHub PAT scoped to just the `opensquad-gaveta` repo, "Secrets: write" permission. Put it in the local `.env` as `OPENSQUAD_GITHUB_TOKEN` (currently unused by any task above directly — `gh` CLI already authenticates via its own stored credentials; keep this var for documentation/future direct-API use, or drop it if `gh auth status` staying logged in is sufficient).
+1. Confirm `gh auth status` is logged in with a user/token that has "Secrets: write" access to the `opensquad-gaveta` repo — `gh secret set` (used by Task 7's sync) authenticates via `gh`'s own stored credentials, no separate `OPENSQUAD_GITHUB_TOKEN` env var is read by any code here.
 2. Set `OPENSQUAD_GAVETA_REPO=<you>/opensquad-gaveta` and `OPENSQUAD_GAVETA_DIR=<path to a local clone of it>` in `.env`.
 3. Clone `opensquad-gaveta` locally at that path: `gh repo clone <you>/opensquad-gaveta <OPENSQUAD_GAVETA_DIR>`.
-4. For each of the 6 existing projects, re-save its token once through the UI (or run `gh secret set META_TOKEN_<PROJECT> --repo <you>/opensquad-gaveta` manually) so Task 7's sync seeds all three secrets per project.
-5. Set `OPENSQUAD_AUTO_PUBLISH_SCHEDULER=false` in the local `.env` and restart the local server.
+4. From `OPENSQUAD_GAVETA_DIR`, run `gh auth setup-git` (or otherwise confirm `git push` works from that directory without a password prompt) — the automatic queue-sync commits/pushes triggered by approve/regenerate/delete (Task 2/3) run unattended from the local server process and will silently fail to reach GitHub without working push credentials.
+5. For each of the 6 existing projects, re-save its token once through the UI (or run `gh secret set META_TOKEN_<PROJECT> --repo <you>/opensquad-gaveta` manually) so Task 7's sync seeds all three secrets per project.
+6. Any content already approved-and-scheduled before this feature existed predates the gaveta and was never synced into it — it won't be picked up by the GitHub Actions sweep once the local scheduler below is disabled. Before disabling it, either re-approve each such pending item through the UI (which now triggers the gaveta sync via Task 2/3's hooks) or manually seed a matching queue item under `OPENSQUAD_GAVETA_DIR/queue/<projectId>/<contentId>.json`.
+7. Set `OPENSQUAD_AUTO_PUBLISH_SCHEDULER=false` in the local `.env` and restart the local server.
 
 ---
 
