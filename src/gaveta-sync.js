@@ -27,7 +27,18 @@ async function commitAndPush(gaveteDir, message) {
   } catch (err) {
     if (!/nothing to commit/.test(err.stdout || err.message || '')) throw err;
   }
-  await git(gaveteDir, ['pull', '--rebase']);
+  try {
+    await git(gaveteDir, ['pull', '--rebase']);
+  } catch (err) {
+    // A same-file conflict here would otherwise leave the clone stuck
+    // mid-rebase forever — every subsequent commit/pull throws until a
+    // human runs `git rebase --abort` by hand. Abort automatically so a
+    // conflict degrades to "this push failed, try again" (the same
+    // recoverable failure mode this function had before pull-rebase was
+    // added) instead of "every gaveta operation is now broken."
+    await git(gaveteDir, ['rebase', '--abort']).catch(() => {});
+    throw err;
+  }
   await git(gaveteDir, ['push']);
 }
 
