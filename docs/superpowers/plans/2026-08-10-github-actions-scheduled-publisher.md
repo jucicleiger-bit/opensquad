@@ -457,30 +457,11 @@ git commit -m "feat: add optional queueSync hook to approve/regenerate/delete"
 - Consumes: `upsertQueueItem`, `removeQueueItem` from `src/gaveta-sync.js` (Task 1); `options.queueSync`/`options.mediaUploader` on `approveContent`/`regenerateContentDay`/`regenerateContentGroup`/`deleteProjectContent` (Task 2); existing `uploadGeneratedImagePublicly`/`uploadGeneratedVideoPublicly` (`content-central-server.js:3495`, `3517`).
 - Produces: a `resolveGaveteSync(targetDir)` helper returning `{ queueSync, mediaUploader }` (or `{}` when `OPENSQUAD_GAVETA_DIR` isn't set — local dev without a gaveta configured keeps working exactly as before).
 
+**Note on test fixtures:** `content-central-server.test.js` has no existing `withTempProject`/`postJson`/fixture-builder helpers — its real pattern (see e.g. the `/content-group-regenerate` test already in the file) is `withServer(fn, options)` giving you `(dir, server)`, plain `request(server, path, { method, body })`, and building fixtures by calling `createCentralProject`/`generateContentSchedulePlan` from `content-central.js` (already imported at the top of this test file) directly against `dir` before hitting the route. Use that real pattern below, not invented helper names.
+
 - [ ] **Step 1: Write the failing test**
 
-```js
-// tests/content-central-server.test.js — add near existing route tests
-
-test('POST .../approve upserts the queue item when a gaveta dir is configured', async (t) => {
-  await withTempProject(async (dir) => {
-    const gaveteDir = await mkdtemp(join(tmpdir(), 'gaveta-route-'));
-    t.after(() => rm(gaveteDir, { recursive: true, force: true }));
-    process.env.OPENSQUAD_GAVETA_DIR = gaveteDir;
-    t.after(() => { delete process.env.OPENSQUAD_GAVETA_DIR; });
-
-    // ... existing test harness setup for createCentralProject + a draft batch (mirror an existing approve-route test) ...
-    const res = await request(server, 'POST', `/api/projects/${projectId}/content/${contentId}/approve`, {});
-    assert.equal(res.status, 200);
-    // Real git push isn't asserted here (gaveta-sync.test.js already covers
-    // that) — this test only proves the route calls queueSync/mediaUploader
-    // by stubbing them via the module's exported resolveGaveteSync in a
-    // real gaveta dir set up the same way as gaveta-sync.test.js's withGaveta.
-  });
-});
-```
-
-Because this route test needs a real local git remote to be meaningful (same setup as `gaveta-sync.test.js`'s `withGaveta`), write it by importing that helper pattern directly rather than re-deriving it — copy the `withGaveta` setup into a small shared test helper:
+Because this route test needs a real local git remote to be meaningful, add a shared helper both this file and `tests/gaveta-sync.test.js` (Task 1) import — this is the same bare-repo setup Task 1 already wrote inline; factor it out so the two test files don't drift:
 
 ```js
 // tests/helpers/with-gaveta.js
@@ -511,27 +492,53 @@ export async function withGaveta(fn) {
 }
 ```
 
-Then rewrite the route test to use it, and update `tests/gaveta-sync.test.js` (Task 1) to import `withGaveta` from this shared helper instead of its own local copy:
+Update `tests/gaveta-sync.test.js` (written in Task 1) to import `withGaveta` from this shared helper instead of its own local copy.
+
+Add this local fixture helper to `content-central-server.test.js` (near the top, alongside `withServer`/`request`) — used by this task and reused by Tasks 6 and 7:
+
+```js
+// Builds one approved-and-scheduled content item the same way the panel
+// does (create project -> generate a schedule plan -> approve one item
+// through the real route), for tests that exercise approve/publish/token
+// routes end to end.
+async function createApprovedItem(server, dir, projectId) {
+  await createCentralProject({ projectId, name: projectId }, dir);
+  const batch = await generateContentSchedulePlan(projectId, {
+    days: 1,
+    startDate: '2026-08-10',
+    formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+  }, dir);
+  const contentId = batch.items[0].contentId;
+  const approved = await request(server, `/api/projects/${projectId}/content/${contentId}/approve`, { method: 'POST' });
+  assert.equal(approved.response.status, 200);
+  return { contentId, batchId: batch.batchId };
+}
+```
+
+Now the route test itself:
 
 ```js
 test('POST .../approve upserts the queue item into the configured gaveta', async () => {
   await withGaveta(async (workDir, bareDir) => {
-    await withTempProject(async (dir) => {
-      process.env.OPENSQUAD_GAVETA_DIR = workDir;
-      const { projectId, contentId } = await setupApprovedRouteFixture(dir); // mirrors existing approve-route fixture setup in this file
-      const res = await postJson(`/api/projects/${projectId}/content/${contentId}/approve`, {}, dir);
-      assert.equal(res.status, 200);
+    process.env.OPENSQUAD_GAVETA_DIR = workDir;
+    try {
+      await withServer(async (dir, server) => {
+        const { contentId } = await createApprovedItem(server, dir, 'gaveta-approve-route');
 
-      const checkDir = `${workDir}-check`;
-      await execFileAsync('git', ['clone', bareDir, checkDir]);
-      const raw = JSON.parse(await readFile(join(checkDir, 'queue', projectId, `${contentId}.json`), 'utf-8'));
-      assert.equal(raw.publish.realPublished, false);
-      await rm(checkDir, { recursive: true, force: true });
+        const checkDir = `${workDir}-check`;
+        await execFileAsync('git', ['clone', bareDir, checkDir]);
+        const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'gaveta-approve-route', `${contentId}.json`), 'utf-8'));
+        assert.equal(raw.publish.realPublished, false);
+        await rm(checkDir, { recursive: true, force: true });
+      });
+    } finally {
       delete process.env.OPENSQUAD_GAVETA_DIR;
-    });
+    }
   });
 });
 ```
+
+(`execFileAsync` here is the same `promisify(execFile)` this test file would need at its top if not already present — add the import alongside the existing ones if missing.)
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -722,65 +729,90 @@ git commit -m "docs: document gaveta publisher env vars"
 - Test: `tests/content-central-server.test.js`
 
 **Interfaces:**
-- Consumes: `pullQueue`, `upsertQueueItem` from `src/gaveta-sync.js` (Task 1).
-- Produces: nothing new exported; behavior change only.
+- Consumes: `pullQueue`, `upsertQueueItem` from `src/gaveta-sync.js` (Task 1) — the test also calls `upsertQueueItem` directly to pre-seed the queue item, so add `import { upsertQueueItem } from '../src/gaveta-sync.js';` to this test file; `approveContent` from `content-central.js` (already exported, add it to this test file's existing `import { createCentralProject, ... } from '../src/content-central.js'` block).
+- Produces: `export async function publishWithGaveteSync(projectId, contentId, targetDir, batchId, options = {})` in `content-central-server.js` — extracted out of the route handler so it's directly callable from a test with a fake `metaPublisher`, with no real HTTP server and no real Meta subprocess involved. `options.metaPublisher`/`options.pullQueue`/`options.upsertQueueItem` default to the real ones; the route passes none (production always uses the real implementations).
+
+This function is unit-tested directly, not through the HTTP route — routing through `withServer` would call the real `publishContentToInstagram`, which shells out to `meta-publish-multi.js` and hits the real Meta Graph API; `startContentCentralServer` has no `metaPublisher` override today (only `imageGenerator` and similar), and adding one is out of this task's scope.
 
 - [ ] **Step 1: Write the failing test**
 
 ```js
-test('manual publish route pulls the gaveta first and pushes the published result after', async () => {
+test('publishWithGaveteSync pulls the gaveta first and pushes the published result after', async () => {
   await withGaveta(async (workDir, bareDir) => {
-    await withTempProject(async (dir) => {
-      process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
-      process.env.OPENSQUAD_GAVETA_DIR = workDir;
-      const { projectId, contentId } = await setupApprovedRouteFixture(dir); // same fixture as Task 3's route test
-      await upsertQueueItem(workDir, projectId, contentId, { channel: 'instagram_feed', caption: 'x', mediaUrl: 'https://i.ibb.co/x.jpg', scheduledDate: '2026-08-10', scheduledTime: '09:00' });
+    const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+    try {
+      await createCentralProject({ projectId: 'gaveta-publish', name: 'Gaveta Publish' }, dir);
+      const batch = await generateContentSchedulePlan('gaveta-publish', {
+        days: 1,
+        startDate: '2026-08-10',
+        formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+      }, dir);
+      const contentId = batch.items[0].contentId;
+      await approveContent('gaveta-publish', contentId, dir, batch.batchId);
+      await upsertQueueItem(workDir, 'gaveta-publish', contentId, { channel: 'instagram_feed', caption: 'x', mediaUrl: 'https://i.ibb.co/x.jpg', scheduledDate: '2026-08-10', scheduledTime: '09:00' });
 
-      const res = await postJson(`/api/projects/${projectId}/content/${contentId}/publish`, {}, dir);
-      assert.equal(res.status, 200);
+      process.env.OPENSQUAD_GAVETA_DIR = workDir;
+      const content = await publishWithGaveteSync('gaveta-publish', contentId, dir, batch.batchId, {
+        metaPublisher: async () => ({ mediaId: 'media-1', permalink: 'https://instagram.com/p/abc' }),
+      });
+      assert.equal(content.publish.realPublished, true);
 
       const checkDir = `${workDir}-check`;
       await execFileAsync('git', ['clone', bareDir, checkDir]);
-      const raw = JSON.parse(await readFile(join(checkDir, 'queue', projectId, `${contentId}.json`), 'utf-8'));
+      const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'gaveta-publish', `${contentId}.json`), 'utf-8'));
       assert.equal(raw.publish.realPublished, true);
       await rm(checkDir, { recursive: true, force: true });
-      delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+    } finally {
       delete process.env.OPENSQUAD_GAVETA_DIR;
-    });
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 ```
 
+(`execFileAsync` here is the same `promisify(execFile)` added to this test file's top in Task 3.)
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/content-central-server.test.js`
-Expected: FAIL — the gaveta copy still shows `realPublished: false` because the manual route never touches the gaveta today.
+Expected: FAIL — `publishWithGaveteSync` doesn't exist yet.
 
 - [ ] **Step 3: Write the implementation**
 
 ```js
 import { upsertQueueItem, removeQueueItem, pullQueue } from './gaveta-sync.js';
 
+export async function publishWithGaveteSync(projectId, contentId, targetDir, batchId, options = {}) {
+  const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
+  const pull = options.pullQueue || pullQueue;
+  const upsert = options.upsertQueueItem || upsertQueueItem;
+  if (gaveteDir) await pull(gaveteDir);
+  const content = await publishSingleContent(projectId, contentId, targetDir, {
+    metaPublisher: options.metaPublisher || ((payload) => publishContentToInstagram(payload, targetDir)),
+  }, batchId);
+  if (gaveteDir) {
+    await upsert(gaveteDir, projectId, content.contentId, {
+      channel: content.channel,
+      caption: content.caption.text,
+      mediaUrl: content.publish?.mediaUrl || null,
+      scheduledDate: content.scheduledDate,
+      scheduledTime: content.scheduledTime,
+      publish: content.publish,
+    });
+  }
+  return content;
+}
+```
+
+Update the route (`content-central-server.js:782-791`) to call it:
+
+```js
   if (parts.length === 6 && parts[3] === 'content' && parts[5] === 'publish') {
     if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') {
       return sendJson(res, 403, { error: 'Publicação real desligada. Defina OPENSQUAD_ENABLE_REAL_PUBLISHING=true no .env pra ativar.' });
     }
-    const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
-    if (gaveteDir) await pullQueue(gaveteDir);
     const body = await readBody(req);
-    const content = await publishSingleContent(projectId, parts[4], targetDir, {
-      metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
-    }, body.batchId);
-    if (gaveteDir) {
-      await upsertQueueItem(gaveteDir, projectId, content.contentId, {
-        channel: content.channel,
-        caption: content.caption.text,
-        mediaUrl: content.publish?.mediaUrl || null,
-        scheduledDate: content.scheduledDate,
-        scheduledTime: content.scheduledTime,
-        publish: content.publish,
-      });
-    }
+    const content = await publishWithGaveteSync(projectId, parts[4], targetDir, body.batchId);
     return sendJson(res, 200, { content });
   }
 ```
@@ -806,50 +838,81 @@ git commit -m "feat: sync manual publish result to the gaveta (pull before, push
 - Test: `tests/content-central-server.test.js`
 
 **Interfaces:**
-- Consumes: `OPENSQUAD_GITHUB_TOKEN`, `OPENSQUAD_GAVETA_REPO` env vars (Task 5).
-- Produces: a `syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pageId })` function (unexported is fine — used only within this file), calling `gh secret set` three times via `execFileAsync`. Skipped (no-op) when `OPENSQUAD_GAVETA_REPO` isn't set, so local dev without GitHub configured is unaffected.
+- Consumes: `OPENSQUAD_GAVETA_REPO` env var (Task 5).
+- Produces: `export async function syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pageId }, options = {})`, calling `gh secret set` three times. `options.execFileAsync` defaults to the module's real `execFileAsync` (`promisify(execFile)`, already defined near the top of `content-central-server.js`) and is overridable by tests — the same dependency-injection shape as `metaPublisher`/`queueSync` elsewhere in this file, chosen because `content-central-server.js` already computes `execFileAsync = promisify(execFile)` once at import time: mocking `node:child_process`'s `execFile` afterwards would not reach that already-bound closure. Skipped (no-op) when `OPENSQUAD_GAVETA_REPO` isn't set, so local dev without GitHub configured is unaffected.
+- Tested directly (unit-level), not through the HTTP route — the route-level integration (that `saveProjectToken`'s handler calls it) is exercised by a second, route-level test using the same fake.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing tests**
 
 ```js
-test('saving a project token pushes it to GitHub Secrets when a gaveta repo is configured', async (t) => {
-  await withTempProject(async (dir) => {
-    process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
-    t.after(() => { delete process.env.OPENSQUAD_GAVETA_REPO; });
-
+test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configured', async () => {
+  process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
+  try {
     const calls = [];
-    t.mock.method(childProcess, 'execFile', (cmd, args, opts, cb) => {
-      calls.push({ cmd, args });
-      const callback = typeof opts === 'function' ? opts : cb;
-      callback(null, '', '');
+    await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...', instagramUserId: '123', pageId: '456' }, {
+      execFileAsync: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '' }; },
     });
 
-    const { projectId } = await setupProjectFixture(dir); // existing fixture used by other token-route tests in this file
-    const res = await postJson(`/api/projects/${projectId}/token`, {
-      token: 'EAAB...', account: { handle: '@x', instagramUserId: '123', pageId: '456' },
-    }, dir);
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((c) => c.cmd === 'gh' && c.args[0] === 'secret' && c.args[1] === 'set'));
+    assert.ok(calls.some((c) => c.args.includes('META_TOKEN_BOSS_PIZZARIA') && c.args.includes('EAAB...')));
+    assert.ok(calls.some((c) => c.args.includes('META_IG_USER_ID_BOSS_PIZZARIA') && c.args.includes('123')));
+    assert.ok(calls.some((c) => c.args.includes('META_PAGE_ID_BOSS_PIZZARIA') && c.args.includes('456')));
+    assert.ok(calls.every((c) => c.args.includes('--repo') && c.args.includes('someuser/gaveta')));
+  } finally {
+    delete process.env.OPENSQUAD_GAVETA_REPO;
+  }
+});
 
-    assert.equal(res.status, 200);
-    const secretCalls = calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'secret');
-    assert.equal(secretCalls.length, 3);
-    assert.ok(secretCalls.some((c) => c.args.includes(`META_TOKEN_${projectId.toUpperCase()}`)));
-    assert.ok(secretCalls.some((c) => c.args.includes(`META_IG_USER_ID_${projectId.toUpperCase()}`)));
-    assert.ok(secretCalls.some((c) => c.args.includes(`META_PAGE_ID_${projectId.toUpperCase()}`)));
+test('syncTokenSecretsToGitHub is a no-op when OPENSQUAD_GAVETA_REPO is unset', async () => {
+  const calls = [];
+  await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...' }, {
+    execFileAsync: async (cmd, args) => { calls.push({ cmd, args }); return { stdout: '' }; },
+  });
+  assert.equal(calls.length, 0);
+});
+
+test('POST .../token calls syncTokenSecretsToGitHub after saving', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
+    try {
+      const calls = [];
+      const originalExecFileAsync = serverModule.__setExecFileAsyncForTests((cmd, args) => { calls.push({ cmd, args }); return Promise.resolve({ stdout: '' }); });
+
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'gaveta-token', name: 'Gaveta Token', handle: '@gavetatoken', approvalEmail: 'a@example.com' }),
+      });
+      const res = await request(server, '/api/projects/gaveta-token/token', {
+        method: 'POST',
+        body: JSON.stringify({ token: 'EAAB...', account: { handle: '@x', instagramUserId: '123', pageId: '456' } }),
+      });
+
+      assert.equal(res.response.status, 200);
+      const secretCalls = calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'secret');
+      assert.equal(secretCalls.length, 3);
+      serverModule.__setExecFileAsyncForTests(originalExecFileAsync);
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_REPO;
+    }
   });
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+The third test needs a seam to override the route's `execFileAsync` without touching global `node:child_process` state — see `__setExecFileAsyncForTests` in Step 3 (it both sets the new function and returns the previous one, so the test can restore it). Add `import * as serverModule from '../src/content-central-server.js'` to this test file's imports alongside the existing named imports from that module.
+
+- [ ] **Step 2: Run tests to verify they fail**
 
 Run: `node --test tests/content-central-server.test.js`
-Expected: FAIL — `execFile` mock records zero `gh secret` calls.
+Expected: FAIL — `syncTokenSecretsToGitHub` doesn't exist yet, and `__setExecFileAsyncForTests` doesn't exist yet.
 
 - [ ] **Step 3: Write the implementation**
 
 ```js
-async function syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pageId }) {
+export async function syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pageId }, options = {}) {
   const repo = process.env.OPENSQUAD_GAVETA_REPO;
   if (!repo) return;
+  const run = options.execFileAsync || execFileAsync;
   const prefix = projectId.toUpperCase().replace(/-/g, '_');
   const entries = [
     [`META_TOKEN_${prefix}`, token],
@@ -857,8 +920,20 @@ async function syncTokenSecretsToGitHub(projectId, { token, instagramUserId, pag
     [`META_PAGE_ID_${prefix}`, pageId || ''],
   ];
   for (const [name, value] of entries) {
-    await execFileAsync('gh', ['secret', 'set', name, '--repo', repo, '--body', value]);
+    await run('gh', ['secret', 'set', name, '--repo', repo, '--body', value]);
   }
+}
+
+// Test-only seam: content-central-server.js computes `execFileAsync =
+// promisify(execFile)` once at import time (see top of file), so a global
+// mock of node:child_process's execFile never reaches call sites that
+// already closed over the original. This lets tests swap the function the
+// *route* uses without touching global module state.
+let execFileAsyncForRoutes = execFileAsync;
+export function __setExecFileAsyncForTests(fn) {
+  const previous = execFileAsyncForRoutes;
+  execFileAsyncForRoutes = fn;
+  return previous;
 }
 ```
 
@@ -875,7 +950,7 @@ Update the token-save route (`content-central-server.js:401`, inside the existin
       token: body.token,
       instagramUserId: body.account?.instagramUserId,
       pageId: body.account?.pageId,
-    });
+    }, { execFileAsync: execFileAsyncForRoutes });
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
