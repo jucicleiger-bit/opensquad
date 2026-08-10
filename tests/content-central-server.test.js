@@ -28,6 +28,7 @@ import {
   openAiImageSizeForChannel,
   resolveContentImageAbsolutePath,
   startContentCentralServer,
+  startPublishScheduler,
   uploadGeneratedImagePublicly,
   uploadGeneratedVideoPublicly,
   xaiAspectRatioForChannel,
@@ -3237,4 +3238,28 @@ test('POST ad-creatives-regenerate with a note performs a targeted image edit an
       ]),
     },
   );
+});
+
+test('startPublishScheduler does not start the interval when OPENSQUAD_AUTO_PUBLISH_SCHEDULER=false, even with real publishing enabled', async () => {
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER = 'false';
+  try {
+    const timer = startPublishScheduler(process.cwd());
+    assert.equal(timer, null);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+    delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
+  }
+});
+
+test('startPublishScheduler still starts the interval when OPENSQUAD_AUTO_PUBLISH_SCHEDULER is unset and OPENSQUAD_ENABLE_REAL_PUBLISHING=true', async () => {
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
+  try {
+    const timer = startPublishScheduler(process.cwd());
+    assert.notEqual(timer, null);
+    clearInterval(timer);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  }
 });

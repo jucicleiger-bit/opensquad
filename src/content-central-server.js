@@ -3631,8 +3631,9 @@ async function publishContentToInstagram({ content, project }, targetDir) {
   throw lastError;
 }
 
-function startPublishScheduler(targetDir) {
+export function startPublishScheduler(targetDir) {
   if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  if (process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER === 'false') return null;
   const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
   const sweep = () => runDuePublishSweep(targetDir, {
     metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
