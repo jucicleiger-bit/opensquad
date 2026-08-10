@@ -26,6 +26,7 @@ async function withGaveta(fn) {
   // upsertQueueItem's `git push` has a branch to push.
   await execFileAsync('git', ['commit', '--allow-empty', '-m', 'init'], { cwd: workDir });
   await execFileAsync('git', ['push', 'origin', 'HEAD:main'], { cwd: workDir });
+  await execFileAsync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: bareDir });
   await execFileAsync('git', ['checkout', 'main'], { cwd: workDir });
   try {
     await fn({ workDir, bareDir, checkDir });
