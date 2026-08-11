@@ -509,6 +509,27 @@ test('logo upload uses an injected AI color analyzer when provided, and falls ba
   });
 });
 
+test('saveProjectAsset with scope "offer" stores the photo on project.offerAssets, not project.brand.references', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'oferta-fotos', name: 'Oferta Fotos', handle: '@of', approvalEmail: 'a@example.com' }, dir);
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const result = await saveProjectAsset('oferta-fotos', {
+      kind: 'reference',
+      filename: 'produto.png',
+      dataUrl,
+      role: 'product_photo',
+      referenceCategory: 'real_product',
+      scope: 'offer',
+    }, dir);
+
+    assert.equal(result.project.brand?.references?.length ?? 0, 0);
+    assert.equal(result.project.offerAssets?.length, 1);
+    assert.equal(result.project.offerAssets[0].filename, 'produto.png');
+    assert.ok(result.metadata?.id);
+  });
+});
+
 test('brand briefing is generated from factual company info and only approved briefing enters prompts', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

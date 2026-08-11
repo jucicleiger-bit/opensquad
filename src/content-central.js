@@ -952,17 +952,22 @@ export async function saveProjectAsset(projectId, assetInput, targetDir = proces
       })
     : null;
 
+  const isOfferScoped = kind === 'reference' && assetInput?.scope === 'offer';
   project.brand = {
     ...project.brand,
     logoPath: kind === 'logo' ? relativePath : project.brand.logoPath,
     referencesDir: 'assets/references',
-    references: kind === 'reference'
+    references: kind === 'reference' && !isOfferScoped
       ? upsertReferenceMetadata(currentReferences, referenceMetadata)
       : currentReferences,
-    referenceFiles: kind === 'reference'
+    referenceFiles: kind === 'reference' && !isOfferScoped
       ? [...new Set([...(project.brand.referenceFiles || []), relativePath])]
       : project.brand.referenceFiles || [],
   };
+  if (isOfferScoped) {
+    const currentOfferAssets = normalizeProjectOfferAssets(project);
+    project.offerAssets = upsertReferenceMetadata(currentOfferAssets, referenceMetadata);
+  }
   if (kind === 'logo') {
     const extractedColors = mimeType.startsWith('image/') ? await identifyLogoColors(buffer, mimeType, options.logoColorAnalyzer) : [];
     project.brandIdentity = normalizeBrandIdentity({
@@ -3592,6 +3597,7 @@ function toProjectSummary(project) {
     brandBriefing: normalizeBrandBriefing(project.brandBriefing),
     technicalBase: normalizeTechnicalBase(project.technicalBase),
     brand: project.brand,
+    offerAssets: normalizeProjectOfferAssets(project),
     token: project.token,
     contentSettings: project.contentSettings,
     contentStrategy: {
@@ -5982,6 +5988,16 @@ function normalizeProjectReferences(project) {
     : [];
   const byPath = new Map();
   for (const reference of [...migrated, ...existing]) {
+    const normalized = normalizeReferenceMetadata({ projectId: project.projectId, ...reference });
+    byPath.set(normalized.relativePath, normalized);
+  }
+  return [...byPath.values()];
+}
+
+function normalizeProjectOfferAssets(project) {
+  const existing = Array.isArray(project.offerAssets) ? project.offerAssets : [];
+  const byPath = new Map();
+  for (const reference of existing) {
     const normalized = normalizeReferenceMetadata({ projectId: project.projectId, ...reference });
     byPath.set(normalized.relativePath, normalized);
   }
