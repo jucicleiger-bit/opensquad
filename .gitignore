@@ -8,6 +8,7 @@ _opensquad/_memory/preferences.md
 _opensquad/_browser_profile/
 docs/
 .superpowers/
+.worktrees/
 temp/
 tests/
 !tests/
