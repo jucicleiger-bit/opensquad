@@ -3083,7 +3083,7 @@ export async function listCentralProjects(targetDir = process.cwd()) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const project = await readJson(join(paths.projectsDir, entry.name, 'project.json'), null);
-    if (project) projects.push(toProjectSummary(project));
+    if (project) projects.push(await toProjectSummary(project, paths));
   }
 
   return projects.sort((a, b) => a.projectId.localeCompare(b.projectId));
@@ -3101,7 +3101,7 @@ export async function listSystemAlerts(targetDir = process.cwd()) {
   const projects = [];
   for (const projectId of projectIds) {
     const raw = await readJson(join(paths.projectsDir, projectId, 'project.json'), null);
-    if (raw) projects.push(toProjectSummary(raw));
+    if (raw) projects.push(await toProjectSummary(raw, paths));
   }
   const alerts = [];
 
@@ -3804,7 +3804,7 @@ export async function loadProjectForTest(projectId, targetDir = process.cwd()) {
   return loadProject(getCentralPaths(targetDir, projectId));
 }
 
-function toProjectSummary(project) {
+async function toProjectSummary(project, paths) {
   return {
     projectId: project.projectId,
     name: project.name,
@@ -3835,6 +3835,7 @@ function toProjectSummary(project) {
     rules: project.rules,
     learnings: normalizeLearnings(project.learnings),
     segmentLearnings: normalizeSegmentLearnings(project.segmentLearnings),
+    segmentLearningNodes: await loadSegmentLearningNodes(paths, project),
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
