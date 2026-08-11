@@ -8,6 +8,7 @@ import {
   CONTENT_GOAL_LABELS,
   analyzeBrandXray,
   analyzeSite,
+  analyzeTechnicalBase,
   approveBrandXray,
   saveBrandInput,
   saveOffer,
@@ -18,11 +19,25 @@ import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 
 const REQUIRED_MESSAGE = "Preencha nome, segmento e o que a empresa vende/oferece.";
+const SEGMENT_TREE = [
+  { group: "Alimentício", categories: ["Hamburgueria", "Pizzaria", "Espetaria", "Restaurante", "Açaí / sorveteria", "Padaria / confeitaria"] },
+  { group: "Negócios locais e lojas", categories: ["Casa de embalagem", "Papelaria", "Aviamentos", "Loja de roupas", "Mercado / mercearia", "Material de construção"] },
+  { group: "Engenharia", categories: ["Controle tecnológico / concreto / solos / asfalto", "Construção civil / obras", "Geotecnia e fundações", "Projetos e consultoria", "Topografia"] },
+  { group: "Saúde e estética", categories: ["Clínica odontológica", "Estética facial/corporal", "Barbearia", "Salão de beleza", "Clínica médica"] },
+  { group: "Educação", categories: ["Curso livre", "Escola profissionalizante", "Aulas particulares", "Treinamento corporativo"] },
+  { group: "Serviços profissionais", categories: ["Contabilidade", "Advocacia", "Marketing / agência", "Imobiliária", "Consultoria"] },
+];
+
+const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
+const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
 
 export function Company() {
   const { project, refreshProject } = useOutletContext<WorkspaceContext>();
   const [form, setForm] = useState(() => ({
     brandName: project.brandInput?.brandName || project.name || "",
+    segmentGroup: project.brandInput?.segmentGroup || "",
+    segmentCategory: project.brandInput?.segmentCategory || "",
+    segmentSpecialty: project.brandInput?.segmentSpecialty || "",
     segment: project.brandInput?.segment || "",
     productsOrServices: project.brandInput?.productsOrServices || "",
     description: project.brandInput?.description || "",
@@ -44,6 +59,8 @@ export function Company() {
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [technicalText, setTechnicalText] = useState(project.technicalBase?.sourceText || "");
+  const [technicalBusy, setTechnicalBusy] = useState(false);
 
   const [importMode, setImportMode] = useState<"url" | "text">("url");
   const [siteUrl, setSiteUrl] = useState("");
@@ -107,6 +124,9 @@ export function Company() {
       setForm((f) => ({
         ...f,
         brandName: result.brandInput.brandName || f.brandName,
+        segmentGroup: result.brandInput.segmentGroup || f.segmentGroup,
+        segmentCategory: result.brandInput.segmentCategory || f.segmentCategory,
+        segmentSpecialty: result.brandInput.segmentSpecialty || f.segmentSpecialty,
         segment: result.brandInput.segment || f.segment,
         productsOrServices: result.brandInput.productsOrServices || f.productsOrServices,
         description: result.brandInput.description || f.description,
@@ -194,7 +214,27 @@ export function Company() {
     }
   }
 
+  async function handleAnalyzeTechnicalBase() {
+    if (!technicalText.trim()) {
+      setError("Cole um texto técnico antes de resumir.");
+      return;
+    }
+    setTechnicalBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      await analyzeTechnicalBase(project.projectId, technicalText);
+      await refreshProject();
+      setMessage("Base técnica resumida e salva para este segmento.");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setTechnicalBusy(false);
+    }
+  }
+
   const hasBlocks = Object.keys(project.brandXray?.blocks || {}).length > 0;
+  const categoryOptions = SEGMENT_TREE.find((item) => item.group === form.segmentGroup)?.categories || ALL_SEGMENT_CATEGORY_OPTIONS;
 
   return (
     <div>
@@ -282,9 +322,57 @@ export function Company() {
 
         <div className="row">
           <div>
-            <label htmlFor="brand-segment">Segmento</label>
+            <label htmlFor="brand-segment-group">Setor principal</label>
+            <input
+              id="brand-segment-group"
+              list="brand-segment-group-options"
+              placeholder="ex: Engenharia, Alimentício, Negócios locais e lojas"
+              value={form.segmentGroup}
+              onChange={(e) => setForm({ ...form, segmentGroup: e.target.value, segmentCategory: "" })}
+            />
+            <datalist id="brand-segment-group-options">
+              {SEGMENT_GROUP_OPTIONS.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label htmlFor="brand-segment-category">Tipo de negócio / nicho</label>
+            <input
+              id="brand-segment-category"
+              list="brand-segment-category-options"
+              placeholder="Escolha uma opção ou digite uma nova"
+              value={form.segmentCategory}
+              onChange={(e) => setForm({ ...form, segmentCategory: e.target.value })}
+            />
+            <datalist id="brand-segment-category-options">
+              {categoryOptions.map((option) => (
+                <option key={option} value={option} />
+              ))}
+            </datalist>
+            <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Se não existir na lista, digite um novo nicho. Ele fica salvo neste projeto e amarra o aprendizado por segmento.
+            </p>
+          </div>
+        </div>
+
+        <div className="row">
+          <div>
+            <label htmlFor="brand-segment-specialty">Especialidade/subsegmento</label>
+            <input
+              id="brand-segment-specialty"
+              placeholder="ex: CBR, ensaio de solo, embalagem para delivery, pizza rodízio"
+              value={form.segmentSpecialty}
+              onChange={(e) => setForm({ ...form, segmentSpecialty: e.target.value })}
+            />
+          </div>
+          <div>
+            <label htmlFor="brand-segment">Segmento detalhado</label>
             <input id="brand-segment" value={form.segment} onChange={(e) => setForm({ ...form, segment: e.target.value })} />
           </div>
+        </div>
+
+        <div className="row">
           <div>
             <label htmlFor="brand-region">Região de atendimento</label>
             <input
@@ -427,6 +515,29 @@ export function Company() {
         </div>
         {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
         {message ? <div className="pill ok" style={{ marginTop: 12 }}>{message}</div> : null}
+      </Card>
+
+      <Card style={{ padding: 20, marginTop: 20 }}>
+        <b>Base técnica do segmento</b>
+        <p className="muted" style={{ marginTop: 4 }}>
+          Cole normas, modelos de laudo, lista de ensaios ou explicações do setor. A IA transforma em um resumo prático curto para não precisar reaprender tudo a cada arte.
+        </p>
+        <textarea
+          aria-label="Texto técnico para aprendizado"
+          placeholder="Ex: CBR/ISC para pavimentação; limite de liquidez e plasticidade para caracterização de solos; não misturar ensaio de solo com ensaio de concreto..."
+          value={technicalText}
+          onChange={(e) => setTechnicalText(e.target.value)}
+          style={{ minHeight: 150 }}
+        />
+        <Button className="full-width" style={{ marginTop: 10 }} disabled={technicalBusy} onClick={handleAnalyzeTechnicalBase}>
+          {technicalBusy ? "Resumindo..." : "Analisar e salvar resumo prático"}
+        </Button>
+        {project.technicalBase?.summary ? (
+          <div className="field-card" style={{ marginTop: 14 }}>
+            <b>Resumo prático salvo</b>
+            <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{project.technicalBase.summary}</p>
+          </div>
+        ) : null}
       </Card>
 
       {hasBlocks ? (

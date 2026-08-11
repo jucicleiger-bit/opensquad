@@ -294,6 +294,7 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     secretsDir,
     approvalsDir,
     segmentTemplatesDir,
+    segmentLearningsPath: join(root, 'segment-learnings.json'),
     globalRulesPath: join(root, 'global-rules.json'),
   };
 
@@ -389,6 +390,7 @@ export async function createCentralProject(options, targetDir = process.cwd()) {
     brandIdentity: normalizeBrandIdentity(options?.brandIdentity),
     brandXray: normalizeBrandXray(options?.brandXray),
     brandBriefing: normalizeBrandBriefing(options?.brandBriefing),
+    technicalBase: normalizeTechnicalBase(options?.technicalBase),
     brand: {
       logoPath: 'assets/logo.png',
       referencesDir: 'assets/references',
@@ -547,6 +549,39 @@ export async function updateProjectBrandInput(projectId, input = {}, targetDir =
   await writeJson(paths.projectPath, project);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
   return project;
+  });
+}
+
+export async function analyzeProjectTechnicalBase(projectId, input = {}, targetDir = process.cwd(), now = new Date(), options = {}) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  const sourceText = redactSensitiveText(input?.sourceText || input?.text || '');
+  if (!sourceText) throw new Error('Cole um texto técnico para a IA resumir.');
+
+  const fallbackSummary = buildTechnicalBaseSummary(project, sourceText, now);
+  let summary = fallbackSummary.summary;
+  if (typeof options.technicalAnalyzer === 'function') {
+    try {
+      const analyzed = await options.technicalAnalyzer({ project, sourceText, fallbackSummary });
+      summary = cleanText(typeof analyzed === 'string' ? analyzed : analyzed?.summary) || summary;
+    } catch {
+      summary = fallbackSummary.summary;
+    }
+  }
+
+  project.technicalBase = normalizeTechnicalBase({
+    sourceText,
+    summary,
+    updatedAt: now.toISOString(),
+    source: typeof options.technicalAnalyzer === 'function' ? 'ai_or_template' : 'template',
+  });
+  project.updatedAt = now.toISOString();
+  await addSegmentLearning(paths, project, 'technical', project.technicalBase.summary);
+  project.segmentLearnings = await loadSegmentLearningsForProject(paths, project);
+  await writeJson(paths.projectPath, project);
+  await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+  return { project, technicalBase: project.technicalBase };
   });
 }
 
@@ -2839,6 +2874,7 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   ].slice(0, MAX_LEARNING_ENTRIES);
   project.updatedAt = now;
   await writeJson(paths.projectPath, project);
+  await addSegmentLearning(paths, project, 'approved', summarizeApprovedLearning(content));
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
 
   if (typeof options.queueSync === 'function') {
@@ -3256,6 +3292,7 @@ export async function deleteProjectContent(projectId, contentId, targetDir = pro
     ].slice(0, MAX_LEARNING_ENTRIES);
     project.updatedAt = now;
     await writeJson(paths.projectPath, project);
+    await addSegmentLearning(paths, project, 'avoid', summarizeAvoidLearning(content, cleanReason));
     await writeFile(paths.manualPath, buildManual(project), 'utf-8');
   }
 
@@ -3389,6 +3426,7 @@ async function loadGlobalRules(paths) {
 // in their saved JSON yet — normalize on every load/summary instead of a
 // one-off migration so nothing needs to touch disk to pick it up.
 const MAX_LEARNING_ENTRIES = 20;
+const MAX_SEGMENT_LEARNING_ENTRIES = 40;
 
 function normalizeLearnings(input) {
   const approved = Array.isArray(input?.approved) ? input.approved : [];
@@ -3399,10 +3437,115 @@ function normalizeLearnings(input) {
   };
 }
 
+function normalizeSegmentLearnings(input = {}) {
+  return {
+    key: cleanText(input?.key),
+    label: cleanText(input?.label),
+    technical: (Array.isArray(input?.technical) ? input.technical : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+    approved: (Array.isArray(input?.approved) ? input.approved : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+    avoid: (Array.isArray(input?.avoid) ? input.avoid : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+  };
+}
+
+function normalizeTechnicalBase(input = {}) {
+  return {
+    sourceText: redactSensitiveText(input?.sourceText || ''),
+    summary: cleanText(input?.summary),
+    source: cleanText(input?.source),
+    updatedAt: input?.updatedAt || null,
+  };
+}
+
+function redactSensitiveText(value) {
+  return String(value || '')
+    .replace(/\b(api[_-]?key|token|secret|password|senha|authorization|bearer)\b\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
+    .replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '[REDACTED_EMAIL]')
+    .slice(0, 12000)
+    .trim();
+}
+
+function buildTechnicalBaseSummary(project, sourceText, now = new Date()) {
+  const text = redactSensitiveText(sourceText);
+  const terms = extractTechnicalTerms(text);
+  const firstLines = text
+    .split(String.fromCharCode(10))
+    .map((line) => line.trim())
+    .filter((line) => line.length >= 18)
+    .slice(0, 5);
+  const profile = normalizeCompanyProfile(project.companyProfile);
+  const segmentLabel = projectSegmentLabel(project) || profile.segment || 'segmento não definido';
+  const summary = [
+    `Resumo técnico aprovado em ${now.toISOString().slice(0, 10)} para ${segmentLabel}.`,
+    terms.length ? `Vocabulário/assuntos que podem orientar conteúdo: ${terms.join(', ')}.` : '',
+    firstLines.length ? `Pontos práticos extraídos: ${firstLines.join(' | ')}.` : '',
+    'Uso em arte/copy: transformar termos técnicos em comunicação simples, sem inventar norma, resultado, certificação, preço, prazo ou promessa não informada.',
+    'Trava: não aplicar este conhecimento em outro setor/tipo de negócio/subsegmento sem a mesma categoria selecionada.',
+  ].filter(Boolean).join('\n');
+  return { summary };
+}
+
+function extractTechnicalTerms(text) {
+  const known = [
+    'CBR', 'ISC', 'limite de liquidez', 'limite de plasticidade', 'granulometria', 'compactação', 'Proctor',
+    'caracterização de solo', 'ensaio de solo', 'sondagem', 'asfalto', 'concreto', 'slump', 'abatimento',
+    'corpo de prova', 'resistência à compressão', 'laudo técnico', 'norma', 'ABNT', 'NBR',
+  ];
+  const normalized = normalizeComparableText(text);
+  const found = known.filter((term) => normalized.includes(normalizeComparableText(term)));
+  const nbrs = [...text.matchAll(/\bNBR\s*\d{3,6}\b/gi)].map((match) => match[0].replace(/\s+/g, ' ').toUpperCase());
+  return [...new Set([...found, ...nbrs])].slice(0, 18);
+}
+
+function formatTechnicalBaseLines(input = {}, segmentLearnings = {}) {
+  const base = normalizeTechnicalBase(input);
+  const segmentTechnical = normalizeSegmentLearnings(segmentLearnings).technical;
+  return [
+    base.summary ? `Resumo técnico deste projeto: ${base.summary}` : '',
+    ...segmentTechnical.map((line) => `Resumo técnico aprendido neste segmento: ${line}`),
+  ].filter(Boolean);
+}
+
+function projectSegmentLabel(project = {}) {
+  const profile = normalizeCompanyProfile(project.companyProfile);
+  const brandInput = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(profile, project.name));
+  const hierarchy = [
+    profile.segmentGroup || brandInput.segmentGroup,
+    profile.segmentCategory || brandInput.segmentCategory,
+    profile.segmentSpecialty || brandInput.segmentSpecialty,
+  ].filter(Boolean).join(' / ');
+  return hierarchy || (profile.segment || brandInput.segment);
+}
+
+function projectSegmentKey(project = {}) {
+  return slugify(projectSegmentLabel(project));
+}
+
+async function readSegmentLearningStore(paths) {
+  return await readJson(paths.segmentLearningsPath, null) || { schemaVersion: 1, segments: {} };
+}
+
+async function loadSegmentLearningsForProject(paths, project) {
+  const key = projectSegmentKey(project);
+  if (!key) return normalizeSegmentLearnings();
+  const store = await readSegmentLearningStore(paths);
+  return normalizeSegmentLearnings({ key, label: projectSegmentLabel(project), ...(store.segments?.[key] || {}) });
+}
+
+async function addSegmentLearning(paths, project, kind, line) {
+  const key = projectSegmentKey(project);
+  const text = cleanText(line);
+  if (!key || !text || !['approved', 'avoid', 'technical'].includes(kind)) return;
+  const store = await readSegmentLearningStore(paths);
+  const current = normalizeSegmentLearnings({ key, label: projectSegmentLabel(project), ...(store.segments?.[key] || {}) });
+  current[kind] = [text, ...current[kind].filter((item) => item !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+  store.segments = { ...(store.segments || {}), [key]: current };
+  await writeJson(paths.segmentLearningsPath, store);
+}
+
 async function loadProject(paths) {
   const project = await readJson(paths.projectPath, null);
   if (!project) throw new Error(`Project not found: ${paths.projectId}`);
-  return {
+  const normalized = {
     ...project,
     // Projects created before this field existed simply don't have it in
     // their saved JSON — default here on every load instead of a one-off
@@ -3415,6 +3558,7 @@ async function loadProject(paths) {
     brandIdentity: normalizeBrandIdentity(project.brandIdentity || { logoPath: project.brand?.logoPath }),
     brandXray: normalizeBrandXray(project.brandXray),
     brandBriefing: normalizeBrandBriefing(project.brandBriefing),
+    technicalBase: normalizeTechnicalBase(project.technicalBase),
     contentStrategy: {
       ...(project.contentStrategy || {}),
       offers: normalizeProjectOffers(project.contentStrategy?.offers || []),
@@ -3422,6 +3566,10 @@ async function loadProject(paths) {
       offerGroups: normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []),
     },
     learnings: normalizeLearnings(project.learnings),
+  };
+  return {
+    ...normalized,
+    segmentLearnings: await loadSegmentLearningsForProject(paths, normalized),
   };
 }
 
@@ -3442,6 +3590,7 @@ function toProjectSummary(project) {
     brandIdentity: normalizeBrandIdentity(project.brandIdentity || { logoPath: project.brand?.logoPath }),
     brandXray: normalizeBrandXray(project.brandXray),
     brandBriefing: normalizeBrandBriefing(project.brandBriefing),
+    technicalBase: normalizeTechnicalBase(project.technicalBase),
     brand: project.brand,
     token: project.token,
     contentSettings: project.contentSettings,
@@ -3453,6 +3602,7 @@ function toProjectSummary(project) {
     },
     rules: project.rules,
     learnings: normalizeLearnings(project.learnings),
+    segmentLearnings: normalizeSegmentLearnings(project.segmentLearnings),
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };
@@ -3535,12 +3685,13 @@ function buildManual(project) {
   const pillars = normalizeProjectPillars(project.contentStrategy?.pillars || []);
   const companyProfileLines = formatCompanyProfileLines(project.companyProfile);
   const approvedXrayLines = formatApprovedBrandXrayLines(project.brandXray);
+  const technicalBaseLines = formatTechnicalBaseLines(project.technicalBase, project.segmentLearnings);
   const approvedLearnings = normalizeLearnings(project.learnings).approved;
   const avoidLearnings = normalizeLearnings(project.learnings).avoid;
   const projectTypeLine = project.projectType === 'catalog'
     ? 'Catálogo de produtos (venda direta) — posta o estoque ativo no Story automaticamente, sem Raio-X/pilares e sem arte gerada por IA (usa foto real do produto).'
     : 'Marketing de conteúdo (Raio-X, pilares e arte gerada por IA).';
-  return `# Manual Vivo — ${project.name}\n\n## Tipo de projeto\n- ${projectTypeLine}\n\n## Informações básicas da empresa\n${companyProfileLines.length ? companyProfileLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem informações básicas preenchidas.'}\n\n## Raio-X aprovado da marca\n${approvedXrayLines.length ? approvedXrayLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem Raio-X aprovado.'}\n\n## Identidade visual\n- Logo esperado em: assets/logo.png\n- Referências em: assets/references/\n- Estilo visual: ${project.brand?.visualStyle || 'adicione o estilo visual do projeto.'}\n\n## Referências visuais cadastradas\n${references.length ? references.map((reference) => `- ${reference.relativePath} (${referenceRoleLabel(reference.role)}, peso ${reference.weight}): ${reference.instruction || 'sem instrução específica.'}`).join('\n') : '- Ainda sem referências cadastradas.'}\n\n## Ofertas e assuntos cadastrados\n${offers.length ? offers.map((offer) => `- ${offer.name} (${offerTypeLabel(offer.type)}): ${offer.price || 'sem preço'}; itens: ${offer.items || 'não informado'}; CTA: ${offer.cta || 'não informado'}`).join('\n') : '- Ainda sem ofertas cadastradas.'}\n\n## Pilares de conteúdo\n${pillars.length ? pillars.map((pillar) => `- ${pillar.name} (${pillarRoleLabel(pillar.role)}, peso ${pillar.weight}, tratamento ${pillar.visualTreatment}): ${pillar.objective || 'sem objetivo descrito'}`).join('\n') : '- Ainda sem pilares cadastrados; rotação de conteúdo segue o padrão automático.'}\n\n## Regras de imagem\n${imageRules.length ? imageRules.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras visuais deste projeto aqui.'}\n\n## Regras do projeto\n${project.rules.project.length ? project.rules.project.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras específicas deste projeto aqui.'}\n\n## Aprendizados aprovados\n${approvedLearnings.length ? approvedLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem conteúdos aprovados.'}\n\n## Evitar\n${avoidLearnings.length ? avoidLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem rejeições registradas.'}\n`;
+  return `# Manual Vivo — ${project.name}\n\n## Tipo de projeto\n- ${projectTypeLine}\n\n## Informações básicas da empresa\n${companyProfileLines.length ? companyProfileLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem informações básicas preenchidas.'}\n\n## Base técnica do segmento\n${technicalBaseLines.length ? technicalBaseLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem base técnica resumida.'}\n\n## Raio-X aprovado da marca\n${approvedXrayLines.length ? approvedXrayLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem Raio-X aprovado.'}\n\n## Identidade visual\n- Logo esperado em: assets/logo.png\n- Referências em: assets/references/\n- Estilo visual: ${project.brand?.visualStyle || 'adicione o estilo visual do projeto.'}\n\n## Referências visuais cadastradas\n${references.length ? references.map((reference) => `- ${reference.relativePath} (${referenceRoleLabel(reference.role)}, peso ${reference.weight}): ${reference.instruction || 'sem instrução específica.'}`).join('\n') : '- Ainda sem referências cadastradas.'}\n\n## Ofertas e assuntos cadastrados\n${offers.length ? offers.map((offer) => `- ${offer.name} (${offerTypeLabel(offer.type)}): ${offer.price || 'sem preço'}; itens: ${offer.items || 'não informado'}; CTA: ${offer.cta || 'não informado'}`).join('\n') : '- Ainda sem ofertas cadastradas.'}\n\n## Pilares de conteúdo\n${pillars.length ? pillars.map((pillar) => `- ${pillar.name} (${pillarRoleLabel(pillar.role)}, peso ${pillar.weight}, tratamento ${pillar.visualTreatment}): ${pillar.objective || 'sem objetivo descrito'}`).join('\n') : '- Ainda sem pilares cadastrados; rotação de conteúdo segue o padrão automático.'}\n\n## Regras de imagem\n${imageRules.length ? imageRules.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras visuais deste projeto aqui.'}\n\n## Regras do projeto\n${project.rules.project.length ? project.rules.project.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras específicas deste projeto aqui.'}\n\n## Aprendizados aprovados\n${approvedLearnings.length ? approvedLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem conteúdos aprovados.'}\n\n## Evitar\n${avoidLearnings.length ? avoidLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem rejeições registradas.'}\n`;
 }
 
 function buildImagePrompt(project, globalRules, contentRules, dayNumber, context = {}) {
@@ -3573,6 +3724,8 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
   const companyFactLines = formatCompanyFactLines(project.companyProfile);
   const approvedXrayLines = formatApprovedBrandXrayLines(project.brandXray);
   const approvedBriefingLines = formatApprovedBrandBriefingLines(project.brandBriefing);
+  const segmentLearnings = normalizeSegmentLearnings(project.segmentLearnings);
+  const technicalBaseLines = formatTechnicalBaseLines(project.technicalBase, segmentLearnings);
   const consolidatedVisualDirection = approvedXrayLines.length
     ? buildConsolidatedXrayVisualDirection(project, project.brandXray)
     : buildConsolidatedVisualDirection(project, project.brandBriefing);
@@ -3615,8 +3768,20 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
     ]),
     context.contentTopic ? section('ASSUNTO E TIPO DO POST', formatContentTopicLines(context.contentTopic)) : '',
     context.contentTopic?.pillar ? section('PILAR DE CONTEÚDO', formatPillarLines(context.contentTopic.pillar)) : '',
+    technicalBaseLines.length
+      ? section('BASE TÉCNICA DO SEGMENTO', [
+        'Usar como conhecimento de contexto para acertar vocabulário, assunto e limites técnicos; não transformar em promessa, certificação ou norma inventada.',
+        ...technicalBaseLines,
+      ])
+      : '',
     approvedXrayLines.length ? section('RAIO-X APROVADO DA MARCA', approvedXrayLines) : '',
     approvedBriefingLines.length ? section('BRIEFING APROVADO DA MARCA', approvedBriefingLines) : '',
+    segmentLearnings.approved.length
+      ? section('PADRÕES APROVADOS NESTE SEGMENTO', segmentLearnings.approved)
+      : '',
+    segmentLearnings.avoid.length
+      ? section('EVITAR — APRENDIZADOS DESTE SEGMENTO', segmentLearnings.avoid)
+      : '',
     normalizeLearnings(project.learnings).avoid.length
       ? section('EVITAR — APRENDIZADOS DE CONTEÚDOS REJEITADOS ANTES', normalizeLearnings(project.learnings).avoid)
       : '',
@@ -4956,6 +5121,9 @@ function normalizeProjectOffers(offers) {
 
 function normalizeCompanyProfile(input = {}) {
   return {
+    segmentGroup: cleanText(input?.segmentGroup),
+    segmentCategory: cleanText(input?.segmentCategory),
+    segmentSpecialty: cleanText(input?.segmentSpecialty),
     segment: cleanText(input?.segment),
     description: cleanText(input?.description),
     audience: cleanText(input?.audience),
@@ -4999,6 +5167,9 @@ function normalizeProspectSource(input = {}) {
 function formatCompanyProfileLines(input = {}) {
   const profile = normalizeCompanyProfile(input);
   return [
+    profile.segmentGroup ? `Setor principal: ${profile.segmentGroup}.` : '',
+    profile.segmentCategory ? `Categoria selecionada: ${profile.segmentCategory}.` : '',
+    profile.segmentSpecialty ? `Especialidade/subsegmento: ${profile.segmentSpecialty}.` : '',
     profile.segment ? `Segmento: ${profile.segment}.` : '',
     profile.description ? `Descrição da empresa: ${profile.description}.` : '',
     profile.productsOrServices ? `O que vende/presta: ${profile.productsOrServices}.` : '',
@@ -5020,7 +5191,11 @@ function formatCompanyProfileLines(input = {}) {
 function formatCompanyFactLines(input = {}) {
   const profile = normalizeCompanyProfile(input);
   const lines = [
+    profile.segmentGroup ? `Setor principal selecionado pelo operador: ${profile.segmentGroup}.` : '',
+    profile.segmentCategory ? `Categoria selecionada pelo operador: ${profile.segmentCategory}.` : '',
+    profile.segmentSpecialty ? `Especialidade/subsegmento selecionado: ${profile.segmentSpecialty}.` : '',
     profile.segment ? `Segmento informado: ${profile.segment}.` : '',
+    (profile.segmentGroup || profile.segmentCategory || profile.segmentSpecialty) ? 'Trava de segmento: não misturar com outro setor, tipo de negócio ou subsegmento técnico parecido se ele não estiver descrito nos produtos/serviços atuais.' : '',
     profile.description ? `Descrição fornecida: ${profile.description}.` : '',
     profile.productsOrServices ? `Produtos/serviços informados: ${profile.productsOrServices}.` : '',
     profile.audienceType ? `Foco comercial informado: ${audienceTypeLabel(profile.audienceType)}.` : '',
@@ -5047,6 +5222,9 @@ function formatCompanyFactLines(input = {}) {
 function normalizeBrandInput(input = {}) {
   return {
     brandName: cleanText(input?.brandName || input?.name),
+    segmentGroup: cleanText(input?.segmentGroup),
+    segmentCategory: cleanText(input?.segmentCategory),
+    segmentSpecialty: cleanText(input?.segmentSpecialty),
     segment: cleanText(input?.segment),
     productsOrServices: cleanText(input?.productsOrServices),
     description: cleanText(input?.description),
@@ -5146,7 +5324,7 @@ function rgbKeyToHex(key) {
 }
 
 function hasBrandInputFields(input = {}) {
-  return ['brandName', 'segment', 'productsOrServices', 'description', 'serviceRegion', 'mainDifferential', 'contentGoals']
+  return ['brandName', 'segmentGroup', 'segmentCategory', 'segmentSpecialty', 'segment', 'productsOrServices', 'description', 'serviceRegion', 'mainDifferential', 'contentGoals']
     .some((key) => Object.prototype.hasOwnProperty.call(input || {}, key));
 }
 
@@ -5155,6 +5333,9 @@ function brandInputToCompanyProfile(input = {}, existingProfile = {}) {
   const existing = normalizeCompanyProfile(existingProfile);
   return normalizeCompanyProfile({
     ...existing,
+    segmentGroup: brandInput.segmentGroup,
+    segmentCategory: brandInput.segmentCategory,
+    segmentSpecialty: brandInput.segmentSpecialty,
     segment: brandInput.segment,
     description: brandInput.description,
     location: brandInput.serviceRegion,
@@ -5177,6 +5358,9 @@ function companyProfileToBrandInput(profileInput = {}, fallbackName = '') {
   const profile = normalizeCompanyProfile(profileInput);
   return normalizeBrandInput({
     brandName: fallbackName,
+    segmentGroup: profile.segmentGroup,
+    segmentCategory: profile.segmentCategory,
+    segmentSpecialty: profile.segmentSpecialty,
     segment: profile.segment,
     productsOrServices: profile.productsOrServices,
     description: profile.description,

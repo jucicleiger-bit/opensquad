@@ -53,6 +53,7 @@ import {
   animateContentForReels,
   analyzeProjectBrandXray,
   analyzeProjectBrandBriefing,
+  analyzeProjectTechnicalBase,
   approveProjectBrandXray,
   approveProjectBrandBriefing,
   updateProjectBrandInput,
@@ -106,6 +107,9 @@ test('company profile starts empty, can be updated, and feeds the image prompt r
     }, dir);
 
     assert.deepEqual(project.companyProfile, {
+      segmentGroup: '',
+      segmentCategory: '',
+      segmentSpecialty: '',
       segment: '',
       description: '',
       audience: '',
@@ -124,6 +128,9 @@ test('company profile starts empty, can be updated, and feeds the image prompt r
     });
 
     const updated = await updateProjectCompanyProfile('clinica-sorriso', {
+      segmentGroup: 'Saúde e estética',
+      segmentCategory: 'Saúde e estética',
+      segmentSpecialty: 'odontologia estética',
       segment: 'Saúde e estética',
       description: 'Clínica odontológica local focada em atendimento humanizado.',
       audience: 'adultos da região que querem melhorar o sorriso com segurança',
@@ -138,6 +145,9 @@ test('company profile starts empty, can be updated, and feeds the image prompt r
     }, dir);
 
     assert.equal(updated.companyProfile.segment, 'Saúde e estética');
+    assert.equal(updated.companyProfile.segmentGroup, 'Saúde e estética');
+    assert.equal(updated.companyProfile.segmentCategory, 'Saúde e estética');
+    assert.equal(updated.companyProfile.segmentSpecialty, 'odontologia estética');
     assert.deepEqual(updated.companyProfile.tone, ['educativo', 'autoridade', 'acolhedor']);
     assert.deepEqual(updated.companyProfile.contentGoals, ['authority', 'education', 'service']);
 
@@ -150,6 +160,10 @@ test('company profile starts empty, can be updated, and feeds the image prompt r
     const prompt = batch.items[0].image.prompt;
 
     assert.match(prompt, /INFORMAÇÕES FACTUAIS OBRIGATÓRIAS/i);
+    assert.match(prompt, /Setor principal selecionado pelo operador: Saúde e estética/);
+    assert.match(prompt, /Categoria selecionada pelo operador: Saúde e estética/);
+    assert.match(prompt, /Especialidade\/subsegmento selecionado: odontologia estética/);
+    assert.match(prompt, /Trava de segmento: não misturar/);
     assert.match(prompt, /Saúde e estética/);
     assert.match(prompt, /Clínica odontológica local/);
     assert.match(prompt, /clareamento dental, avaliação e limpeza/);
@@ -171,6 +185,9 @@ test('brand xray input uses simple user facts and approved four-block analysis i
 
     assert.deepEqual(project.brandInput, {
       brandName: '',
+      segmentGroup: '',
+      segmentCategory: '',
+      segmentSpecialty: '',
       segment: '',
       productsOrServices: '',
       description: '',
@@ -190,6 +207,8 @@ test('brand xray input uses simple user facts and approved four-block analysis i
 
     const updated = await updateProjectBrandInput('boss-xray', {
       brandName: 'Boss Pizzaria',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
       segment: 'Pizzaria',
       productsOrServices: 'rodízio de pizzas, delivery, bebidas e atendimento no salão',
       description: 'Pizzaria familiar com rodízio de terça a domingo.',
@@ -199,6 +218,8 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     }, dir);
 
     assert.equal(updated.brandInput.segment, 'Pizzaria');
+    assert.equal(updated.brandInput.segmentGroup, 'Alimentício');
+    assert.equal(updated.brandInput.segmentCategory, 'Pizzaria');
     assert.deepEqual(updated.brandInput.contentGoals, ['sell_products', 'promotions', 'whatsapp_orders', 'show_products', 'relationship']);
     assert.equal(updated.companyProfile.segment, 'Pizzaria');
     assert.equal(updated.companyProfile.location, 'Várzea Grande/MT');
@@ -243,6 +264,89 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     assert.match(prompt, /Receber pedidos no WhatsApp/);
     assert.match(prompt, /preto, vermelho, branco e dourado/);
     assert.match(prompt, /Referência visual nunca pode alterar preço, logo, produto, nome, promoção ou informação factual/i);
+  });
+});
+
+test('segment learnings are reused only for the same selected segment category/specialty', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'inova-solos', name: 'Inova Solos', handle: '@inova', approvalEmail: 'aprovacao@example.com' }, dir);
+    await updateProjectBrandInput('inova-solos', {
+      brandName: 'Inova Solos',
+      segmentCategory: 'Engenharia — controle tecnológico/concreto/solos',
+      segmentSpecialty: 'controle tecnológico de concreto e solos',
+      segment: 'engenharia técnica',
+      productsOrServices: 'ensaios de concreto, análise de solo e laudos técnicos',
+    }, dir);
+    const badBatch = await generateContentBatch('inova-solos', { days: 1, startDate: '2026-07-20' }, dir);
+    await deleteProjectContent('inova-solos', badBatch.items[0].contentId, dir, badBatch.batchId, 'não misturar concreto com obra predial genérica');
+
+    await createCentralProject({ projectId: 'novo-lab-solos', name: 'Novo Lab Solos', handle: '@lab', approvalEmail: 'aprovacao@example.com' }, dir);
+    await updateProjectBrandInput('novo-lab-solos', {
+      brandName: 'Novo Lab Solos',
+      segmentCategory: 'Engenharia — controle tecnológico/concreto/solos',
+      segmentSpecialty: 'controle tecnológico de concreto e solos',
+      segment: 'engenharia técnica',
+      productsOrServices: 'controle de concreto e solos para obras',
+    }, dir);
+    const sameSegment = await generateContentBatch('novo-lab-solos', { days: 1, startDate: '2026-07-21' }, dir);
+    assert.match(sameSegment.items[0].image.prompt, /EVITAR — APRENDIZADOS DESTE SEGMENTO/);
+    assert.match(sameSegment.items[0].image.prompt, /não misturar concreto com obra predial genérica/);
+
+    await createCentralProject({ projectId: 'obra-civil', name: 'Obra Civil', handle: '@obra', approvalEmail: 'aprovacao@example.com' }, dir);
+    await updateProjectBrandInput('obra-civil', {
+      brandName: 'Obra Civil',
+      segmentCategory: 'Engenharia — construção civil/obras',
+      segmentSpecialty: 'construção de casas',
+      segment: 'engenharia de construção',
+      productsOrServices: 'construção e reforma residencial',
+    }, dir);
+    const otherSegment = await generateContentBatch('obra-civil', { days: 1, startDate: '2026-07-22' }, dir);
+    assert.doesNotMatch(otherSegment.items[0].image.prompt, /não misturar concreto com obra predial genérica/);
+  });
+});
+
+test('technical base summarizes pasted sector material and reuses it only inside the same segment hierarchy', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'inova-tecnica', name: 'Inova Técnica', handle: '@inova', approvalEmail: 'aprovacao@example.com' }, dir);
+    await updateProjectBrandInput('inova-tecnica', {
+      brandName: 'Inova Técnica',
+      segmentGroup: 'Engenharia',
+      segmentCategory: 'Controle tecnológico / concreto / solos / asfalto',
+      segmentSpecialty: 'solos e pavimentação',
+      segment: 'controle tecnológico de solos, concreto e pavimentação',
+      productsOrServices: 'CBR, limite de liquidez, limite de plasticidade, granulometria e laudos técnicos',
+    }, dir);
+
+    const analyzed = await analyzeProjectTechnicalBase('inova-tecnica', {
+      sourceText: 'Ensaios de solo: CBR/ISC para pavimentação, limite de liquidez, limite de plasticidade, granulometria e compactação Proctor. token=segredo123',
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+    assert.match(analyzed.technicalBase.summary, /CBR/);
+    assert.match(analyzed.technicalBase.summary, /limite de liquidez/);
+    assert.doesNotMatch(analyzed.technicalBase.sourceText, /segredo123/);
+
+    await createCentralProject({ projectId: 'outro-lab', name: 'Outro Lab', handle: '@outrolab', approvalEmail: 'aprovacao@example.com' }, dir);
+    await updateProjectBrandInput('outro-lab', {
+      brandName: 'Outro Lab',
+      segmentGroup: 'Engenharia',
+      segmentCategory: 'Controle tecnológico / concreto / solos / asfalto',
+      segmentSpecialty: 'solos e pavimentação',
+      segment: 'controle tecnológico de solos',
+      productsOrServices: 'ensaios de solo e laudos técnicos',
+    }, dir);
+    const sameSegment = await generateContentBatch('outro-lab', { days: 1, startDate: '2026-07-21' }, dir);
+    assert.match(sameSegment.items[0].image.prompt, /BASE TÉCNICA DO SEGMENTO/);
+    assert.match(sameSegment.items[0].image.prompt, /CBR/);
+
+    await createCentralProject({ projectId: 'casa-embalagem', name: 'Casa Embalagem', handle: '@casa', approvalEmail: 'aprovacao@example.com' }, dir);
+    await updateProjectBrandInput('casa-embalagem', {
+      brandName: 'Casa Embalagem',
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Casa de embalagem',
+      segment: 'loja local de embalagens',
+      productsOrServices: 'embalagens, descartáveis e utilidades',
+    }, dir);
+    const otherSegment = await generateContentBatch('casa-embalagem', { days: 1, startDate: '2026-07-22' }, dir);
+    assert.doesNotMatch(otherSegment.items[0].image.prompt, /limite de liquidez/);
   });
 });
 

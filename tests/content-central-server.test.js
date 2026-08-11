@@ -233,6 +233,7 @@ test('a targeted edit (an operator correction note) asks the model to change onl
   assert.match(editPrompt, /EDIÇÃO pontual/i);
   assert.match(editPrompt, /aumentar o preço/);
   assert.match(editPrompt, /preserve exatamente o restante da composição/i);
+  assert.match(editPrompt, /Se o pedido citar logo\/marca, ajuste somente a logo/i);
   assert.doesNotMatch(editPrompt, /mudar claramente pelo menos 3 itens/i);
   assert.doesNotMatch(editPrompt, /HIERARQUIA/i);
   // A realism-focused correction ("isso ficou com cara de IA") needs the
@@ -1550,7 +1551,7 @@ test('publishWithGaveteSync pulls the gaveta first and pushes the published resu
 });
 
 test('publishWithGaveteSync skips the real publish and syncs local state when the pulled gaveta already shows the item published', async () => {
-  await withGaveta(async ({ workDir, bareDir }) => {
+  await withGaveta(async ({ workDir }) => {
     const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
     try {
       await createCentralProject({ projectId: 'gaveta-already-published', name: 'Gaveta Already Published' }, dir);

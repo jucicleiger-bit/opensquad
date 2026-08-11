@@ -16,6 +16,9 @@ export interface ProjectInstagram {
 
 export interface BrandInput {
   brandName?: string;
+  segmentGroup?: string;
+  segmentCategory?: string;
+  segmentSpecialty?: string;
   segment?: string;
   productsOrServices?: string;
   description?: string;
@@ -30,6 +33,13 @@ export interface BrandInput {
   brandColors?: string;
   factualConstraints?: string;
   websiteOrInstagram?: string;
+}
+
+export interface TechnicalBase {
+  sourceText?: string;
+  summary?: string;
+  source?: string;
+  updatedAt?: string | null;
 }
 
 export const BRAND_XRAY_BLOCK_IDS = ["summary", "communication", "contentStrategy", "visualIdentity"] as const;
@@ -189,6 +199,7 @@ export interface ProjectSummary {
   brandIdentity?: BrandIdentity;
   brandXray?: BrandXray;
   brandBriefing?: unknown;
+  technicalBase?: TechnicalBase;
   brand?: ProjectBrand;
   token?: ProjectToken | null;
   contentSettings?: {
@@ -668,6 +679,13 @@ export function saveBrandInput(projectId: string, input: BrandInput): Promise<{ 
   return api(`/api/projects/${encodeURIComponent(projectId)}/brand-input`, {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function analyzeTechnicalBase(projectId: string, sourceText: string): Promise<{ project: ProjectSummary; technicalBase: TechnicalBase }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/technical-base/analyze`, {
+    method: "POST",
+    body: JSON.stringify({ sourceText }),
   });
 }
 

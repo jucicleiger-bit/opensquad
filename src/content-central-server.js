@@ -22,6 +22,7 @@ import {
   approveContent,
   enqueueSegmentTemplateAdaptation,
   listSegmentTemplates,
+  analyzeProjectTechnicalBase,
   analyzeProjectBrandXray,
   analyzeProjectBrandBriefing,
   approveProjectBrandXray,
@@ -555,6 +556,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const project = await updateProjectBrandInput(projectId, body, targetDir);
     return sendJson(res, 200, { project });
+  }
+
+  if (parts.length === 5 && parts[3] === 'technical-base' && parts[4] === 'analyze') {
+    const body = await readBody(req);
+    const result = await analyzeProjectTechnicalBase(projectId, body, targetDir, new Date(), { technicalAnalyzer: context.technicalAnalyzer });
+    return sendJson(res, 200, result);
   }
 
   // "Melhorar bio" — the operator's rough draft goes through one AI pass to
@@ -1121,6 +1128,7 @@ function buildTargetedEditPrompt({ content, note }) {
   return [
     'Esta é uma EDIÇÃO pontual da imagem anexada (primeira imagem de referência) — não é uma peça nova.',
     'Preserve exatamente o restante da composição: mesmo layout, mesmo produto/foto, mesmas cores, mesma tipografia, mesmo texto e a mesma posição de cada elemento.',
+    'Se o pedido citar logo/marca, ajuste somente a logo: não trocar fundo, produto, cena, enquadramento, materiais, texto, preço ou CTA.',
     `Ajuste solicitado (mude apenas isso, nada mais): ${note}`,
     'Não gere uma composição nova nem varie ângulo, fundo, enquadramento ou qualquer outro elemento além do pedido acima.',
     ...TARGETED_EDIT_REALISM_LINES,

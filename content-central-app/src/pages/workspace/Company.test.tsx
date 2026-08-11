@@ -58,7 +58,10 @@ describe("Company", () => {
     const audienceTypeSelect = screen.getByLabelText("Foco comercial (opcional)") as HTMLSelectElement;
     expect(audienceTypeSelect.value).toBe("");
 
-    await userEvent.type(screen.getByLabelText("Segmento"), "Atacado de embalagens");
+    await userEvent.type(screen.getByLabelText("Setor principal"), "Engenharia");
+    await userEvent.type(screen.getByLabelText("Tipo de negócio / nicho"), "Controle tecnológico / concreto / solos / asfalto");
+    await userEvent.type(screen.getByLabelText("Segmento detalhado"), "Atacado de embalagens");
+    await userEvent.type(screen.getByLabelText("Especialidade/subsegmento"), "controle tecnológico de concreto");
     await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "embalagens e descartáveis para revenda");
     await userEvent.selectOptions(audienceTypeSelect, "b2b");
     await userEvent.click(screen.getByRole("button", { name: "Salvar informações" }));
@@ -66,6 +69,48 @@ describe("Company", () => {
     expect(await screen.findByText("Informações salvas.")).toBeInTheDocument();
     const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
     expect(JSON.parse(saveCall[1].body as string).audienceType).toBe("b2b");
+    expect(JSON.parse(saveCall[1].body as string).segmentGroup).toBe("Engenharia");
+    expect(JSON.parse(saveCall[1].body as string).segmentCategory).toBe("Controle tecnológico / concreto / solos / asfalto");
+    expect(JSON.parse(saveCall[1].body as string).segmentSpecialty).toBe("controle tecnológico de concreto");
+  });
+
+  it("allows typing a new business niche when the preset list is not enough", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {} } },
+      { body: projectState({ brandInput: { segmentGroup: "Engenharia", segmentCategory: "Geotecnia especial" } }) },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.type(screen.getByLabelText("Setor principal"), "Engenharia");
+    await userEvent.type(screen.getByLabelText("Tipo de negócio / nicho"), "Geotecnia especial");
+    await userEvent.type(screen.getByLabelText("Segmento detalhado"), "Engenharia geotécnica");
+    await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "sondagem, fundações e laudos técnicos");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar informações" }));
+
+    expect(await screen.findByText("Informações salvas.")).toBeInTheDocument();
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(JSON.parse(saveCall[1].body as string).segmentGroup).toBe("Engenharia");
+    expect(JSON.parse(saveCall[1].body as string).segmentCategory).toBe("Geotecnia especial");
+  });
+
+  it("sends pasted technical material to be summarized into the project learning base", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {}, technicalBase: { summary: "Resumo técnico: usar CBR e granulometria sem misturar concreto." } } },
+      { body: projectState({ technicalBase: { summary: "Resumo técnico: usar CBR e granulometria sem misturar concreto." } }) },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.type(screen.getByLabelText("Texto técnico para aprendizado"), "CBR, granulometria e limite de liquidez para solo.");
+    await userEvent.click(screen.getByRole("button", { name: "Analisar e salvar resumo prático" }));
+
+    expect(await screen.findByText("Base técnica resumida e salva para este segmento.")).toBeInTheDocument();
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(saveCall[0]).toContain("/technical-base/analyze");
+    expect(JSON.parse(saveCall[1].body as string).sourceText).toContain("CBR");
   });
 
   it("blocks analysis until the required fields are filled", async () => {
@@ -87,7 +132,7 @@ describe("Company", () => {
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
-    await userEvent.type(screen.getByLabelText("Segmento"), "Pizzaria");
+    await userEvent.type(screen.getByLabelText("Segmento detalhado"), "Pizzaria");
     await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "Rodízio e delivery de pizzas");
     await userEvent.click(screen.getByRole("button", { name: "Analisar minha marca" }));
 
@@ -139,7 +184,7 @@ describe("Company", () => {
 
     expect(await screen.findByText("Nome da empresa")).toBeInTheDocument();
     expect(screen.getByLabelText("Nome da empresa")).toHaveValue("Boss Pizzaria");
-    expect(screen.getByLabelText("Segmento")).toHaveValue("Pizzaria");
+    expect(screen.getByLabelText("Segmento detalhado")).toHaveValue("Pizzaria");
     expect(screen.getByText("Pizza Grande — R$ 49,90", { exact: false })).toBeInTheDocument();
   });
 
