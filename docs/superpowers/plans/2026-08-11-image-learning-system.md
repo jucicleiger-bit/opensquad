@@ -54,7 +54,7 @@
 
 # Phase A — Reference leak fix + References scope-down
 
-### Task A1: Stop offer photos from writing into `project.brand.references`
+### Task 1 (A1): Stop offer photos from writing into `project.brand.references`
 
 **Files:**
 - Modify: `src/content-central.js:913-988` (`saveProjectAsset`)
@@ -159,7 +159,7 @@ git commit -m "fix(content-central): scope offer photo uploads out of the shared
 
 ---
 
-### Task A2: Frontend types + Offers.tsx uses the new scope, resolves preview from `offerAssets`
+### Task 2 (A2): Frontend types + Offers.tsx uses the new scope, resolves preview from `offerAssets`
 
 **Files:**
 - Modify: `content-central-app/src/api/client.ts` (`SaveAssetInput` ~L833-852, `ProjectSummary` ~L186-214)
@@ -258,7 +258,7 @@ git commit -m "feat(content-central-app): scope offer photo uploads out of the r
 
 ---
 
-### Task A3: Shrink References.tsx to logo + direção visual only
+### Task 3 (A3): Shrink References.tsx to logo + direção visual only
 
 **Files:**
 - Modify: `content-central-app/src/pages/workspace/References.tsx`
@@ -310,7 +310,7 @@ git commit -m "refactor(content-central-app): shrink References to logo + direç
 
 # Phase B — Hierarchical segment learning (Setor → Nicho → Especialidade)
 
-### Task B1: Rewrite `segment-learnings.json` as a hierarchical v2 store with ancestor inheritance
+### Task 4 (B1): Rewrite `segment-learnings.json` as a hierarchical v2 store with ancestor inheritance
 
 **Files:**
 - Modify: `src/content-central.js` — `normalizeSegmentLearnings` (~L3440), `projectSegmentKey`/`projectSegmentLabel` (~L3508-3521), `readSegmentLearningStore`/`loadSegmentLearningsForProject`/`addSegmentLearning` (~L3523-3543)
@@ -551,7 +551,7 @@ git commit -m "feat(content-central): hierarchical segment learning with Setor/N
 
 ---
 
-### Task B2: Shared `analyzeLearningImage` / `saveLearningEntry` / `deleteLearningEntry` + routes
+### Task 5 (B2): Shared `analyzeLearningImage` / `saveLearningEntry` / `deleteLearningEntry` + routes
 
 **Files:**
 - Modify: `src/content-central.js` — new functions near `loadSegmentLearningNodes`
@@ -769,7 +769,7 @@ git commit -m "feat(content-central): shared upload-image-analyze-confirm learni
 
 ---
 
-### Task B3: Client wrappers + types
+### Task 6 (B3): Client wrappers + types
 
 **Files:**
 - Modify: `content-central-app/src/api/client.ts`
@@ -861,7 +861,7 @@ git commit -m "feat(content-central-app): client wrappers for the learning-entry
 
 ---
 
-### Task B4: `LearningGallery` component + `SegmentLearning` page + menu wiring
+### Task 7 (B4): `LearningGallery` component + `SegmentLearning` page + menu wiring
 
 **Files:**
 - Create: `content-central-app/src/components/LearningGallery.tsx`
@@ -1167,7 +1167,7 @@ git commit -m "feat(content-central-app): segment learning UI (Setor/Nicho/Espec
 
 # Phase C — Per-offer-type learning (global, reuses Phase B's pipeline)
 
-### Task C1: `offerObjective()` reads from an editable `offer-type-learnings.json`
+### Task 8 (C1): `offerObjective()` reads from an editable `offer-type-learnings.json`
 
 **Files:**
 - Modify: `src/content-central.js` — `offerObjective` (~L4086-4092), `formatContentTopicLines` (~L4094-4107)
@@ -1275,7 +1275,7 @@ git commit -m "feat(content-central): editable per-offer-type base instruction +
 
 ---
 
-### Task C2: Routes + client wrappers for offer-type learning
+### Task 9 (C2): Routes + client wrappers for offer-type learning
 
 **Files:**
 - Modify: `src/content-central-server.js` — `GET /api/projects/:id/offer-type-learnings`, `POST /api/projects/:id/offer-type-learnings/base-instruction`; extend the Task B2 routes to accept `scope=offerType` bodies (they already do — `saveLearningEntry`/`deleteLearningEntry`/`analyzeLearningImage` all branch on `input.scope`, so the same 3 routes work if the client sends `scope: "offerType"`; no new route needed for those 3).
@@ -1348,7 +1348,7 @@ git commit -m "feat(content-central): routes + client wrappers for offer-type le
 
 ---
 
-### Task C3: "Aprendizado por tipo" panel in Ofertas
+### Task 10 (C3): "Aprendizado por tipo" panel in Ofertas
 
 **Files:**
 - Modify: `content-central-app/src/pages/workspace/Offers.tsx`
