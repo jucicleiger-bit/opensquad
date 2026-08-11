@@ -30,3 +30,4 @@ dashboards/test-results/
 /_opensquad/content-central/secrets/
 /git-private
 /RECOVERY.md
+/.git-private/
