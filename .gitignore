@@ -1,11 +1,11 @@
 node_modules/
-.env
+.env*
+!.env.example
 *.log
 squads/*/
 _opensquad/_memory/company.md
 _opensquad/_memory/preferences.md
 _opensquad/_browser_profile/
-_opensquad/content-central/secrets/
 docs/
 .superpowers/
 temp/
@@ -19,6 +19,16 @@ temp/squads/
 .claude/settings.local.json
 dashboards/test-results/
 
+# Stray local junk -- never publish to the public repo
+.playwright-mcp/
+graphify-out/
+scripts/
+tmp-panel-script.js
+review-step-full.png
+test_grok_imagine.png
+uigram-home.png
+content-central-app/.hallmark/
+
 # Private backup (tracked separately via .git-private, see RECOVERY.md)
 /.env.bak.*
 /.claude/
@@ -27,7 +37,7 @@ dashboards/test-results/
 /.hermes/
 /skills-lock.json
 /skills/grok-papercraft-director/
-/_opensquad/content-central/secrets/
+/_opensquad/content-central/
 /git-private
 /RECOVERY.md
 /.git-private/
