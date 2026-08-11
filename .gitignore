@@ -18,3 +18,15 @@ test-results/
 temp/squads/
 .claude/settings.local.json
 dashboards/test-results/
+
+# Private backup (tracked separately via .git-private, see RECOVERY.md)
+/.env.bak.*
+/.claude/
+/.agents/
+/.codex/
+/.hermes/
+/skills-lock.json
+/skills/grok-papercraft-director/
+/_opensquad/content-central/secrets/
+/git-private
+/RECOVERY.md
