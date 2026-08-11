@@ -201,6 +201,7 @@ export interface ProjectSummary {
   brandBriefing?: unknown;
   technicalBase?: TechnicalBase;
   brand?: ProjectBrand;
+  offerAssets?: ProjectReference[];
   token?: ProjectToken | null;
   contentSettings?: {
     catalogGeneralInfo?: string;
@@ -840,6 +841,7 @@ export interface SaveAssetInput {
   useInNextGeneration?: boolean;
   weight?: string;
   instruction?: string;
+  scope?: "offer";
 }
 
 export interface SavedAsset {

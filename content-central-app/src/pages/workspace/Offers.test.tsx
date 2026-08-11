@@ -204,6 +204,28 @@ describe("Offers", () => {
     expect(JSON.parse(calls[2][1].body as string).photoReferenceIds).toEqual(["foto-iphone"]);
   });
 
+  it("uploads the offer photo with scope 'offer' so it never lands in the shared references gallery", async () => {
+    const savedOffer = { ...RODIZIO_OFFER, photoReferenceIds: ["foto-pizza"] };
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-pizza" } } } },
+      { body: { project: {}, offer: savedOffer } },
+      { body: projectState([savedOffer]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Rodízio da Boss");
+    const photoFile = new File(["fake-image-bytes"], "pizza.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText("Foto(s) real(is) do produto (opcional)"), photoFile);
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/assets");
+    expect(JSON.parse(calls[1][1].body as string).scope).toBe("offer");
+  });
+
   it("previews the pillar an offer would auto-resolve to when no pillarId is set, and hides it once one is", async () => {
     const convidaPillar = { id: "convite", name: "Convite Direto", role: "convida", visualTreatment: "leve", color: "#E63946", weight: 1, requiresEvidence: false };
     const autoOffer = { ...RODIZIO_OFFER, type: "offer", pillarId: null };

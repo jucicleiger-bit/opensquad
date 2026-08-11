@@ -64,7 +64,7 @@ export function Offers() {
   // an operator expects when they've already set groups up. Falls back to
   // "" (no group) for a project that has no groups at all yet.
   const defaultGroupId = offerGroups[0]?.id || "";
-  const references = project.brand?.references || [];
+  const references = [...(project.offerAssets || []), ...(project.brand?.references || [])];
   // The product list is rendered as one card per group (in the order groups
   // were created), each containing that group's offer cards — instead of a
   // flat list with a "grupo: X" pill on every item. Offers with no group
@@ -312,6 +312,7 @@ export function Offers() {
           usageRoles: ["product_photo"],
           referenceCategory: "real_product",
           useInNextGeneration: true,
+          scope: "offer",
           instruction: `Foto real do produto: ${form.name}`,
         });
         if (uploaded.asset.metadata?.id) uploadedIds.push(uploaded.asset.metadata.id);
