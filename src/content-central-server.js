@@ -285,6 +285,7 @@ export async function startContentCentralServer({
   logoColorAnalyzer = null,
   siteAnalyzer = null,
   webResearcher = null,
+  learningImageAnalyzer = null,
   videoAnimator = null,
   prospectScreenshotAnalyzer = null,
   bioImprover = null,
@@ -302,6 +303,7 @@ export async function startContentCentralServer({
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
+    learningImageAnalyzer: learningImageAnalyzer || (enableAiImages ? analyzeLearningImageWithCodexAgent : null),
     videoAnimator: videoAnimator || (enableAiImages ? (payload) => animateImageForReelsWithFfmpeg(payload, targetDir) : null),
     prospectScreenshotAnalyzer: prospectScreenshotAnalyzer || (enableAiImages ? analyzeProspectScreenshotWithHermes : null),
     bioImprover: bioImprover || (enableAiImages ? improveProspectBioWithAi : null),
@@ -663,8 +665,11 @@ async function handleRequest(req, res, targetDir, context = {}) {
   }
 
   if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'analyze-image') {
+    if (typeof context.learningImageAnalyzer !== 'function') {
+      return sendJson(res, 501, { error: 'Análise de imagem por IA não está disponível neste servidor.' });
+    }
     const body = await readBody(req);
-    const result = await analyzeLearningImage(projectId, { ...body, scope: 'segment' }, targetDir, new Date(), { learningImageAnalyzer: analyzeLearningImageWithCodexAgent });
+    const result = await analyzeLearningImage(projectId, { ...body, scope: 'segment' }, targetDir, new Date(), { learningImageAnalyzer: context.learningImageAnalyzer });
     return sendJson(res, 200, result);
   }
 
