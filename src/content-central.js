@@ -3640,7 +3640,7 @@ async function readSegmentLearningStore(paths) {
   return migrateSegmentLearningStoreV1ToV2(stored);
 }
 
-async function loadSegmentLearningNodes(paths, project) {
+export async function loadSegmentLearningNodes(paths, project) {
   const store = await readSegmentLearningStore(paths);
   return segmentNodePaths(project).map((path, index) => ({
     path,
@@ -3648,6 +3648,100 @@ async function loadSegmentLearningNodes(paths, project) {
     level: SEGMENT_LEVELS[index],
     entries: (store.nodes[path]?.entries || []).map(normalizeSegmentLearningEntry),
   }));
+}
+
+function learningStorePath(paths, scope) {
+  return scope === 'offerType' ? paths.offerTypeLearningsPath : paths.segmentLearningsPath;
+}
+
+async function readLearningStore(paths, scope) {
+  if (scope === 'segment') return readSegmentLearningStore(paths);
+  const stored = await readJson(paths.offerTypeLearningsPath, null);
+  return stored || { schemaVersion: 1, types: {} };
+}
+
+async function writeLearningStore(paths, scope, store) {
+  await writeJson(learningStorePath(paths, scope), store);
+}
+
+function learningStoreNodesKey(scope) {
+  return scope === 'segment' ? 'nodes' : 'types';
+}
+
+// Saves the uploaded reference image and returns the AI's suggested
+// description WITHOUT touching either learning store — the operator confirms
+// (possibly edits) the text in the UI first, then saveLearningEntry below
+// does the actual write. Keeps "upload+analyze" and "persist" independently
+// retriable instead of one all-or-nothing call.
+export async function analyzeLearningImage(projectId, input, targetDir = process.cwd(), now = new Date(), options = {}) {
+  const paths = getCentralPaths(targetDir, projectId);
+  const project = await loadProject(paths);
+  const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
+  const groupSlug = slugify(input?.groupKey || '');
+  const filename = sanitizeFilename(input?.filename || 'referencia.bin');
+  const buffer = decodeDataUrl(input?.dataUrl);
+  const relativePath = `assets/learning/${scope === 'segment' ? 'segment' : 'offer-type'}/${groupSlug}/${filename}`;
+  const destination = join(paths.projectDir, relativePath);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(destination, buffer);
+
+  const analyzer = typeof options.learningImageAnalyzer === 'function' ? options.learningImageAnalyzer : defaultLearningImageAnalyzer;
+  const context = scope === 'segment'
+    ? `segmento "${input.groupKey}" da empresa ${project.name}`
+    : `tipo de oferta "${input.groupKey}"`;
+  const suggestedText = await analyzer(destination, context);
+
+  return { imagePath: relativePath, suggestedText: cleanText(suggestedText || '') };
+}
+
+async function defaultLearningImageAnalyzer() {
+  return '';
+}
+
+// scope: 'segment' treats groupKey as an OPAQUE tagged node path (e.g.
+// `group:alimenticio/category:pizzaria`, as produced by segmentNodePaths())
+// — it must NOT be re-slugified here, or it stops matching the keys
+// loadSegmentLearningNodes()/addSegmentLearning() read/write under
+// segment-learnings.json's `nodes`. scope: 'offerType' groupKeys are plain
+// words ("combo", "delivery"), so slugifying is the right normalization
+// there (mirrors OFFER_TYPES-style handling elsewhere in this file).
+export async function saveLearningEntry(projectId, input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
+    const store = scope === 'segment' ? await readSegmentLearningStore(paths) : await readLearningStore(paths, scope);
+    const nodesKey = learningStoreNodesKey(scope);
+    const groupKey = scope === 'segment' ? String(input.groupKey || '') : slugify(input.groupKey || '');
+    const node = store[nodesKey][groupKey] || { label: input.groupKey, entries: [] };
+    const entry = normalizeSegmentLearningEntry({
+      bucket: input.bucket,
+      kind: input.kind,
+      text: input.text,
+      imagePath: input.imagePath,
+      source: 'manual',
+    });
+    node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+    store[nodesKey] = { ...store[nodesKey], [groupKey]: node };
+    store.schemaVersion = scope === 'segment' ? 2 : 1;
+    await writeLearningStore(paths, scope, store);
+    return node.entries;
+  });
+}
+
+export async function deleteLearningEntry(projectId, input, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
+    const store = scope === 'segment' ? await readSegmentLearningStore(paths) : await readLearningStore(paths, scope);
+    const nodesKey = learningStoreNodesKey(scope);
+    const groupKey = scope === 'segment' ? String(input.groupKey || '') : slugify(input.groupKey || '');
+    const node = store[nodesKey][groupKey];
+    if (!node) return [];
+    node.entries = node.entries.filter((entry) => entry.id !== input.entryId);
+    store[nodesKey] = { ...store[nodesKey], [groupKey]: node };
+    await writeLearningStore(paths, scope, store);
+    return node.entries;
+  });
 }
 
 async function loadSegmentLearningsForProject(paths, project) {
@@ -3701,6 +3795,13 @@ async function loadProject(paths) {
     ...normalized,
     segmentLearnings: await loadSegmentLearningsForProject(paths, normalized),
   };
+}
+
+// Test-only wrapper — loadProject() itself isn't exported (it takes the
+// already-resolved `paths`, an internal shape), this gives tests a one-call
+// way to get the same normalized project loadSegmentLearningNodes expects.
+export async function loadProjectForTest(projectId, targetDir = process.cwd()) {
+  return loadProject(getCentralPaths(targetDir, projectId));
 }
 
 function toProjectSummary(project) {

@@ -4,12 +4,14 @@ import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  analyzeLearningImage,
   approveContent,
   buildApprovalPayload,
   calculateTokenDaysRemaining,
   createCentralProject,
   buildSegmentTemplateContentItem,
   deleteAdCreative,
+  deleteLearningEntry,
   deleteProjectContent,
   deleteProjectReference,
   enqueueSegmentTemplateAdaptation,
@@ -27,10 +29,13 @@ import {
   listCommemorativeDates,
   listSegmentTemplates,
   listSystemAlerts,
+  loadProjectForTest,
+  loadSegmentLearningNodes,
   loadSegmentTemplate,
   migrateSegmentLearningStoreV1ToV2,
   registerSegmentTemplate,
   reconcileInterruptedGenerations,
+  saveLearningEntry,
   sendDueAlertEmails,
   listProjectReferences,
   listProjectContent,
@@ -454,6 +459,59 @@ test('migrateSegmentLearningStoreV1ToV2 splits the flat label into a Setor/Nicho
   const deepest = v2.nodes['engenharia/controle-tecnologico/solos-e-pavimentacao'].entries;
   assert.ok(deepest.some((e) => e.bucket === 'technical' && e.text === 'CBR, limite de liquidez'));
   assert.ok(deepest.some((e) => e.bucket === 'avoid' && e.text === 'não misturar concreto com obra predial genérica'));
+});
+
+test('analyzeLearningImage saves the file and returns a suggested description without writing to the store yet; saveLearningEntry then persists it', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boss-pizza-2', name: 'Boss Pizza 2', handle: '@boss2', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('boss-pizza-2', {
+      brandName: 'Boss Pizza 2',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segmentSpecialty: 'napolitana',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const fakeAnalyzer = async () => 'Esfiha redonda, borda dourada natural, sem formato retangular.';
+
+    // groupKey uses the tagged node-path format segmentNodePaths() actually
+    // produces (Task 4/B1) — `group:<slug>/category:<slug>`, not a bare
+    // `group-slug/category-slug` path. This must match exactly what
+    // loadSegmentLearningNodes() returns as `node.path` for this project
+    // (segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria'), since the
+    // real UI (Task 7/B4) always passes an opaque `node.path` string through
+    // as groupKey — it never re-derives or re-slugifies it.
+    const analyzed = await analyzeLearningImage('boss-pizza-2', {
+      scope: 'segment',
+      groupKey: 'group:alimenticio/category:pizzaria',
+      dataUrl,
+      filename: 'esfiha-redonda.png',
+    }, dir, new Date(), { learningImageAnalyzer: fakeAnalyzer });
+
+    assert.match(analyzed.imagePath, /assets\/learning\/segment\/group-alimenticio-category-pizzaria\/esfiha-redonda\.png/);
+    assert.equal(analyzed.suggestedText, 'Esfiha redonda, borda dourada natural, sem formato retangular.');
+
+    const saved = await saveLearningEntry('boss-pizza-2', {
+      scope: 'segment',
+      groupKey: 'group:alimenticio/category:pizzaria',
+      bucket: 'approved',
+      kind: 'image',
+      text: analyzed.suggestedText,
+      imagePath: analyzed.imagePath,
+    }, dir, new Date());
+
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].imagePath, analyzed.imagePath);
+
+    const nodes = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-2'), await loadProjectForTest('boss-pizza-2', dir));
+    const pizzariaNode = nodes.find((node) => node.path === 'group:alimenticio/category:pizzaria');
+    assert.equal(pizzariaNode.entries.length, 1);
+
+    await deleteLearningEntry('boss-pizza-2', { scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', entryId: saved[0].id }, dir);
+    const nodesAfterDelete = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-2'), await loadProjectForTest('boss-pizza-2', dir));
+    assert.equal(nodesAfterDelete.find((node) => node.path === 'group:alimenticio/category:pizzaria').entries.length, 0);
+  });
 });
 
 test('technical base summarizes pasted sector material and reuses it only inside the same segment hierarchy', async () => {

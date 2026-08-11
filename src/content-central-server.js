@@ -16,12 +16,15 @@ import {
   contentCentralPersonaResponsibilityLine,
 } from './content-central-personas.js';
 import {
+  analyzeLearningImage,
   animateContentForReels,
   applyExternalPublishResult,
   buildApprovalPayload,
   approveContent,
+  deleteLearningEntry,
   enqueueSegmentTemplateAdaptation,
   listSegmentTemplates,
+  loadSegmentLearningNodes,
   analyzeProjectTechnicalBase,
   analyzeProjectBrandXray,
   analyzeProjectBrandBriefing,
@@ -60,6 +63,7 @@ import {
   regenerateContentGroup,
   researchOnlineVisualTrends,
   runDuePublishSweep,
+  saveLearningEntry,
   saveProjectAsset,
   saveProjectOffer,
   saveProjectOfferGroup,
@@ -656,6 +660,24 @@ async function handleRequest(req, res, targetDir, context = {}) {
     }
     const result = await researchOnlineVisualTrends(projectId, { webResearcher: context.webResearcher }, targetDir);
     return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'analyze-image') {
+    const body = await readBody(req);
+    const result = await analyzeLearningImage(projectId, { ...body, scope: 'segment' }, targetDir, new Date(), { learningImageAnalyzer: analyzeLearningImageWithCodexAgent });
+    return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'entries') {
+    const body = await readBody(req);
+    const entries = await saveLearningEntry(projectId, { ...body, scope: 'segment' }, targetDir);
+    return sendJson(res, 200, { entries });
+  }
+
+  if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'entries-delete') {
+    const body = await readBody(req);
+    const entries = await deleteLearningEntry(projectId, { ...body, scope: 'segment' }, targetDir);
+    return sendJson(res, 200, { entries });
   }
 
   if (parts.length === 4 && parts[3] === 'offers') {
@@ -3154,6 +3176,16 @@ async function callCodexAgentText(prompt, timeoutEnvVar, imagePaths = []) {
   } finally {
     await rm(outputFile, { force: true }).catch(() => {});
   }
+}
+
+// Default `learningImageAnalyzer` for analyzeLearningImage() (content-central.js)
+// — kept here rather than in content-central.js to keep that file free of
+// codex-shelling code, matching the existing analyzer/reviewer separation in
+// this file (reviewAiImageWithCodexAgent, analyzeProspectScreenshotWithHermes).
+async function analyzeLearningImageWithCodexAgent(imagePath, context) {
+  const prompt = `Descreva em 1-2 frases o que esta imagem ensina sobre "${context}" para gerar artes publicitárias mais realistas: formato real do produto, textura, iluminação, o que evita parecer "gerado por IA". Responda só com a descrição, sem introdução.`;
+  const raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath]);
+  return raw || '';
 }
 
 // Same dispatch pattern as generateAiImageForActiveProvider — codex-agent is
