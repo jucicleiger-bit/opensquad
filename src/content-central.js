@@ -3476,7 +3476,20 @@ function segmentNodePaths(project) {
   // category/specialty' test uses (no segmentGroup, matching
   // segmentCategory/segmentSpecialty) and is required to keep passing
   // unmodified.
-  const parts = [rawGroup, rawCategory, rawSpecialty].filter(Boolean).map(slugify);
+  //
+  // Each kept segment is tagged with the field it came from (group:/
+  // category:/specialty:) instead of a bare slug — two projects only share
+  // a node when they have the IDENTICAL set of populated fields with
+  // identical values, never merely an identical trailing slug. Without the
+  // tag, group='Engenharia'+category='Solos'+specialty='' and
+  // group='Engenharia'+category=''+specialty='Solos' both collapse to the
+  // same 'engenharia/solos' path and silently merge two unrelated
+  // businesses (one categorized under "Solos", the other specialized in it).
+  const parts = [
+    rawGroup ? `group:${slugify(rawGroup)}` : '',
+    rawCategory ? `category:${slugify(rawCategory)}` : '',
+    rawSpecialty ? `specialty:${slugify(rawSpecialty)}` : '',
+  ].filter(Boolean);
   return parts.map((_, index) => parts.slice(0, index + 1).join('/'));
 }
 

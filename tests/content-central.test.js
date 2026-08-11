@@ -320,7 +320,7 @@ test('segment learnings at the Setor level are shared across different Nicho/Cat
     await writeFile(paths.segmentLearningsPath, JSON.stringify({
       schemaVersion: 2,
       nodes: {
-        alimenticio: {
+        'group:alimenticio': {
           label: 'Alimentício',
           entries: [{
             id: 'e1',
@@ -385,6 +385,32 @@ test('addSegmentLearning writes only to the deepest node — an auto-avoid learn
     }, dir);
     const sameSetorDifferentNicho = await generateContentBatch('rei-hamburguer', { days: 1, startDate: '2026-07-21' }, dir);
     assert.doesNotMatch(sameSetorDifferentNicho.items[0].image.prompt, /não parecer gerado por IA, mais detalhista/);
+  });
+});
+
+test('segmentNodePaths does not collide a project categorized under "Solos" with a project specialized in "Solos" (same group, different field)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'categoria-solos', name: 'Categoria Solos', handle: '@cat', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('categoria-solos', {
+      brandName: 'Categoria Solos',
+      segmentGroup: 'Engenharia',
+      segmentCategory: 'Solos',
+      segment: 'engenharia de solos',
+      productsOrServices: 'ensaios de solo',
+    }, dir);
+    const badBatch = await generateContentBatch('categoria-solos', { days: 1, startDate: '2026-07-20' }, dir);
+    await deleteProjectContent('categoria-solos', badBatch.items[0].contentId, dir, badBatch.batchId, 'não misturar laudo de solo com laudo de concreto');
+
+    await createCentralProject({ projectId: 'especialidade-solos', name: 'Especialidade Solos', handle: '@esp', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('especialidade-solos', {
+      brandName: 'Especialidade Solos',
+      segmentGroup: 'Engenharia',
+      segmentSpecialty: 'Solos',
+      segment: 'engenharia especializada em solos',
+      productsOrServices: 'consultoria em solos',
+    }, dir);
+    const otherBatch = await generateContentBatch('especialidade-solos', { days: 1, startDate: '2026-07-21' }, dir);
+    assert.doesNotMatch(otherBatch.items[0].image.prompt, /não misturar laudo de solo com laudo de concreto/);
   });
 });
 
