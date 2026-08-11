@@ -28,6 +28,7 @@ import {
   listSegmentTemplates,
   listSystemAlerts,
   loadSegmentTemplate,
+  migrateSegmentLearningStoreV1ToV2,
   registerSegmentTemplate,
   reconcileInterruptedGenerations,
   sendDueAlertEmails,
@@ -303,6 +304,130 @@ test('segment learnings are reused only for the same selected segment category/s
     const otherSegment = await generateContentBatch('obra-civil', { days: 1, startDate: '2026-07-22' }, dir);
     assert.doesNotMatch(otherSegment.items[0].image.prompt, /não misturar concreto com obra predial genérica/);
   });
+});
+
+test('segment learnings at the Setor level are shared across different Nicho/Categoria within the same Setor, but not with a different Setor', async () => {
+  await withTempProject(async (dir) => {
+    // Setor-level sharing only applies to entries that already live at the
+    // Setor node (manual entries added via the future Setor-level editor —
+    // Task 8/B2's saveLearningEntry, out of scope here). Seed the Setor node
+    // directly instead of going through addSegmentLearning, which always
+    // writes to a project's own deepest node by design (see the separate
+    // "does NOT leak sideways" test below) — this test is only responsible
+    // for the read/sum side (loadSegmentLearningsForProject).
+    await createCentralProject({ projectId: 'rei-hamburguer', name: 'Rei Hambúrguer', handle: '@rei', approvalEmail: 'a@example.com' }, dir);
+    const paths = getCentralPaths(dir, 'rei-hamburguer');
+    await writeFile(paths.segmentLearningsPath, JSON.stringify({
+      schemaVersion: 2,
+      nodes: {
+        alimenticio: {
+          label: 'Alimentício',
+          entries: [{
+            id: 'e1',
+            bucket: 'avoid',
+            kind: 'text',
+            text: 'não parecer gerado por IA, mais detalhista',
+            imagePath: '',
+            source: 'manual',
+            createdAt: new Date().toISOString(),
+          }],
+        },
+      },
+    }, null, 2), 'utf-8');
+
+    await updateProjectBrandInput('rei-hamburguer', {
+      brandName: 'Rei Hambúrguer',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Hamburgueria',
+      segmentSpecialty: 'artesanal',
+      segment: 'hamburgueria',
+      productsOrServices: 'hambúrgueres',
+    }, dir);
+    const sameSetor = await generateContentBatch('rei-hamburguer', { days: 1, startDate: '2026-07-21' }, dir);
+    assert.match(sameSetor.items[0].image.prompt, /não parecer gerado por IA, mais detalhista/);
+
+    await createCentralProject({ projectId: 'obra-civil-2', name: 'Obra Civil 2', handle: '@obra2', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('obra-civil-2', {
+      brandName: 'Obra Civil 2',
+      segmentGroup: 'Engenharia',
+      segmentCategory: 'Construção civil',
+      segmentSpecialty: 'residencial',
+      segment: 'engenharia',
+      productsOrServices: 'construção',
+    }, dir);
+    const otherSetor = await generateContentBatch('obra-civil-2', { days: 1, startDate: '2026-07-22' }, dir);
+    assert.doesNotMatch(otherSetor.items[0].image.prompt, /não parecer gerado por IA, mais detalhista/);
+  });
+});
+
+test('addSegmentLearning writes only to the deepest node — an auto-avoid learned by one Nicho does NOT leak sideways to a sibling Nicho in the same Setor', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boss-pizza', name: 'Boss Pizza', handle: '@boss', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('boss-pizza', {
+      brandName: 'Boss Pizza',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segmentSpecialty: 'napolitana',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+    const badBatch = await generateContentBatch('boss-pizza', { days: 1, startDate: '2026-07-20' }, dir);
+    await deleteProjectContent('boss-pizza', badBatch.items[0].contentId, dir, badBatch.batchId, 'não parecer gerado por IA, mais detalhista');
+
+    await createCentralProject({ projectId: 'rei-hamburguer', name: 'Rei Hambúrguer', handle: '@rei', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('rei-hamburguer', {
+      brandName: 'Rei Hambúrguer',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Hamburgueria',
+      segmentSpecialty: 'artesanal',
+      segment: 'hamburgueria',
+      productsOrServices: 'hambúrgueres',
+    }, dir);
+    const sameSetorDifferentNicho = await generateContentBatch('rei-hamburguer', { days: 1, startDate: '2026-07-21' }, dir);
+    assert.doesNotMatch(sameSetorDifferentNicho.items[0].image.prompt, /não parecer gerado por IA, mais detalhista/);
+  });
+});
+
+test('segmentNodePaths never collides unrelated no-Setor projects into a shared "data" node (slugify("") fallback regression guard)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-setor-a', name: 'Sem Setor A', handle: '@a', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('sem-setor-a', {
+      brandName: 'Sem Setor A',
+      segmentCategory: 'Engenharia — controle tecnológico/concreto/solos',
+      segmentSpecialty: 'controle tecnológico de concreto e solos',
+      segment: 'engenharia técnica',
+      productsOrServices: 'ensaios de concreto, análise de solo e laudos técnicos',
+    }, dir);
+    const badBatch = await generateContentBatch('sem-setor-a', { days: 1, startDate: '2026-07-20' }, dir);
+    await deleteProjectContent('sem-setor-a', badBatch.items[0].contentId, dir, badBatch.batchId, 'não usar tom institucional demais');
+
+    const paths = getCentralPaths(dir);
+    const store = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
+    assert.ok(!Object.keys(store.nodes).some((path) => path === 'data' || path.startsWith('data/')));
+  });
+});
+
+test('migrateSegmentLearningStoreV1ToV2 splits the flat label into a Setor/Nicho/Especialidade node chain', () => {
+  const v1 = {
+    schemaVersion: 1,
+    segments: {
+      'engenharia-controle-tecnologico-solos-e-pavimentacao': {
+        key: 'engenharia-controle-tecnologico-solos-e-pavimentacao',
+        label: 'Engenharia / Controle tecnológico / solos e pavimentação',
+        technical: ['CBR, limite de liquidez'],
+        approved: [],
+        avoid: ['não misturar concreto com obra predial genérica'],
+      },
+    },
+  };
+  const v2 = migrateSegmentLearningStoreV1ToV2(v1);
+  assert.equal(v2.schemaVersion, 2);
+  assert.ok(v2.nodes['engenharia']);
+  assert.ok(v2.nodes['engenharia/controle-tecnologico']);
+  assert.ok(v2.nodes['engenharia/controle-tecnologico/solos-e-pavimentacao']);
+  const deepest = v2.nodes['engenharia/controle-tecnologico/solos-e-pavimentacao'].entries;
+  assert.ok(deepest.some((e) => e.bucket === 'technical' && e.text === 'CBR, limite de liquidez'));
+  assert.ok(deepest.some((e) => e.bucket === 'avoid' && e.text === 'não misturar concreto com obra predial genérica'));
 });
 
 test('technical base summarizes pasted sector material and reuses it only inside the same segment hierarchy', async () => {

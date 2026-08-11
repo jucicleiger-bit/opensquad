@@ -295,6 +295,7 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     approvalsDir,
     segmentTemplatesDir,
     segmentLearningsPath: join(root, 'segment-learnings.json'),
+    offerTypeLearningsPath: join(root, 'offer-type-learnings.json'),
     globalRulesPath: join(root, 'global-rules.json'),
   };
 
@@ -3442,14 +3443,108 @@ function normalizeLearnings(input) {
   };
 }
 
+const SEGMENT_LEVELS = ['setor', 'nicho', 'especialidade'];
+
+function normalizeSegmentLearningEntry(input = {}) {
+  return {
+    id: String(input.id || `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+    bucket: ['technical', 'approved', 'avoid'].includes(input.bucket) ? input.bucket : 'approved',
+    kind: input.kind === 'image' ? 'image' : 'text',
+    text: cleanText(input.text),
+    imagePath: input.kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
+    source: input.source === 'auto' ? 'auto' : 'manual',
+    createdAt: input.createdAt || new Date().toISOString(),
+  };
+}
+
+function segmentNodePaths(project) {
+  const profile = normalizeCompanyProfile(project.companyProfile);
+  const brandInput = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(profile, project.name));
+  // slugify('') falls back to the literal string 'data' (its "nothing to
+  // slug" default for filenames) — checking the raw trimmed value first
+  // keeps an unset field genuinely empty here instead of every no-Setor
+  // project silently colliding into one shared "data" node.
+  const rawGroup = cleanText(profile.segmentGroup || brandInput.segmentGroup || '');
+  const rawCategory = cleanText(profile.segmentCategory || brandInput.segmentCategory || '');
+  const rawSpecialty = cleanText(profile.segmentSpecialty || brandInput.segmentSpecialty || '');
+  // Build cumulative paths from whichever levels are actually present, in
+  // group -> category -> specialty order, without requiring group itself to
+  // be set. A strict "no group means no path at all" gate would silently
+  // stop sharing/isolating by category+specialty for any project that never
+  // filled in Setor — which is exactly the fixture the pre-existing
+  // 'segment learnings are reused only for the same selected segment
+  // category/specialty' test uses (no segmentGroup, matching
+  // segmentCategory/segmentSpecialty) and is required to keep passing
+  // unmodified.
+  const parts = [rawGroup, rawCategory, rawSpecialty].filter(Boolean).map(slugify);
+  return parts.map((_, index) => parts.slice(0, index + 1).join('/'));
+}
+
+function segmentNodeLabel(project, level) {
+  const profile = normalizeCompanyProfile(project.companyProfile);
+  const brandInput = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(profile, project.name));
+  const group = cleanText(profile.segmentGroup || brandInput.segmentGroup || '');
+  const category = cleanText(profile.segmentCategory || brandInput.segmentCategory || '');
+  const specialty = cleanText(profile.segmentSpecialty || brandInput.segmentSpecialty || '');
+  if (level === 'setor') return group;
+  if (level === 'nicho') return [group, category].filter(Boolean).join(' / ');
+  return [group, category, specialty].filter(Boolean).join(' / ');
+}
+
+// Legacy flat shape (buildManual/buildImagePrompt callers keep working
+// unchanged) — now summed across every node in the project's ancestor
+// chain instead of read from a single flat-keyed bucket, so a Setor-level
+// entry (e.g. "não parecer gerado por IA") reaches every Nicho underneath
+// it without being copy-pasted into each one.
+//
+// buildManual/buildImagePrompt (untouched by this task) call this a SECOND
+// time on the already-flattened result of loadSegmentLearningsForProject
+// (project.segmentLearnings has no `entries`, just plain technical/approved/
+// avoid string arrays) — so this must stay idempotent on that shape, same
+// as the pre-v2 implementation, or the second pass silently empties it.
 function normalizeSegmentLearnings(input = {}) {
+  if (!Array.isArray(input?.entries)) {
+    return {
+      key: cleanText(input?.key),
+      label: cleanText(input?.label),
+      technical: (Array.isArray(input?.technical) ? input.technical : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+      approved: (Array.isArray(input?.approved) ? input.approved : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+      avoid: (Array.isArray(input?.avoid) ? input.avoid : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+    };
+  }
+  const entries = input.entries.map(normalizeSegmentLearningEntry);
+  const textFor = (bucket) => entries
+    .filter((entry) => entry.bucket === bucket)
+    .map((entry) => (entry.kind === 'image' ? `${entry.text} (ver referência de imagem: ${entry.imagePath})` : entry.text))
+    .filter(Boolean)
+    .slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
   return {
     key: cleanText(input?.key),
     label: cleanText(input?.label),
-    technical: (Array.isArray(input?.technical) ? input.technical : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
-    approved: (Array.isArray(input?.approved) ? input.approved : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
-    avoid: (Array.isArray(input?.avoid) ? input.avoid : []).slice(0, MAX_SEGMENT_LEARNING_ENTRIES).map(String),
+    technical: textFor('technical'),
+    approved: textFor('approved'),
+    avoid: textFor('avoid'),
   };
+}
+
+export function migrateSegmentLearningStoreV1ToV2(v1Store) {
+  const nodes = {};
+  for (const segment of Object.values(v1Store?.segments || {})) {
+    const parts = String(segment.label || '').split(' / ').map((part) => slugify(part)).filter(Boolean);
+    if (!parts.length) continue;
+    const paths = parts.map((_, index) => parts.slice(0, index + 1).join('/'));
+    const deepestPath = paths[paths.length - 1];
+    const labelParts = String(segment.label || '').split(' / ').map((part) => part.trim()).filter(Boolean);
+    for (const path of paths) {
+      if (!nodes[path]) nodes[path] = { label: labelParts.slice(0, path.split('/').length).join(' / '), entries: [] };
+    }
+    const entries = [];
+    for (const text of segment.technical || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'technical', kind: 'text', text, source: 'auto' }));
+    for (const text of segment.approved || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'approved', kind: 'text', text, source: 'auto' }));
+    for (const text of segment.avoid || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'avoid', kind: 'text', text, source: 'auto' }));
+    nodes[deepestPath].entries.push(...entries);
+  }
+  return { schemaVersion: 2, nodes };
 }
 
 function normalizeTechnicalBase(input = {}) {
@@ -3526,24 +3621,41 @@ function projectSegmentKey(project = {}) {
 }
 
 async function readSegmentLearningStore(paths) {
-  return await readJson(paths.segmentLearningsPath, null) || { schemaVersion: 1, segments: {} };
+  const stored = await readJson(paths.segmentLearningsPath, null);
+  if (!stored) return { schemaVersion: 2, nodes: {} };
+  if (stored.schemaVersion === 2) return stored;
+  return migrateSegmentLearningStoreV1ToV2(stored);
+}
+
+async function loadSegmentLearningNodes(paths, project) {
+  const store = await readSegmentLearningStore(paths);
+  return segmentNodePaths(project).map((path, index) => ({
+    path,
+    label: segmentNodeLabel(project, SEGMENT_LEVELS[index]),
+    level: SEGMENT_LEVELS[index],
+    entries: (store.nodes[path]?.entries || []).map(normalizeSegmentLearningEntry),
+  }));
 }
 
 async function loadSegmentLearningsForProject(paths, project) {
-  const key = projectSegmentKey(project);
-  if (!key) return normalizeSegmentLearnings();
+  const nodePaths = segmentNodePaths(project);
+  if (!nodePaths.length) return normalizeSegmentLearnings();
   const store = await readSegmentLearningStore(paths);
-  return normalizeSegmentLearnings({ key, label: projectSegmentLabel(project), ...(store.segments?.[key] || {}) });
+  const entries = nodePaths.flatMap((path) => store.nodes[path]?.entries || []);
+  return normalizeSegmentLearnings({ key: nodePaths[nodePaths.length - 1], label: projectSegmentLabel(project), entries });
 }
 
-async function addSegmentLearning(paths, project, kind, line) {
-  const key = projectSegmentKey(project);
+async function addSegmentLearning(paths, project, bucket, line) {
+  const nodePaths = segmentNodePaths(project);
   const text = cleanText(line);
-  if (!key || !text || !['approved', 'avoid', 'technical'].includes(kind)) return;
+  if (!nodePaths.length || !text || !['approved', 'avoid', 'technical'].includes(bucket)) return;
+  const deepestPath = nodePaths[nodePaths.length - 1];
   const store = await readSegmentLearningStore(paths);
-  const current = normalizeSegmentLearnings({ key, label: projectSegmentLabel(project), ...(store.segments?.[key] || {}) });
-  current[kind] = [text, ...current[kind].filter((item) => item !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
-  store.segments = { ...(store.segments || {}), [key]: current };
+  const node = store.nodes[deepestPath] || { label: segmentNodeLabel(project, SEGMENT_LEVELS[nodePaths.length - 1]), entries: [] };
+  const entry = normalizeSegmentLearningEntry({ bucket, kind: 'text', text, source: 'auto' });
+  node.entries = [entry, ...node.entries.filter((existing) => existing.text !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+  store.nodes = { ...store.nodes, [deepestPath]: node };
+  store.schemaVersion = 2;
   await writeJson(paths.segmentLearningsPath, store);
 }
 
