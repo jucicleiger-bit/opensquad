@@ -583,19 +583,26 @@ test('analyzeLearningImage saves the file and returns a suggested description wi
     const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     const fakeAnalyzer = async () => 'Esfiha redonda, borda dourada natural, sem formato retangular.';
 
+    // groupKey uses the tagged node-path format segmentNodePaths() actually
+    // produces (Task 4/B1) — `group:<slug>/category:<slug>`, not a bare
+    // `group-slug/category-slug` path. This must match exactly what
+    // loadSegmentLearningNodes() returns as `node.path` for this project
+    // (segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria'), since the
+    // real UI (Task 7/B4) always passes an opaque `node.path` string through
+    // as groupKey — it never re-derives or re-slugifies it.
     const analyzed = await analyzeLearningImage('boss-pizza-2', {
       scope: 'segment',
-      groupKey: 'alimenticio/pizzaria',
+      groupKey: 'group:alimenticio/category:pizzaria',
       dataUrl,
       filename: 'esfiha-redonda.png',
     }, dir, new Date(), { learningImageAnalyzer: fakeAnalyzer });
 
-    assert.match(analyzed.imagePath, /assets\/learning\/segment\/alimenticio-pizzaria\/esfiha-redonda\.png/);
+    assert.match(analyzed.imagePath, /assets\/learning\/segment\/group-alimenticio-category-pizzaria\/esfiha-redonda\.png/);
     assert.equal(analyzed.suggestedText, 'Esfiha redonda, borda dourada natural, sem formato retangular.');
 
     const saved = await saveLearningEntry('boss-pizza-2', {
       scope: 'segment',
-      groupKey: 'alimenticio/pizzaria',
+      groupKey: 'group:alimenticio/category:pizzaria',
       bucket: 'approved',
       kind: 'image',
       text: analyzed.suggestedText,
@@ -606,12 +613,12 @@ test('analyzeLearningImage saves the file and returns a suggested description wi
     assert.equal(saved[0].imagePath, analyzed.imagePath);
 
     const nodes = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-2'), await loadProjectForTest('boss-pizza-2', dir));
-    const pizzariaNode = nodes.find((node) => node.path === 'alimenticio/pizzaria');
+    const pizzariaNode = nodes.find((node) => node.path === 'group:alimenticio/category:pizzaria');
     assert.equal(pizzariaNode.entries.length, 1);
 
-    await deleteLearningEntry('boss-pizza-2', { scope: 'segment', groupKey: 'alimenticio/pizzaria', entryId: saved[0].id }, dir);
+    await deleteLearningEntry('boss-pizza-2', { scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', entryId: saved[0].id }, dir);
     const nodesAfterDelete = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-2'), await loadProjectForTest('boss-pizza-2', dir));
-    assert.equal(nodesAfterDelete.find((node) => node.path === 'alimenticio/pizzaria').entries.length, 0);
+    assert.equal(nodesAfterDelete.find((node) => node.path === 'group:alimenticio/category:pizzaria').entries.length, 0);
   });
 });
 ```
