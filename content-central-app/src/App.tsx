@@ -14,6 +14,7 @@ import { PendingApproval } from "@/pages/workspace/PendingApproval";
 import { Calendar } from "@/pages/workspace/Calendar";
 import { Account } from "@/pages/workspace/Account";
 import { AprendizadoSegmento } from "@/pages/AprendizadoSegmento";
+import { AprendizadoTipoOferta } from "@/pages/AprendizadoTipoOferta";
 
 export function App() {
   return (
@@ -21,6 +22,7 @@ export function App() {
       <Route element={<RootLayout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/aprendizado-segmento" element={<AprendizadoSegmento />} />
+        <Route path="/aprendizado-tipo-oferta" element={<AprendizadoTipoOferta />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspaceLayout />}>
           <Route index element={<Navigate to="visao-geral" replace />} />
           <Route path="visao-geral" element={<Overview />} />

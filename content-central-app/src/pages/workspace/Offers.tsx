@@ -11,21 +11,17 @@ import {
   deleteOffer,
   deleteOfferGroup,
   fileToDataUrl,
-  getOfferTypeLearnings,
   saveAsset,
   saveCatalogSettings,
   saveOffer,
   saveOfferGroup,
-  saveOfferTypeBaseInstruction,
   type OfferGroup,
-  type OfferTypeLearning,
   type ProjectOffer,
   type SiteOfferCandidate,
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
-import { LearningGallery } from "@/components/LearningGallery";
 
 const thumbStyle = {
   width: 64,
@@ -124,13 +120,6 @@ export function Offers() {
   const [editingGroupName, setEditingGroupName] = useState("");
   const [savingGroupId, setSavingGroupId] = useState<string | null>(null);
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
-
-  const [typeLearningOpen, setTypeLearningOpen] = useState(false);
-  const [typeLearnings, setTypeLearnings] = useState<OfferTypeLearning[]>([]);
-  const [typeLearningLoaded, setTypeLearningLoaded] = useState(false);
-  const [editingInstruction, setEditingInstruction] = useState<Record<string, string>>({});
-  const [savingType, setSavingType] = useState<string | null>(null);
-  const [typeLearningError, setTypeLearningError] = useState<string | null>(null);
 
   const [generalInfo, setGeneralInfo] = useState(project.contentSettings?.catalogGeneralInfo || "");
   const [generalInfoBusy, setGeneralInfoBusy] = useState(false);
@@ -280,36 +269,6 @@ export function Offers() {
     }
   }
 
-  async function openTypeLearning() {
-    setTypeLearningOpen((current) => !current);
-    if (!typeLearningLoaded) {
-      setTypeLearningError(null);
-      try {
-        const result = await getOfferTypeLearnings(project.projectId);
-        setTypeLearnings(result.types);
-        setEditingInstruction(Object.fromEntries(result.types.map((t) => [t.type, t.baseInstruction])));
-        setTypeLearningLoaded(true);
-      } catch (err) {
-        setTypeLearningError((err as Error).message);
-      }
-    }
-  }
-
-  async function handleSaveTypeInstruction(type: string) {
-    setSavingType(type);
-    setTypeLearningError(null);
-    try {
-      await saveOfferTypeBaseInstruction(project.projectId, type, editingInstruction[type]);
-      setTypeLearnings((current) =>
-        current.map((t) => (t.type === type ? { ...t, baseInstruction: editingInstruction[type], hasOverride: true } : t)),
-      );
-    } catch (err) {
-      setTypeLearningError((err as Error).message);
-    } finally {
-      setSavingType(null);
-    }
-  }
-
   function toggleFormDay(day: string) {
     setForm((current) => ({
       ...current,
@@ -435,9 +394,6 @@ export function Offers() {
         <Button type="button" variant="secondary" onClick={() => setGroupsOpen((current) => !current)}>
           {groupsOpen ? "Fechar" : "Grupos de ofertas"}
         </Button>
-        <Button type="button" variant="secondary" onClick={openTypeLearning}>
-          {typeLearningOpen ? "Fechar" : "Aprendizado por tipo"}
-        </Button>
       </div>
 
       {groupsOpen ? (
@@ -506,47 +462,6 @@ export function Offers() {
             </Button>
           </div>
           {groupError ? <div className="pill bad" style={{ marginTop: 12 }}>{groupError}</div> : null}
-        </Card>
-      ) : null}
-
-      {typeLearningOpen ? (
-        <Card style={{ padding: 20, marginBottom: 20 }}>
-          <b>Aprendizado por tipo de oferta</b>
-          <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
-            Vale pra todo projeto, não só este. Instrução base é o que a IA sempre lê pra esse tipo; a galeria abaixo acumula exemplos de estrutura/composição que você aprovar.
-          </p>
-          {typeLearningError ? <div className="pill bad" style={{ marginBottom: 12 }}>{typeLearningError}</div> : null}
-          <div style={{ display: "grid", gap: 16 }}>
-            {typeLearnings.map((learning) => (
-              <Card key={learning.type} style={{ padding: 16 }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <b>{OFFER_TYPE_LABELS[learning.type] || learning.type}</b>
-                  <span className="pill" style={{ opacity: learning.hasOverride ? 1 : 0.7 }}>
-                    {learning.hasOverride ? "personalizado" : "usando padrão"}
-                  </span>
-                </div>
-                {!learning.hasOverride ? (
-                  <p className="muted" style={{ margin: "4px 0", fontSize: 12 }}>
-                    Prévia genérica do texto padrão. O texto real usado pela IA encaixa o nome da oferta no meio da frase — não é exatamente o que está escrito abaixo até você salvar uma versão personalizada.
-                  </p>
-                ) : null}
-                <textarea
-                  value={editingInstruction[learning.type] || ""}
-                  onChange={(e) => setEditingInstruction((current) => ({ ...current, [learning.type]: e.target.value }))}
-                />
-                <Button disabled={savingType === learning.type} onClick={() => handleSaveTypeInstruction(learning.type)}>
-                  {savingType === learning.type ? "Salvando..." : "Salvar"}
-                </Button>
-                <LearningGallery
-                  projectId={project.projectId}
-                  scope="offerType"
-                  groupKey={learning.type}
-                  entries={learning.entries}
-                  onEntriesChange={(entries) => setTypeLearnings((current) => current.map((t) => (t.type === learning.type ? { ...t, entries } : t)))}
-                />
-              </Card>
-            ))}
-          </div>
         </Card>
       ) : null}
 
