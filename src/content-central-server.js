@@ -24,7 +24,7 @@ import {
   deleteLearningEntry,
   enqueueSegmentTemplateAdaptation,
   listSegmentTemplates,
-  loadSegmentLearningNodes,
+  loadSegmentLearningNodesForSelection,
   analyzeProjectTechnicalBase,
   analyzeProjectBrandXray,
   analyzeProjectBrandBriefing,
@@ -407,6 +407,15 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const entries = await deleteLearningEntry({ ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
     return sendJson(res, 200, { entries });
+  }
+
+  if (method === 'GET' && route.startsWith('/api/segment-learnings/nodes')) {
+    const nodes = await loadSegmentLearningNodesForSelection(getCentralPaths(targetDir), {
+      segmentGroup: url.searchParams.get('segmentGroup') || '',
+      segmentCategory: url.searchParams.get('segmentCategory') || '',
+      segmentSpecialty: url.searchParams.get('segmentSpecialty') || '',
+    });
+    return sendJson(res, 200, { nodes });
   }
 
   if (method === 'GET' && route === '/api/offer-type-learnings') {

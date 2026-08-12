@@ -4,7 +4,6 @@ import { ProjectWorkspaceLayout } from "@/layouts/ProjectWorkspaceLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Overview } from "@/pages/workspace/Overview";
 import { Company } from "@/pages/workspace/Company";
-import { SegmentLearning } from "@/pages/workspace/SegmentLearning";
 import { References } from "@/pages/workspace/References";
 import { Offers } from "@/pages/workspace/Offers";
 import { Pillars } from "@/pages/workspace/Pillars";
@@ -14,17 +13,18 @@ import { TestPost } from "@/pages/workspace/TestPost";
 import { PendingApproval } from "@/pages/workspace/PendingApproval";
 import { Calendar } from "@/pages/workspace/Calendar";
 import { Account } from "@/pages/workspace/Account";
+import { AprendizadoSegmento } from "@/pages/AprendizadoSegmento";
 
 export function App() {
   return (
     <Routes>
       <Route element={<RootLayout />}>
         <Route path="/" element={<Dashboard />} />
+        <Route path="/aprendizado-segmento" element={<AprendizadoSegmento />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspaceLayout />}>
           <Route index element={<Navigate to="visao-geral" replace />} />
           <Route path="visao-geral" element={<Overview />} />
           <Route path="empresa" element={<Company />} />
-          <Route path="aprendizado-segmento" element={<SegmentLearning />} />
           <Route path="referencias" element={<References />} />
           <Route path="ofertas" element={<Offers />} />
           <Route path="pilares" element={<Pillars />} />

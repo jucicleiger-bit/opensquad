@@ -3951,7 +3951,6 @@ async function toProjectSummary(project, paths) {
     rules: project.rules,
     learnings: normalizeLearnings(project.learnings),
     segmentLearnings: normalizeSegmentLearnings(project.segmentLearnings),
-    segmentLearningNodes: await loadSegmentLearningNodes(paths, project),
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
   };

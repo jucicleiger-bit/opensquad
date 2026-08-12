@@ -233,7 +233,6 @@ export interface ProjectSummary {
   };
   contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; [key: string]: unknown };
   rules?: unknown;
-  segmentLearningNodes?: SegmentLearningNode[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -769,6 +768,15 @@ export function deleteLearningEntry(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function getSegmentLearningNodes(
+  segmentGroup: string,
+  segmentCategory: string,
+  segmentSpecialty: string,
+): Promise<{ nodes: SegmentLearningNode[] }> {
+  const params = new URLSearchParams({ segmentGroup, segmentCategory, segmentSpecialty });
+  return api(`/api/segment-learnings/nodes?${params.toString()}`);
 }
 
 export interface OfferTypeLearning {

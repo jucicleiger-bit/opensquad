@@ -222,6 +222,11 @@ export function Dashboard() {
               {prospectStep === "closed" ? "+ Nova prospecção" : "Cancelar"}
             </Button>
           ) : null}
+          <Link to="/aprendizado-segmento">
+            <Button type="button" variant="secondary">
+              Aprendizado de segmento
+            </Button>
+          </Link>
           <Button variant={showCreateForm ? "secondary" : "primary"} onClick={() => setShowCreateForm((v) => !v)}>
             {showCreateForm ? "Cancelar" : "+ Novo projeto"}
           </Button>
