@@ -4,6 +4,7 @@ import { ProjectWorkspaceLayout } from "@/layouts/ProjectWorkspaceLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Overview } from "@/pages/workspace/Overview";
 import { Company } from "@/pages/workspace/Company";
+import { SegmentLearning } from "@/pages/workspace/SegmentLearning";
 import { References } from "@/pages/workspace/References";
 import { Offers } from "@/pages/workspace/Offers";
 import { Pillars } from "@/pages/workspace/Pillars";
@@ -23,6 +24,7 @@ export function App() {
           <Route index element={<Navigate to="visao-geral" replace />} />
           <Route path="visao-geral" element={<Overview />} />
           <Route path="empresa" element={<Company />} />
+          <Route path="aprendizado-segmento" element={<SegmentLearning />} />
           <Route path="referencias" element={<References />} />
           <Route path="ofertas" element={<Offers />} />
           <Route path="pilares" element={<Pillars />} />
