@@ -384,6 +384,42 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 404, { error: 'Not found' });
   }
 
+  if (method === 'GET' && route.startsWith('/api/learning-assets/')) {
+    return sendLearningAsset(res, targetDir, decodeURIComponent(route.slice('/api/learning-assets/'.length)));
+  }
+
+  if (method === 'POST' && route === '/api/segment-learnings/analyze-image') {
+    if (typeof context.learningImageAnalyzer !== 'function') {
+      return sendJson(res, 501, { error: 'Análise de imagem por IA não está disponível neste servidor.' });
+    }
+    const body = await readBody(req);
+    const result = await analyzeLearningImage({ ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir, new Date(), { learningImageAnalyzer: context.learningImageAnalyzer });
+    return sendJson(res, 200, result);
+  }
+
+  if (method === 'POST' && route === '/api/segment-learnings/entries') {
+    const body = await readBody(req);
+    const entries = await saveLearningEntry({ ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
+    return sendJson(res, 200, { entries });
+  }
+
+  if (method === 'POST' && route === '/api/segment-learnings/entries-delete') {
+    const body = await readBody(req);
+    const entries = await deleteLearningEntry({ ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
+    return sendJson(res, 200, { entries });
+  }
+
+  if (method === 'GET' && route === '/api/offer-type-learnings') {
+    const types = await Promise.all([...OFFER_TYPES].map((type) => loadOfferTypeLearning(targetDir, type)));
+    return sendJson(res, 200, { types });
+  }
+
+  if (method === 'POST' && route === '/api/offer-type-learnings') {
+    const body = await readBody(req);
+    await saveOfferTypeBaseInstruction(targetDir, body.type, body.baseInstruction);
+    return sendJson(res, 200, { type: body.type, baseInstruction: body.baseInstruction });
+  }
+
   if (method === 'POST' && route === '/api/projects') {
     const body = await readBody(req);
     const project = await createCentralProject(body, targetDir);
@@ -483,11 +519,6 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (method === 'GET' && parts.length === 4 && parts[3] === 'ad-creatives') {
     return sendJson(res, 200, { adCreatives: await listAdCreatives(projectId, targetDir) });
-  }
-
-  if (method === 'GET' && parts.length === 4 && parts[3] === 'offer-type-learnings') {
-    const types = await Promise.all([...OFFER_TYPES].map((type) => loadOfferTypeLearning(targetDir, type)));
-    return sendJson(res, 200, { types });
   }
 
   if (method === 'GET' && parts.length === 4 && parts[3] === 'briefing') {
@@ -670,33 +701,6 @@ async function handleRequest(req, res, targetDir, context = {}) {
     }
     const result = await researchOnlineVisualTrends(projectId, { webResearcher: context.webResearcher }, targetDir);
     return sendJson(res, 200, result);
-  }
-
-  if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'analyze-image') {
-    if (typeof context.learningImageAnalyzer !== 'function') {
-      return sendJson(res, 501, { error: 'Análise de imagem por IA não está disponível neste servidor.' });
-    }
-    const body = await readBody(req);
-    const result = await analyzeLearningImage(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir, new Date(), { learningImageAnalyzer: context.learningImageAnalyzer });
-    return sendJson(res, 200, result);
-  }
-
-  if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'entries') {
-    const body = await readBody(req);
-    const entries = await saveLearningEntry(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
-    return sendJson(res, 200, { entries });
-  }
-
-  if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'entries-delete') {
-    const body = await readBody(req);
-    const entries = await deleteLearningEntry(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
-    return sendJson(res, 200, { entries });
-  }
-
-  if (parts.length === 4 && parts[3] === 'offer-type-learnings') {
-    const body = await readBody(req);
-    await saveOfferTypeBaseInstruction(targetDir, body.type, body.baseInstruction);
-    return sendJson(res, 200, { type: body.type, baseInstruction: body.baseInstruction });
   }
 
   if (parts.length === 4 && parts[3] === 'offers') {
@@ -1050,6 +1054,25 @@ async function sendSegmentTemplateImage(res, targetDir, segmentId, filename) {
     body = await readFile(filePath);
   } catch {
     return sendJson(res, 404, { error: 'Peça não encontrada' });
+  }
+  res.writeHead(200, { 'content-type': assetContentType(filePath), 'cache-control': 'no-store' });
+  res.end(body);
+}
+
+// Reference images uploaded for segment/offer-type learning entries — global
+// assets with no per-project home (see analyzeLearningImage in
+// content-central.js), served the same no-store way as sendProjectAsset and
+// sendSegmentTemplateImage above.
+async function sendLearningAsset(res, targetDir, relativePath) {
+  const safeRelative = normalize(relativePath).replace(/^([/\\])+/, '');
+  const learningRoot = resolve(targetDir, '_opensquad', 'content-central', 'assets', 'learning');
+  const filePath = resolve(join(learningRoot, safeRelative));
+  if (!filePath.startsWith(learningRoot)) return sendJson(res, 400, { error: 'Referência inválida' });
+  let body;
+  try {
+    body = await readFile(filePath);
+  } catch {
+    return sendJson(res, 404, { error: 'Referência não encontrada' });
   }
   res.writeHead(200, { 'content-type': assetContentType(filePath), 'cache-control': 'no-store' });
   res.end(body);

@@ -719,6 +719,34 @@ test('GET /api/segment-templates/:id/images/:file serves the real registered art
   });
 });
 
+test('root-level segment-learnings and offer-type-learnings routes work with no project in the URL', async () => {
+  await withServer(async (_dir, server) => {
+    const analyzeResponse = await request(server, '/api/segment-learnings/analyze-image', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: 'segment',
+        groupKey: 'group:alimenticio/category:pizzaria',
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        filename: 'teste.png',
+      }),
+    });
+    // enableAiImages is off by default in tests, matches every sibling AI route's behavior
+    assert.equal(analyzeResponse.response.status, 501);
+
+    const offerTypesResponse = await request(server, '/api/offer-type-learnings');
+    assert.equal(offerTypesResponse.response.status, 200);
+    assert.ok(Array.isArray(offerTypesResponse.body.types));
+    assert.equal(offerTypesResponse.body.types.length, 10);
+
+    const saveResponse = await request(server, '/api/offer-type-learnings', {
+      method: 'POST',
+      body: JSON.stringify({ type: 'combo', baseInstruction: 'Combo: sempre mostrar caixa aberta.' }),
+    });
+    assert.equal(saveResponse.response.status, 200);
+    assert.equal(saveResponse.body.baseInstruction, 'Combo: sempre mostrar caixa aberta.');
+  });
+});
+
 test('POST /api/projects/:id/adapt-segment-template adapts a registered template into real content items through the real endpoint, instead of generating from scratch', async () => {
   await withServer(async (dir, server) => {
     const source = join(dir, 'source.png');
@@ -3475,22 +3503,19 @@ test('POST .../token still returns 200 with a githubSyncWarning when the GitHub 
   });
 });
 
-// Regression for a bug found during Task 6 review: the segment-learnings
-// routes (analyze-image/entries/entries-delete) always hardcoded
-// `scope: 'segment'` when calling into content-central.js, silently
-// discarding any `scope: 'offerType'` the client actually sent. This test
-// goes through the real HTTP route (not the underlying saveLearningEntry
-// function directly, which Task 5's tests already cover) to prove the route
-// itself now respects an explicit scope: 'offerType' by writing to
-// offer-type-learnings.json, not segment-learnings.json.
-test('POST .../segment-learnings/entries route respects scope: "offerType" from the client and writes to offer-type-learnings.json, not segment-learnings.json', async () => {
+// Regression for a bug found during Task 6 review (of the old
+// project-nested routes; Task 3 of the global-learning-navigation plan moved
+// this to a root-level route with no project in the URL): the
+// segment-learnings routes (analyze-image/entries/entries-delete) always
+// hardcoded `scope: 'segment'` when calling into content-central.js,
+// silently discarding any `scope: 'offerType'` the client actually sent.
+// This test goes through the real HTTP route (not the underlying
+// saveLearningEntry function directly, which Task 5's tests already cover)
+// to prove the route itself now respects an explicit scope: 'offerType' by
+// writing to offer-type-learnings.json, not segment-learnings.json.
+test('POST /api/segment-learnings/entries route respects scope: "offerType" from the client and writes to offer-type-learnings.json, not segment-learnings.json', async () => {
   await withServer(async (dir, server) => {
-    await request(server, '/api/projects', {
-      method: 'POST',
-      body: JSON.stringify({ projectId: 'scope-route-test', name: 'Scope Route Test', handle: '@scoperoute', approvalEmail: 'a@example.com' }),
-    });
-
-    const res = await request(server, '/api/projects/scope-route-test/segment-learnings/entries', {
+    const res = await request(server, '/api/segment-learnings/entries', {
       method: 'POST',
       body: JSON.stringify({
         scope: 'offerType',
