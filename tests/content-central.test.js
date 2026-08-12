@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -535,7 +535,7 @@ test('real operator-authored v1 segment-learnings data (pre-v2, flat-keyed) stay
     // actual data-loss bug: migrateSegmentLearningStoreV1ToV2's in-memory
     // result used to have no `segments` key at all, so the first write
     // after a read silently deleted the real v1 history.
-    await saveLearningEntry('boss-pizzaria-legado', {
+    await saveLearningEntry({
       scope: 'segment',
       groupKey: 'group:alimenticio',
       bucket: 'avoid',
@@ -605,38 +605,26 @@ test('a project with segmentGroup/segmentCategory/segmentSpecialty all EMPTY (on
   });
 });
 
-test('analyzeLearningImage saves the file and returns a suggested description without writing to the store yet; saveLearningEntry then persists it', async () => {
+test('analyzeLearningImage/saveLearningEntry/deleteLearningEntry work without a project, storing images under the global assets/learning directory', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'boss-pizza-2', name: 'Boss Pizza 2', handle: '@boss2', approvalEmail: 'a@example.com' }, dir);
-    await updateProjectBrandInput('boss-pizza-2', {
-      brandName: 'Boss Pizza 2',
-      segmentGroup: 'Alimentício',
-      segmentCategory: 'Pizzaria',
-      segmentSpecialty: 'napolitana',
-      segment: 'pizzaria',
-      productsOrServices: 'pizzas',
-    }, dir);
     const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     const fakeAnalyzer = async () => 'Esfiha redonda, borda dourada natural, sem formato retangular.';
 
-    // groupKey uses the tagged node-path format segmentNodePaths() actually
-    // produces (Task 4/B1) — `group:<slug>/category:<slug>`, not a bare
-    // `group-slug/category-slug` path. This must match exactly what
-    // loadSegmentLearningNodes() returns as `node.path` for this project
-    // (segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria'), since the
-    // real UI (Task 7/B4) always passes an opaque `node.path` string through
-    // as groupKey — it never re-derives or re-slugifies it.
-    const analyzed = await analyzeLearningImage('boss-pizza-2', {
+    const analyzed = await analyzeLearningImage({
       scope: 'segment',
       groupKey: 'group:alimenticio/category:pizzaria',
       dataUrl,
       filename: 'esfiha-redonda.png',
     }, dir, new Date(), { learningImageAnalyzer: fakeAnalyzer });
 
-    assert.match(analyzed.imagePath, /assets\/learning\/segment\/group-alimenticio-category-pizzaria\/esfiha-redonda\.png/);
+    assert.match(analyzed.imagePath, /^segment\/group-alimenticio-category-pizzaria\/esfiha-redonda\.png$/);
     assert.equal(analyzed.suggestedText, 'Esfiha redonda, borda dourada natural, sem formato retangular.');
 
-    const saved = await saveLearningEntry('boss-pizza-2', {
+    const paths = getCentralPaths(dir);
+    const fileOnDisk = join(paths.root, 'assets', 'learning', analyzed.imagePath);
+    await access(fileOnDisk);
+
+    const saved = await saveLearningEntry({
       scope: 'segment',
       groupKey: 'group:alimenticio/category:pizzaria',
       bucket: 'approved',
@@ -647,14 +635,11 @@ test('analyzeLearningImage saves the file and returns a suggested description wi
 
     assert.equal(saved.length, 1);
     assert.equal(saved[0].imagePath, analyzed.imagePath);
+    assert.equal(saved[0].sourceProjectId, '');
 
-    const nodes = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-2'), await loadProjectForTest('boss-pizza-2', dir));
-    const pizzariaNode = nodes.find((node) => node.path === 'group:alimenticio/category:pizzaria');
-    assert.equal(pizzariaNode.entries.length, 1);
-
-    await deleteLearningEntry('boss-pizza-2', { scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', entryId: saved[0].id }, dir);
-    const nodesAfterDelete = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-2'), await loadProjectForTest('boss-pizza-2', dir));
-    assert.equal(nodesAfterDelete.find((node) => node.path === 'group:alimenticio/category:pizzaria').entries.length, 0);
+    await deleteLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', entryId: saved[0].id }, dir);
+    const nodes = await loadSegmentLearningNodesForSelection(paths, { segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria' });
+    assert.equal(nodes.find((n) => n.path === 'group:alimenticio/category:pizzaria').entries.length, 0);
   });
 });
 
@@ -664,7 +649,7 @@ test('a corrupted/hand-edited learning store file (schemaVersion set but nodes/t
     const paths = getCentralPaths(dir, 'store-corrompido');
 
     await writeFile(paths.segmentLearningsPath, JSON.stringify({ schemaVersion: 2 }), 'utf-8');
-    const segmentEntries = await saveLearningEntry('store-corrompido', {
+    const segmentEntries = await saveLearningEntry({
       scope: 'segment',
       groupKey: 'group:teste',
       bucket: 'approved',
@@ -674,7 +659,7 @@ test('a corrupted/hand-edited learning store file (schemaVersion set but nodes/t
     assert.equal(segmentEntries.length, 1);
 
     await writeFile(paths.offerTypeLearningsPath, JSON.stringify({ schemaVersion: 1 }), 'utf-8');
-    const offerTypeEntries = await saveLearningEntry('store-corrompido', {
+    const offerTypeEntries = await saveLearningEntry({
       scope: 'offerType',
       groupKey: 'combo',
       bucket: 'approved',
@@ -682,58 +667,6 @@ test('a corrupted/hand-edited learning store file (schemaVersion set but nodes/t
       text: 'entrada de teste',
     }, dir);
     assert.equal(offerTypeEntries.length, 1);
-  });
-});
-
-test('an image learning entry records which project it was actually uploaded from (sourceProjectId), so a DIFFERENT project sharing the same segment can still resolve the file', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'boss-pizza-a', name: 'Boss Pizza A', handle: '@bossa', approvalEmail: 'a@example.com' }, dir);
-    await updateProjectBrandInput('boss-pizza-a', {
-      brandName: 'Boss Pizza A',
-      segmentGroup: 'Alimentício',
-      segmentCategory: 'Pizzaria',
-      segment: 'pizzaria',
-      productsOrServices: 'pizzas',
-    }, dir);
-    // A second, unrelated project that happens to share the exact same
-    // segment node — segment-learnings.json is global, so both projects
-    // read/write the same 'group:alimenticio/category:pizzaria' node.
-    await createCentralProject({ projectId: 'boss-pizza-b', name: 'Boss Pizza B', handle: '@bossb', approvalEmail: 'b@example.com' }, dir);
-    await updateProjectBrandInput('boss-pizza-b', {
-      brandName: 'Boss Pizza B',
-      segmentGroup: 'Alimentício',
-      segmentCategory: 'Pizzaria',
-      segment: 'pizzaria',
-      productsOrServices: 'pizzas',
-    }, dir);
-
-    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-    const analyzed = await analyzeLearningImage('boss-pizza-a', {
-      scope: 'segment',
-      groupKey: 'group:alimenticio/category:pizzaria',
-      dataUrl,
-      filename: 'esfiha-redonda.png',
-    }, dir, new Date(), { learningImageAnalyzer: async () => 'Esfiha redonda.' });
-
-    // The file physically lives under boss-pizza-a's own project directory.
-    await saveLearningEntry('boss-pizza-a', {
-      scope: 'segment',
-      groupKey: 'group:alimenticio/category:pizzaria',
-      bucket: 'approved',
-      kind: 'image',
-      text: analyzed.suggestedText,
-      imagePath: analyzed.imagePath,
-    }, dir, new Date());
-
-    // Viewed from the OTHER project (boss-pizza-b, currently "open" in this
-    // scenario) via the shared segment node — the entry must still carry
-    // enough information (sourceProjectId) to point back at boss-pizza-a,
-    // since building the thumbnail URL from whichever project is open would
-    // 404/500 (the file isn't under boss-pizza-b's directory at all).
-    const nodesFromB = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-b'), await loadProjectForTest('boss-pizza-b', dir));
-    const pizzariaNode = nodesFromB.find((node) => node.path === 'group:alimenticio/category:pizzaria');
-    assert.equal(pizzariaNode.entries.length, 1);
-    assert.equal(pizzariaNode.entries[0].sourceProjectId, 'boss-pizza-a');
   });
 });
 
@@ -6091,7 +6024,7 @@ test('saveLearningEntry/deleteLearningEntry/saveOfferTypeBaseInstruction share o
     await writeFile(lockPath, 'held-by-projeto-a\n' + new Date().toISOString());
 
     let resolved = false;
-    const pending = saveLearningEntry('projeto-b', {
+    const pending = saveLearningEntry({
       scope: 'offerType',
       groupKey: 'combo',
       bucket: 'approved',
@@ -6300,7 +6233,7 @@ test('offerObjective uses a saved baseInstruction override instead of the hardco
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'boss-pizza-3', name: 'Boss Pizza 3', handle: '@boss3', approvalEmail: 'a@example.com' }, dir);
     await saveOfferTypeBaseInstruction(dir, 'combo', 'Combo: foco no produto, borda visível, CTA de delivery direto, nunca cortar a caixa.');
-    await saveLearningEntry('boss-pizza-3', {
+    await saveLearningEntry({
       scope: 'offerType',
       groupKey: 'combo',
       bucket: 'approved',

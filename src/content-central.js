@@ -3735,21 +3735,20 @@ function learningStoreNodesKey(scope) {
 // (possibly edits) the text in the UI first, then saveLearningEntry below
 // does the actual write. Keeps "upload+analyze" and "persist" independently
 // retriable instead of one all-or-nothing call.
-export async function analyzeLearningImage(projectId, input, targetDir = process.cwd(), now = new Date(), options = {}) {
-  const paths = getCentralPaths(targetDir, projectId);
-  const project = await loadProject(paths);
+export async function analyzeLearningImage(input, targetDir = process.cwd(), now = new Date(), options = {}) {
+  const paths = getCentralPaths(targetDir);
   const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
   const groupSlug = slugify(input?.groupKey || '');
   const filename = sanitizeFilename(input?.filename || 'referencia.bin');
   const buffer = decodeDataUrl(input?.dataUrl);
-  const relativePath = `assets/learning/${scope === 'segment' ? 'segment' : 'offer-type'}/${groupSlug}/${filename}`;
-  const destination = join(paths.projectDir, relativePath);
+  const relativePath = `${scope === 'segment' ? 'segment' : 'offer-type'}/${groupSlug}/${filename}`;
+  const destination = join(paths.root, 'assets', 'learning', relativePath);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, buffer);
 
   const analyzer = typeof options.learningImageAnalyzer === 'function' ? options.learningImageAnalyzer : defaultLearningImageAnalyzer;
   const context = scope === 'segment'
-    ? `segmento "${input.groupKey}" da empresa ${project.name}`
+    ? `segmento "${input.groupKey}"`
     : `tipo de oferta "${input.groupKey}"`;
   const suggestedText = await analyzer(destination, context);
 
@@ -3767,8 +3766,8 @@ async function defaultLearningImageAnalyzer() {
 // segment-learnings.json's `nodes`. scope: 'offerType' groupKeys are plain
 // words ("combo", "delivery"), so slugifying is the right normalization
 // there (mirrors OFFER_TYPES-style handling elsewhere in this file).
-export async function saveLearningEntry(projectId, input, targetDir = process.cwd(), now = new Date()) {
-  const paths = getCentralPaths(targetDir, projectId);
+export async function saveLearningEntry(input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
   return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
     const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
     const store = scope === 'segment' ? await readSegmentLearningStore(paths) : await readLearningStore(paths, scope);
@@ -3781,7 +3780,6 @@ export async function saveLearningEntry(projectId, input, targetDir = process.cw
       text: input.text,
       imagePath: input.imagePath,
       source: 'manual',
-      sourceProjectId: paths.projectId,
     });
     node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
     store[nodesKey] = { ...store[nodesKey], [groupKey]: node };
@@ -3791,8 +3789,8 @@ export async function saveLearningEntry(projectId, input, targetDir = process.cw
   });
 }
 
-export async function deleteLearningEntry(projectId, input, targetDir = process.cwd()) {
-  const paths = getCentralPaths(targetDir, projectId);
+export async function deleteLearningEntry(input, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
   return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
     const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
     const store = scope === 'segment' ? await readSegmentLearningStore(paths) : await readLearningStore(paths, scope);
