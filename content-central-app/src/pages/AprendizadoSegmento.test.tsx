@@ -35,7 +35,15 @@ describe("AprendizadoSegmento", () => {
         body: {
           nodes: [
             { path: "group:alimenticio", label: "Alimentício", level: "setor", entries: [] },
-            { path: "group:alimenticio/category:pizzaria", label: "Alimentício / Pizzaria", level: "nicho", entries: [{ id: "e1", bucket: "approved", kind: "text", text: "Esfiha tem que ser redonda", source: "manual", createdAt: "2026-08-01" }] },
+            {
+              path: "group:alimenticio/category:pizzaria",
+              label: "Alimentício / Pizzaria",
+              level: "nicho",
+              entries: [
+                { id: "e1", bucket: "approved", kind: "text", text: "Esfiha tem que ser redonda", source: "manual", createdAt: "2026-08-01" },
+                { id: "e2", bucket: "approved", kind: "image", imagePath: "segment/group-alimenticio/esfiha.png", text: "Esfiha redonda", source: "manual", createdAt: "2026-08-01" },
+              ],
+            },
           ],
         },
       },
@@ -47,6 +55,7 @@ describe("AprendizadoSegmento", () => {
     await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
 
     expect(await screen.findByText("Esfiha tem que ser redonda")).toBeInTheDocument();
+    expect(screen.getByAltText("Esfiha redonda")).toHaveAttribute("src", "/api/learning-assets/segment/group-alimenticio/esfiha.png");
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
     // URLSearchParams percent-encodes "í", so decode before asserting on the
     // literal value that was actually sent.
