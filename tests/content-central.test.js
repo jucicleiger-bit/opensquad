@@ -2514,6 +2514,69 @@ test('a project with a real product/work photo uploaded keeps the existing "no p
   });
 });
 
+test('a project whose ONLY product photo was uploaded offer-scoped (scope: "offer", no brand.references entries at all) is still correctly recognized as having a real product when generating for a DIFFERENT photo-less offer, not wrongly flagged as a service business', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'so-foto-de-oferta',
+      name: 'So Foto De Oferta',
+      handle: '@sfo',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const dataUrl = `data:image/png;base64,${Buffer.from('produto').toString('base64')}`;
+    const saved = await saveProjectAsset('so-foto-de-oferta', {
+      kind: 'reference',
+      filename: 'produto-a.png',
+      dataUrl,
+      role: 'product_photo',
+      weight: 'medium',
+      scope: 'offer',
+    }, dir);
+    // Confirms the fixture actually reproduces the bug's precondition: zero
+    // entries in the shared references gallery, the photo only exists on
+    // project.offerAssets.
+    assert.equal(saved.project.brand?.references?.length ?? 0, 0);
+    assert.equal(saved.project.offerAssets?.length, 1);
+
+    // Photo A is claimed by Offer A. Offer B has no photo of its own — its
+    // generation must never borrow Photo A (see the sibling "never borrows"
+    // test above), which means productReferences ends up EMPTY for Offer B
+    // and buildChatGptFinalCardPrompt falls back to hasAnyProductPhotoReference
+    // to decide between "no photo selected this round" (correct — this
+    // project does sell a real, photographed product) and "sells services,
+    // don't invent a product" (wrong here). This is the exact branch the
+    // bug affected — normalizeProjectReferences() alone never sees
+    // offer-scoped photos, so it used to answer "no real product ever
+    // uploaded" for a project whose only photo lives on project.offerAssets.
+    await saveProjectOffer('so-foto-de-oferta', {
+      name: 'Produto A',
+      type: 'offer',
+      price: 'R$ 100',
+      photoReferenceIds: [saved.metadata.id],
+      active: true,
+    }, dir, new Date('2026-08-01T12:00:00.000Z'));
+    await saveProjectOffer('so-foto-de-oferta', {
+      name: 'Produto B',
+      type: 'offer',
+      price: 'R$ 200',
+      active: true,
+    }, dir, new Date('2026-08-01T12:01:00.000Z'));
+
+    const batch = await generateContentBatch('so-foto-de-oferta', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'so-foto-de-oferta');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'so-foto-de-oferta', {
+      imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/img.png', mimeType: 'image/png' }; },
+    });
+
+    const productBPayload = calls.find((call) => call.content.contentTopic.offerName === 'Produto B');
+    assert.ok(productBPayload, 'expected a generation call for the photo-less offer');
+    const prompt = productBPayload.content.image.prompt;
+    assert.doesNotMatch(prompt, /provavelmente vende serviço, não produto físico/);
+    assert.doesNotMatch(prompt, /Não inventar um produto físico genérico/);
+    assert.match(prompt, /Sem foto real selecionada nesta geração/);
+  });
+});
+
 test('layout reference rotates across different test runs instead of always using the first upload', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

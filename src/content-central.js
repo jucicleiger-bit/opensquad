@@ -4701,7 +4701,8 @@ function isFoodBusiness(project = {}) {
 // depict, so the prompt should stop telling the AI to "invent a coherent
 // product" and instead go conceptual (typography, icons, abstract shapes).
 function hasAnyProductPhotoReference(project) {
-  return normalizeProjectReferences(project).some((reference) => reference.role === 'product_photo');
+  return [...normalizeProjectReferences(project), ...normalizeProjectOfferAssets(project)]
+    .some((reference) => reference.role === 'product_photo');
 }
 
 function buildVisualStyleLine(project) {
