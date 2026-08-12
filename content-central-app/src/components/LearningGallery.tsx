@@ -4,13 +4,11 @@ import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 
 export function LearningGallery({
-  projectId,
   scope,
   groupKey,
   entries,
   onEntriesChange,
 }: {
-  projectId: string;
   scope: "segment" | "offerType";
   groupKey: string;
   entries: SegmentLearningEntry[];
@@ -27,7 +25,7 @@ export function LearningGallery({
     setBusy(true);
     setError(null);
     try {
-      const result = await saveLearningEntry(projectId, { scope, groupKey, bucket: "approved", kind: "text", text: newText.trim() });
+      const result = await saveLearningEntry({ scope, groupKey, bucket: "approved", kind: "text", text: newText.trim() });
       onEntriesChange(result.entries);
       setNewText("");
     } catch (err) {
@@ -42,7 +40,7 @@ export function LearningGallery({
     setError(null);
     try {
       const dataUrl = await fileToDataUrl(file);
-      const analyzed = await analyzeLearningImage(projectId, { scope, groupKey, dataUrl, filename: file.name });
+      const analyzed = await analyzeLearningImage({ scope, groupKey, dataUrl, filename: file.name });
       setPendingImage(analyzed);
       setPendingImageText(analyzed.suggestedText);
     } catch (err) {
@@ -57,7 +55,7 @@ export function LearningGallery({
     setBusy(true);
     setError(null);
     try {
-      const result = await saveLearningEntry(projectId, { scope, groupKey, bucket: "approved", kind: "image", text: pendingImageText, imagePath: pendingImage.imagePath });
+      const result = await saveLearningEntry({ scope, groupKey, bucket: "approved", kind: "image", text: pendingImageText, imagePath: pendingImage.imagePath });
       onEntriesChange(result.entries);
       setPendingImage(null);
       setPendingImageText("");
@@ -72,7 +70,7 @@ export function LearningGallery({
     setBusy(true);
     setError(null);
     try {
-      const result = await deleteLearningEntry(projectId, { scope, groupKey, entryId });
+      const result = await deleteLearningEntry({ scope, groupKey, entryId });
       onEntriesChange(result.entries);
     } catch (err) {
       setError((err as Error).message);
@@ -88,11 +86,7 @@ export function LearningGallery({
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {entry.kind === "image" && entry.imagePath ? (
               <img
-                // Segment/offer-type learning is shared across every project,
-                // but the file itself lives under the project it was
-                // uploaded from — use that, not the project currently open,
-                // or the image 404/500s whenever they differ.
-                src={`/api/projects/${encodeURIComponent(entry.sourceProjectId || projectId)}/assets/${entry.imagePath}`}
+                src={`/api/learning-assets/${entry.imagePath}`}
                 alt={entry.text || "Referência de aprendizado"}
                 style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flex: "0 0 auto" }}
               />
