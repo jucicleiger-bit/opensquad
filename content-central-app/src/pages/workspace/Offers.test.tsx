@@ -471,4 +471,32 @@ describe("Offers", () => {
     const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
     expect(JSON.parse(saveCall[1].body as string).groupId).toBe("geral");
   });
+
+  it("shows and edits the per-offer-type base instruction and learning gallery", async () => {
+    stubFetchSequence([
+      { body: projectState([RODIZIO_OFFER]) },
+      {
+        body: {
+          types: [
+            { type: "combo", baseInstruction: "Combo: foco no produto, CTA de delivery claro.", entries: [] },
+            { type: "offer", baseInstruction: "Criar post de Oferta direta.", entries: [] },
+          ],
+        },
+      },
+      { body: { type: "combo", baseInstruction: "Combo: sempre mostrar a caixa fechada e aberta lado a lado." } },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Aprendizado por tipo" }));
+    expect(await screen.findByDisplayValue("Combo: foco no produto, CTA de delivery claro.")).toBeInTheDocument();
+
+    const instructionField = screen.getByDisplayValue("Combo: foco no produto, CTA de delivery claro.");
+    await userEvent.clear(instructionField);
+    await userEvent.type(instructionField, "Combo: sempre mostrar a caixa fechada e aberta lado a lado.");
+    await userEvent.click(screen.getAllByRole("button", { name: "Salvar" })[0]);
+
+    const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    expect(call[0]).toBe("/api/projects/boss-pizzaria/offer-type-learnings");
+    expect(JSON.parse(call[1].body as string).type).toBe("combo");
+  });
 });

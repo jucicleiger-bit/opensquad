@@ -772,6 +772,7 @@ export interface OfferTypeLearning {
   type: string;
   baseInstruction: string;
   entries: SegmentLearningEntry[];
+  hasOverride?: boolean;
 }
 
 export function getOfferTypeLearnings(projectId: string): Promise<{ types: OfferTypeLearning[] }> {
