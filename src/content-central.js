@@ -3557,7 +3557,17 @@ export function migrateSegmentLearningStoreV1ToV2(v1Store) {
     for (const text of segment.avoid || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'avoid', kind: 'text', text, source: 'auto' }));
     nodes[deepestPath].entries.push(...entries);
   }
-  return { schemaVersion: 2, nodes };
+  // The v1 label -> v2 node-path mapping is lossy/ambiguous (it can't
+  // reconstruct which real tagged group/category/specialty a flat label
+  // like "Engenharia / Controle tecnológico / solos e pavimentação"
+  // belongs to), so it's read-only, in-memory sugar for legacy callers —
+  // NOT a real migration. Keep the original v1 `segments` bucket around
+  // verbatim so it survives being written back to disk as part of a v2
+  // store (see saveLearningEntry/deleteLearningEntry/addSegmentLearning),
+  // instead of silently deleting real operator-authored history on the
+  // first write after this ships. loadSegmentLearningsForProject also
+  // reads this bucket directly via the old flat key.
+  return { schemaVersion: 2, nodes, segments: v1Store?.segments || {} };
 }
 
 function normalizeTechnicalBase(input = {}) {
@@ -3749,6 +3759,17 @@ async function loadSegmentLearningsForProject(paths, project) {
   if (!nodePaths.length) return normalizeSegmentLearnings();
   const store = await readSegmentLearningStore(paths);
   const entries = nodePaths.flatMap((path) => store.nodes[path]?.entries || []);
+  // Pre-v2 auto-learnings live under the old flat segment key
+  // (store.segments[projectSegmentKey]) and are never migrated into the
+  // new tagged-node scheme (see migrateSegmentLearningStoreV1ToV2) —
+  // fold them in here so old operator-approved/rejected history keeps
+  // reaching prompts instead of becoming silently unreachable.
+  const legacySegment = store.segments?.[projectSegmentKey(project)];
+  if (legacySegment) {
+    for (const text of legacySegment.technical || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'technical', kind: 'text', text, source: 'auto' }));
+    for (const text of legacySegment.approved || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'approved', kind: 'text', text, source: 'auto' }));
+    for (const text of legacySegment.avoid || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'avoid', kind: 'text', text, source: 'auto' }));
+  }
   return normalizeSegmentLearnings({ key: nodePaths[nodePaths.length - 1], label: projectSegmentLabel(project), entries });
 }
 

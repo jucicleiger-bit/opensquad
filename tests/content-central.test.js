@@ -463,6 +463,69 @@ test('migrateSegmentLearningStoreV1ToV2 splits the flat label into a Setor/Nicho
   assert.ok(deepest.some((e) => e.bucket === 'avoid' && e.text === 'não misturar concreto com obra predial genérica'));
 });
 
+test('real operator-authored v1 segment-learnings data (pre-v2, flat-keyed) stays reachable in prompts and survives a write after the v1->v2 upgrade-on-read, instead of being silently orphaned then deleted', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boss-pizzaria-legado', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('boss-pizzaria-legado', {
+      brandName: 'Boss Pizzaria',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+
+    const paths = getCentralPaths(dir, 'boss-pizzaria-legado');
+    // Reproduces the real repo's gitignored segment-learnings.json shape —
+    // v1, flat-keyed by slugify('Alimentício / Pizzaria'), with real
+    // operator-written approve/reject history.
+    const v1Store = {
+      schemaVersion: 1,
+      segments: {
+        'alimenticio-pizzaria': {
+          key: 'alimenticio-pizzaria',
+          label: 'Alimentício / Pizzaria',
+          technical: [],
+          approved: ['fotos com fatia puxando o queijo derretendo'],
+          avoid: ['não parecer gerado por IA, mais detalhista'],
+        },
+      },
+    };
+    await writeFile(paths.segmentLearningsPath, JSON.stringify(v1Store, null, 2), 'utf-8');
+
+    // Loading the project (any content generation triggers
+    // loadSegmentLearningsForProject) must still surface the old data even
+    // though it lives under the old flat key, not the new tagged node path.
+    const batch = await generateContentBatch('boss-pizzaria-legado', { days: 1, startDate: '2026-07-20' }, dir);
+    assert.match(batch.items[0].image.prompt, /fotos com fatia puxando o queijo derretendo/);
+    assert.match(batch.items[0].image.prompt, /não parecer gerado por IA, mais detalhista/);
+
+    // A completely unrelated write (a fresh manual entry on the Setor node)
+    // must not drop the legacy `segments` bucket from disk — that's the
+    // actual data-loss bug: migrateSegmentLearningStoreV1ToV2's in-memory
+    // result used to have no `segments` key at all, so the first write
+    // after a read silently deleted the real v1 history.
+    await saveLearningEntry('boss-pizzaria-legado', {
+      scope: 'segment',
+      groupKey: 'group:alimenticio',
+      bucket: 'avoid',
+      kind: 'text',
+      text: 'nova regra manual',
+    }, dir);
+
+    const onDisk = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
+    assert.equal(onDisk.schemaVersion, 2);
+    assert.ok(onDisk.segments, 'legacy v1 segments bucket must survive the write, not be dropped');
+    assert.ok(onDisk.segments['alimenticio-pizzaria']);
+    assert.deepEqual(onDisk.segments['alimenticio-pizzaria'].avoid, ['não parecer gerado por IA, mais detalhista']);
+    assert.deepEqual(onDisk.segments['alimenticio-pizzaria'].approved, ['fotos com fatia puxando o queijo derretendo']);
+
+    // The new manual entry itself must have actually been saved into the
+    // new tagged-node scheme, alongside (not instead of) the legacy data.
+    assert.ok(onDisk.nodes['group:alimenticio']);
+    assert.ok(onDisk.nodes['group:alimenticio'].entries.some((entry) => entry.text === 'nova regra manual'));
+  });
+});
+
 test('analyzeLearningImage saves the file and returns a suggested description without writing to the store yet; saveLearningEntry then persists it', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'boss-pizza-2', name: 'Boss Pizza 2', handle: '@boss2', approvalEmail: 'a@example.com' }, dir);
