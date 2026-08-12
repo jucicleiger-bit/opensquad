@@ -1455,7 +1455,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
       // this occasion's own slug, so this special date's Story/Reels/
       // Facebook Story share one creative, its Feed/Facebook Feed share
       // another, without colliding with any regular scheduled batch's keys.
-      creativeGroupKey: shapeGroup ? `${date}::${shapeGroup}::special::${slugify(label)}` : null,
+      creativeGroupKey: shapeGroup ? `${batchId}::${date}::${shapeGroup}::special::${slugify(label)}` : null,
       image: {
         localPath: imageLocalPath,
         prompt: buildImagePrompt(project, globalRules.rules, [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
@@ -2256,7 +2256,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const dimensions = imageDimensionsForChannel(format.channel);
         const aspectRatio = imageAspectRatioForChannel(format.channel);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
-        const creativeGroupKey = shapeGroup ? `${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
+        const creativeGroupKey = shapeGroup ? `${batchId}::${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
         const contentTopic = { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel };
         const contentId = `${project.projectId}-${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
