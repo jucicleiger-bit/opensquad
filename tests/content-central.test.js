@@ -579,6 +579,58 @@ test('analyzeLearningImage saves the file and returns a suggested description wi
   });
 });
 
+test('an image learning entry records which project it was actually uploaded from (sourceProjectId), so a DIFFERENT project sharing the same segment can still resolve the file', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boss-pizza-a', name: 'Boss Pizza A', handle: '@bossa', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('boss-pizza-a', {
+      brandName: 'Boss Pizza A',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+    // A second, unrelated project that happens to share the exact same
+    // segment node — segment-learnings.json is global, so both projects
+    // read/write the same 'group:alimenticio/category:pizzaria' node.
+    await createCentralProject({ projectId: 'boss-pizza-b', name: 'Boss Pizza B', handle: '@bossb', approvalEmail: 'b@example.com' }, dir);
+    await updateProjectBrandInput('boss-pizza-b', {
+      brandName: 'Boss Pizza B',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage('boss-pizza-a', {
+      scope: 'segment',
+      groupKey: 'group:alimenticio/category:pizzaria',
+      dataUrl,
+      filename: 'esfiha-redonda.png',
+    }, dir, new Date(), { learningImageAnalyzer: async () => 'Esfiha redonda.' });
+
+    // The file physically lives under boss-pizza-a's own project directory.
+    await saveLearningEntry('boss-pizza-a', {
+      scope: 'segment',
+      groupKey: 'group:alimenticio/category:pizzaria',
+      bucket: 'approved',
+      kind: 'image',
+      text: analyzed.suggestedText,
+      imagePath: analyzed.imagePath,
+    }, dir, new Date());
+
+    // Viewed from the OTHER project (boss-pizza-b, currently "open" in this
+    // scenario) via the shared segment node — the entry must still carry
+    // enough information (sourceProjectId) to point back at boss-pizza-a,
+    // since building the thumbnail URL from whichever project is open would
+    // 404/500 (the file isn't under boss-pizza-b's directory at all).
+    const nodesFromB = await loadSegmentLearningNodes(getCentralPaths(dir, 'boss-pizza-b'), await loadProjectForTest('boss-pizza-b', dir));
+    const pizzariaNode = nodesFromB.find((node) => node.path === 'group:alimenticio/category:pizzaria');
+    assert.equal(pizzariaNode.entries.length, 1);
+    assert.equal(pizzariaNode.entries[0].sourceProjectId, 'boss-pizza-a');
+  });
+});
+
 test('technical base summarizes pasted sector material and reuses it only inside the same segment hierarchy', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'inova-tecnica', name: 'Inova Técnica', handle: '@inova', approvalEmail: 'aprovacao@example.com' }, dir);

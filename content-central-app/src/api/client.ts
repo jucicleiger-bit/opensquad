@@ -165,6 +165,12 @@ export interface SegmentLearningEntry {
   kind: "text" | "image";
   text: string;
   imagePath?: string;
+  // The project the image was actually uploaded to — segment/offer-type
+  // learning stores are global (shared across projects), but the file
+  // itself lives under this project's own assets directory. Only set for
+  // kind: "image". Use this (not the currently open project) to build the
+  // thumbnail URL.
+  sourceProjectId?: string;
   source: "auto" | "manual";
   createdAt: string;
 }

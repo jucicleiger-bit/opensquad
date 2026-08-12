@@ -88,7 +88,11 @@ export function LearningGallery({
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {entry.kind === "image" && entry.imagePath ? (
               <img
-                src={`/api/projects/${encodeURIComponent(projectId)}/assets/${entry.imagePath}`}
+                // Segment/offer-type learning is shared across every project,
+                // but the file itself lives under the project it was
+                // uploaded from — use that, not the project currently open,
+                // or the image 404/500s whenever they differ.
+                src={`/api/projects/${encodeURIComponent(entry.sourceProjectId || projectId)}/assets/${entry.imagePath}`}
                 alt={entry.text || "Referência de aprendizado"}
                 style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flex: "0 0 auto" }}
               />

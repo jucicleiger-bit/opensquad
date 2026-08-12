@@ -3446,13 +3446,21 @@ function normalizeLearnings(input) {
 const SEGMENT_LEVELS = ['setor', 'nicho', 'especialidade'];
 
 function normalizeSegmentLearningEntry(input = {}) {
+  const kind = input.kind === 'image' ? 'image' : 'text';
   return {
     id: String(input.id || `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
     bucket: ['technical', 'approved', 'avoid'].includes(input.bucket) ? input.bucket : 'approved',
-    kind: input.kind === 'image' ? 'image' : 'text',
+    kind,
     text: cleanText(input.text),
-    imagePath: input.kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
+    imagePath: kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
     source: input.source === 'auto' ? 'auto' : 'manual',
+    // segment-learnings.json/offer-type-learnings.json are GLOBAL (shared
+    // across every project), but analyzeLearningImage saves the uploaded
+    // file under the uploading project's OWN directory — so an image
+    // entry's thumbnail can only be resolved through the project it was
+    // actually uploaded from, not whichever project happens to be open
+    // when it's displayed. Only meaningful for kind: 'image'.
+    sourceProjectId: kind === 'image' ? String(input.sourceProjectId || '') : '',
     createdAt: input.createdAt || new Date().toISOString(),
   };
 }
@@ -3729,6 +3737,7 @@ export async function saveLearningEntry(projectId, input, targetDir = process.cw
       text: input.text,
       imagePath: input.imagePath,
       source: 'manual',
+      sourceProjectId: paths.projectId,
     });
     node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
     store[nodesKey] = { ...store[nodesKey], [groupKey]: node };
