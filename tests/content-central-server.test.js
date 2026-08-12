@@ -776,7 +776,13 @@ test('GET /api/learning-assets/:path serves an uploaded learning reference image
       const missing = await fetch(`${server.url}/api/learning-assets/segment/nao-existe/nao-existe.png`);
       assert.equal(missing.status, 404);
 
-      const traversal = await fetch(`${server.url}/api/learning-assets/..%2F..%2Fserver.js`);
+      // A sibling directory sharing the "learning" prefix string
+      // (.../assets/learning-evil/) — the exact CWE-22 partial-path-prefix
+      // shape the guard was fixed for. A plain filePath.startsWith(root)
+      // check would have passed this straight through to readFile (a 404,
+      // since the file doesn't exist); the fixed root+sep guard rejects it
+      // with 400 before ever reaching the filesystem.
+      const traversal = await fetch(`${server.url}/api/learning-assets/..%2Flearning-evil%2Fsecret`);
       assert.equal(traversal.status, 400);
     },
     { learningImageAnalyzer: async () => 'Referência de pizza com massa dourada.' },
