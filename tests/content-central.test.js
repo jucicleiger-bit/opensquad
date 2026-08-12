@@ -526,6 +526,54 @@ test('real operator-authored v1 segment-learnings data (pre-v2, flat-keyed) stay
   });
 });
 
+test('a project with segmentGroup/segmentCategory/segmentSpecialty all EMPTY (only a free-text `segment` field set — the real engineering-client shape) still reaches its legacy approve/reject history in prompts, and a NEW rejection is actually written and reaches later generations too', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'engenharia-legado', name: 'Engenharia Legado', handle: '@el', approvalEmail: 'a@example.com' }, dir);
+    // Deliberately mirrors the real repo's second gitignored production
+    // segment: no segmentGroup/segmentCategory/segmentSpecialty ever set —
+    // segmentNodePaths() returns [] for this project, only the free-text
+    // `segment` field carries any information at all.
+    await updateProjectBrandInput('engenharia-legado', {
+      brandName: 'Engenharia Legado',
+      segment: 'Controle tecnológico de solos, concreto e pavimentação',
+      productsOrServices: 'ensaios de solo, concreto e pavimentação',
+    }, dir);
+    const paths = getCentralPaths(dir, 'engenharia-legado');
+
+    const firstBatch = await generateContentBatch('engenharia-legado', { days: 1, startDate: '2026-07-20' }, dir);
+    assert.doesNotMatch(firstBatch.items[0].image.prompt, /não parecer robótico demais/);
+
+    // A real rejection (the write path) — for this project shape there is
+    // no tagged node to write to, only the legacy flat key. Before this
+    // fix, addSegmentLearning's `if (!nodePaths.length) return;` guard
+    // silently dropped this write entirely.
+    await deleteProjectContent('engenharia-legado', firstBatch.items[0].contentId, dir, firstBatch.batchId, 'não parecer robótico demais');
+
+    const afterReject = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
+    const legacyKeys = Object.keys(afterReject.segments || {});
+    assert.equal(legacyKeys.length, 1, 'expected exactly one legacy flat key for this project\'s free-text segment');
+    const legacyKey = legacyKeys[0];
+    assert.ok(afterReject.segments[legacyKey].avoid.some((text) => text.includes('não parecer robótico demais')), 'the new rejection must actually have been written to the legacy bucket, not dropped');
+    assert.deepEqual(afterReject.nodes, {}, 'a project with no tagged hierarchy must never gain a tagged node just from this write');
+
+    // Now simulate real pre-existing operator history sitting in the same
+    // legacy bucket (the "real v1 data" the coordinator's report describes)
+    // alongside the fresh write above, written directly the way a v1 file
+    // on disk would have it.
+    afterReject.segments[legacyKey].approved = ['fotos de campo com equipamento real, nunca mockup'];
+    await writeFile(paths.segmentLearningsPath, JSON.stringify(afterReject, null, 2), 'utf-8');
+
+    // A later generation (day 2) must surface BOTH the pre-existing legacy
+    // "approved" text AND the freshly-written "avoid" text from the
+    // rejection above — proving the read-side fix reaches this project
+    // shape, and that the write from addSegmentLearning is not just
+    // persisted but actually reachable by subsequent generations.
+    const secondBatch = await generateContentBatch('engenharia-legado', { days: 1, startDate: '2026-07-21' }, dir);
+    assert.match(secondBatch.items[0].image.prompt, /fotos de campo com equipamento real, nunca mockup/);
+    assert.match(secondBatch.items[0].image.prompt, /não parecer robótico demais/);
+  });
+});
+
 test('analyzeLearningImage saves the file and returns a suggested description without writing to the store yet; saveLearningEntry then persists it', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'boss-pizza-2', name: 'Boss Pizza 2', handle: '@boss2', approvalEmail: 'a@example.com' }, dir);

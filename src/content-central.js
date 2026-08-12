@@ -3783,7 +3783,20 @@ export async function deleteLearningEntry(projectId, input, targetDir = process.
 
 async function loadSegmentLearningsForProject(paths, project) {
   const nodePaths = segmentNodePaths(project);
-  if (!nodePaths.length) return normalizeSegmentLearnings();
+  // A project with tagged group/category/specialty all unset (never
+  // adopted the new hierarchy fields — the exact pre-Task-4 shape) still
+  // has a legacy flat key whenever it has ANY free-text `segment`/company
+  // description at all — that's the second real production project (an
+  // engineering client keyed only by a free-text `segment` field) whose
+  // approve/reject history used to go silently unreachable here, one line
+  // before the legacy-key fallback below ever got a chance to run. Only
+  // skip the read entirely when BOTH the tagged-node path AND the legacy
+  // label are genuinely empty (a project with no segment info of any kind)
+  // — that also avoids ever probing store.segments['data'], slugify's
+  // fallback for an empty string, which would risk exactly the untagged
+  // collision the "no-Setor projects" regression test above guards against.
+  const legacyLabel = projectSegmentLabel(project);
+  if (!nodePaths.length && !legacyLabel) return normalizeSegmentLearnings();
   const store = await readSegmentLearningStore(paths);
   const entries = nodePaths.flatMap((path) => store.nodes[path]?.entries || []);
   // Pre-v2 auto-learnings live under the old flat segment key
@@ -3791,13 +3804,14 @@ async function loadSegmentLearningsForProject(paths, project) {
   // new tagged-node scheme (see migrateSegmentLearningStoreV1ToV2) —
   // fold them in here so old operator-approved/rejected history keeps
   // reaching prompts instead of becoming silently unreachable.
-  const legacySegment = store.segments?.[projectSegmentKey(project)];
+  const legacyKey = projectSegmentKey(project);
+  const legacySegment = store.segments?.[legacyKey];
   if (legacySegment) {
     for (const text of legacySegment.technical || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'technical', kind: 'text', text, source: 'auto' }));
     for (const text of legacySegment.approved || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'approved', kind: 'text', text, source: 'auto' }));
     for (const text of legacySegment.avoid || []) entries.push(normalizeSegmentLearningEntry({ bucket: 'avoid', kind: 'text', text, source: 'auto' }));
   }
-  return normalizeSegmentLearnings({ key: nodePaths[nodePaths.length - 1], label: projectSegmentLabel(project), entries });
+  return normalizeSegmentLearnings({ key: nodePaths[nodePaths.length - 1] || legacyKey, label: projectSegmentLabel(project), entries });
 }
 
 // Callers (analyzeProjectTechnicalBase/approveContent/deleteProjectContent)
@@ -3809,14 +3823,36 @@ async function loadSegmentLearningsForProject(paths, project) {
 async function addSegmentLearning(paths, project, bucket, line, targetDir) {
   const nodePaths = segmentNodePaths(project);
   const text = cleanText(line);
-  if (!nodePaths.length || !text || !['approved', 'avoid', 'technical'].includes(bucket)) return;
+  if (!text || !['approved', 'avoid', 'technical'].includes(bucket)) return;
+  // A project with no tagged group/category/specialty ever set (the
+  // pre-Task-4 shape) has nowhere in the new `nodes` scheme to write to —
+  // but as long as it has SOME free-text `segment` description, it still
+  // has the same legacy flat key loadSegmentLearningsForProject reads back
+  // from (see above). Writing there — instead of silently dropping the
+  // write, which used to mean every approve/reject from such a project
+  // went nowhere — is the pre-this-branch behavior for these projects, not
+  // a new untagged node: it's a slug of the WHOLE free-text description,
+  // not a per-level fragment, so it doesn't reintroduce the same-word-
+  // reused-at-different-levels collision Task 4's tagged paths fixed. A
+  // project with neither a tagged path nor any free-text segment at all
+  // genuinely has nothing to key on — stays a no-op, as before.
+  const legacyLabel = projectSegmentLabel(project);
+  if (!nodePaths.length && !legacyLabel) return;
   return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
-    const deepestPath = nodePaths[nodePaths.length - 1];
     const store = await readSegmentLearningStore(paths);
-    const node = store.nodes[deepestPath] || { label: segmentNodeLabel(project, SEGMENT_LEVELS[nodePaths.length - 1]), entries: [] };
-    const entry = normalizeSegmentLearningEntry({ bucket, kind: 'text', text, source: 'auto' });
-    node.entries = [entry, ...node.entries.filter((existing) => existing.text !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
-    store.nodes = { ...store.nodes, [deepestPath]: node };
+    if (nodePaths.length) {
+      const deepestPath = nodePaths[nodePaths.length - 1];
+      const node = store.nodes[deepestPath] || { label: segmentNodeLabel(project, SEGMENT_LEVELS[nodePaths.length - 1]), entries: [] };
+      const entry = normalizeSegmentLearningEntry({ bucket, kind: 'text', text, source: 'auto' });
+      node.entries = [entry, ...node.entries.filter((existing) => existing.text !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+      store.nodes = { ...store.nodes, [deepestPath]: node };
+    } else {
+      const legacyKey = projectSegmentKey(project);
+      const segment = store.segments?.[legacyKey] || { key: legacyKey, label: legacyLabel, technical: [], approved: [], avoid: [] };
+      segment.label = legacyLabel;
+      segment[bucket] = [text, ...(segment[bucket] || []).filter((existing) => existing !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+      store.segments = { ...(store.segments || {}), [legacyKey]: segment };
+    }
     store.schemaVersion = 2;
     await writeJson(paths.segmentLearningsPath, store);
   });
