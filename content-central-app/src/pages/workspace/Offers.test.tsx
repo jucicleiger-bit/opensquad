@@ -506,4 +506,16 @@ describe("Offers", () => {
     expect(await screen.findAllByText("personalizado")).toHaveLength(2);
     expect(screen.queryByText("usando padrão")).not.toBeInTheDocument();
   });
+
+  it("shows an error pill instead of a silently empty panel when loading the per-offer-type learning fails", async () => {
+    stubFetchSequence([
+      { body: projectState([RODIZIO_OFFER]) },
+      { body: { error: "Falha ao carregar aprendizados" }, ok: false },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Aprendizado por tipo" }));
+
+    expect(await screen.findByText("Falha ao carregar aprendizados")).toBeInTheDocument();
+  });
 });

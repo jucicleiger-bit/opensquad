@@ -283,10 +283,15 @@ export function Offers() {
   async function openTypeLearning() {
     setTypeLearningOpen((current) => !current);
     if (!typeLearningLoaded) {
-      const result = await getOfferTypeLearnings(project.projectId);
-      setTypeLearnings(result.types);
-      setEditingInstruction(Object.fromEntries(result.types.map((t) => [t.type, t.baseInstruction])));
-      setTypeLearningLoaded(true);
+      setTypeLearningError(null);
+      try {
+        const result = await getOfferTypeLearnings(project.projectId);
+        setTypeLearnings(result.types);
+        setEditingInstruction(Object.fromEntries(result.types.map((t) => [t.type, t.baseInstruction])));
+        setTypeLearningLoaded(true);
+      } catch (err) {
+        setTypeLearningError((err as Error).message);
+      }
     }
   }
 
