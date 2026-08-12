@@ -5982,6 +5982,50 @@ test('saveLearningEntry/deleteLearningEntry/saveOfferTypeBaseInstruction share o
   });
 });
 
+test('addSegmentLearning (the auto-learning write triggered by content rejection) also honors the shared global learning lock, not just its own per-project lock', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'rejeicao-lock', name: 'Rejeicao Lock', handle: '@rl', approvalEmail: 'a@example.com' }, dir);
+    // addSegmentLearning() is a no-op (returns before ever touching the
+    // store/lock) when the project has no segment hierarchy set at all —
+    // segmentNodePaths() needs at least one of group/category/specialty.
+    await updateProjectBrandInput('rejeicao-lock', {
+      brandName: 'Rejeicao Lock',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+    const batch = await generateContentBatch('rejeicao-lock', { days: 1, startDate: '2026-07-20' }, dir);
+
+    // deleteProjectContent (rejection with a reason) already runs inside its
+    // OWN per-project lock, but internally calls addSegmentLearning, which
+    // read-modify-writes the same GLOBAL segment-learnings.json
+    // saveLearningEntry/deleteLearningEntry/saveOfferTypeBaseInstruction do.
+    // Plant a lock file at the shared global-lock directory and confirm the
+    // rejection call still blocks on it (nested inside its per-project
+    // lock), proving addSegmentLearning takes the same shared lock too.
+    const globalLockPaths = getCentralPaths(dir, '__global-learning__');
+    const lockPath = join(globalLockPaths.projectDir, '.lock');
+    await mkdir(globalLockPaths.projectDir, { recursive: true });
+    await writeFile(lockPath, 'held-by-another-project\n' + new Date().toISOString());
+
+    let resolved = false;
+    const pending = deleteProjectContent('rejeicao-lock', batch.items[0].contentId, dir, batch.batchId, 'não parecer gerado por IA').then(() => {
+      resolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(resolved, false, 'a content rejection must still block on the shared global learning lock');
+
+    await rm(lockPath, { force: true });
+    await pending;
+    assert.equal(resolved, true);
+
+    const store = JSON.parse(await readFile(getCentralPaths(dir, 'rejeicao-lock').segmentLearningsPath, 'utf-8'));
+    const hasAvoidEntry = Object.values(store.nodes).some((node) => node.entries.some((entry) => entry.text.includes('não parecer gerado por IA')));
+    assert.ok(hasAvoidEntry, 'the avoid learning must still have been written once the lock was released');
+  });
+});
+
 const TINY_PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 async function writeTinyPngFile(path) {

@@ -578,7 +578,7 @@ export async function analyzeProjectTechnicalBase(projectId, input = {}, targetD
     source: typeof options.technicalAnalyzer === 'function' ? 'ai_or_template' : 'template',
   });
   project.updatedAt = now.toISOString();
-  await addSegmentLearning(paths, project, 'technical', project.technicalBase.summary);
+  await addSegmentLearning(paths, project, 'technical', project.technicalBase.summary, targetDir);
   project.segmentLearnings = await loadSegmentLearningsForProject(paths, project);
   await writeJson(paths.projectPath, project);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
@@ -2880,7 +2880,7 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   ].slice(0, MAX_LEARNING_ENTRIES);
   project.updatedAt = now;
   await writeJson(paths.projectPath, project);
-  await addSegmentLearning(paths, project, 'approved', summarizeApprovedLearning(content));
+  await addSegmentLearning(paths, project, 'approved', summarizeApprovedLearning(content), targetDir);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
 
   if (typeof options.queueSync === 'function') {
@@ -3298,7 +3298,7 @@ export async function deleteProjectContent(projectId, contentId, targetDir = pro
     ].slice(0, MAX_LEARNING_ENTRIES);
     project.updatedAt = now;
     await writeJson(paths.projectPath, project);
-    await addSegmentLearning(paths, project, 'avoid', summarizeAvoidLearning(content, cleanReason));
+    await addSegmentLearning(paths, project, 'avoid', summarizeAvoidLearning(content, cleanReason), targetDir);
     await writeFile(paths.manualPath, buildManual(project), 'utf-8');
   }
 
@@ -3800,18 +3800,26 @@ async function loadSegmentLearningsForProject(paths, project) {
   return normalizeSegmentLearnings({ key: nodePaths[nodePaths.length - 1], label: projectSegmentLabel(project), entries });
 }
 
-async function addSegmentLearning(paths, project, bucket, line) {
+// Callers (analyzeProjectTechnicalBase/approveContent/deleteProjectContent)
+// already run inside their own PER-PROJECT withProjectLock — but this
+// function itself read-modify-writes the GLOBAL segment-learnings.json, so
+// it needs the same shared global lock saveLearningEntry/deleteLearningEntry
+// /saveOfferTypeBaseInstruction use, nested inside the caller's per-project
+// lock (different key, so no self-deadlock).
+async function addSegmentLearning(paths, project, bucket, line, targetDir) {
   const nodePaths = segmentNodePaths(project);
   const text = cleanText(line);
   if (!nodePaths.length || !text || !['approved', 'avoid', 'technical'].includes(bucket)) return;
-  const deepestPath = nodePaths[nodePaths.length - 1];
-  const store = await readSegmentLearningStore(paths);
-  const node = store.nodes[deepestPath] || { label: segmentNodeLabel(project, SEGMENT_LEVELS[nodePaths.length - 1]), entries: [] };
-  const entry = normalizeSegmentLearningEntry({ bucket, kind: 'text', text, source: 'auto' });
-  node.entries = [entry, ...node.entries.filter((existing) => existing.text !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
-  store.nodes = { ...store.nodes, [deepestPath]: node };
-  store.schemaVersion = 2;
-  await writeJson(paths.segmentLearningsPath, store);
+  return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
+    const deepestPath = nodePaths[nodePaths.length - 1];
+    const store = await readSegmentLearningStore(paths);
+    const node = store.nodes[deepestPath] || { label: segmentNodeLabel(project, SEGMENT_LEVELS[nodePaths.length - 1]), entries: [] };
+    const entry = normalizeSegmentLearningEntry({ bucket, kind: 'text', text, source: 'auto' });
+    node.entries = [entry, ...node.entries.filter((existing) => existing.text !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+    store.nodes = { ...store.nodes, [deepestPath]: node };
+    store.schemaVersion = 2;
+    await writeJson(paths.segmentLearningsPath, store);
+  });
 }
 
 async function loadProject(paths) {
