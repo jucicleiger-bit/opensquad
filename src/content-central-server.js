@@ -2,7 +2,7 @@ import { exec, execFile, spawn } from 'node:child_process';
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { homedir, platform, tmpdir } from 'node:os';
-import { basename, extname, join, normalize, resolve } from 'node:path';
+import { basename, extname, join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { HorizontalAlign, VerticalAlign } from '@jimp/core';
@@ -1067,7 +1067,7 @@ async function sendLearningAsset(res, targetDir, relativePath) {
   const safeRelative = normalize(relativePath).replace(/^([/\\])+/, '');
   const learningRoot = resolve(targetDir, '_opensquad', 'content-central', 'assets', 'learning');
   const filePath = resolve(join(learningRoot, safeRelative));
-  if (!filePath.startsWith(learningRoot)) return sendJson(res, 400, { error: 'Referência inválida' });
+  if (filePath !== learningRoot && !filePath.startsWith(learningRoot + sep)) return sendJson(res, 400, { error: 'Referência inválida' });
   let body;
   try {
     body = await readFile(filePath);

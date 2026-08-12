@@ -747,6 +747,42 @@ test('root-level segment-learnings and offer-type-learnings routes work with no 
   });
 });
 
+test('GET /api/learning-assets/:path serves an uploaded learning reference image, with missing/traversal cases rejected', async () => {
+  const pngBytes = Buffer.from('89504e470d0a1a0a', 'hex');
+  const dataUrl = `data:image/png;base64,${pngBytes.toString('base64')}`;
+
+  await withServer(
+    async (_dir, server) => {
+      const analyzeResponse = await request(server, '/api/segment-learnings/analyze-image', {
+        method: 'POST',
+        body: JSON.stringify({
+          scope: 'segment',
+          groupKey: 'group:alimenticio/category:pizzaria',
+          dataUrl,
+          filename: 'teste.png',
+        }),
+      });
+      assert.equal(analyzeResponse.response.status, 200);
+      const { imagePath } = analyzeResponse.body;
+      assert.ok(imagePath);
+
+      // Binary image response — bypasses the request() helper above, which
+      // always tries to JSON-parse the body.
+      const served = await fetch(`${server.url}/api/learning-assets/${imagePath.split('/').map(encodeURIComponent).join('/')}`);
+      assert.equal(served.status, 200);
+      assert.equal(served.headers.get('content-type'), 'image/png');
+      assert.deepEqual(Buffer.from(await served.arrayBuffer()), pngBytes);
+
+      const missing = await fetch(`${server.url}/api/learning-assets/segment/nao-existe/nao-existe.png`);
+      assert.equal(missing.status, 404);
+
+      const traversal = await fetch(`${server.url}/api/learning-assets/..%2F..%2Fserver.js`);
+      assert.equal(traversal.status, 400);
+    },
+    { learningImageAnalyzer: async () => 'Referência de pizza com massa dourada.' },
+  );
+});
+
 test('POST /api/projects/:id/adapt-segment-template adapts a registered template into real content items through the real endpoint, instead of generating from scratch', async () => {
   await withServer(async (dir, server) => {
     const source = join(dir, 'source.png');
