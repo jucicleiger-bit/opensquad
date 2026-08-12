@@ -579,6 +579,33 @@ test('analyzeLearningImage saves the file and returns a suggested description wi
   });
 });
 
+test('a corrupted/hand-edited learning store file (schemaVersion set but nodes/types missing) does not crash saveLearningEntry — it self-heals with an empty collection instead of throwing', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'store-corrompido', name: 'Store Corrompido', handle: '@sc', approvalEmail: 'a@example.com' }, dir);
+    const paths = getCentralPaths(dir, 'store-corrompido');
+
+    await writeFile(paths.segmentLearningsPath, JSON.stringify({ schemaVersion: 2 }), 'utf-8');
+    const segmentEntries = await saveLearningEntry('store-corrompido', {
+      scope: 'segment',
+      groupKey: 'group:teste',
+      bucket: 'approved',
+      kind: 'text',
+      text: 'entrada de teste',
+    }, dir);
+    assert.equal(segmentEntries.length, 1);
+
+    await writeFile(paths.offerTypeLearningsPath, JSON.stringify({ schemaVersion: 1 }), 'utf-8');
+    const offerTypeEntries = await saveLearningEntry('store-corrompido', {
+      scope: 'offerType',
+      groupKey: 'combo',
+      bucket: 'approved',
+      kind: 'text',
+      text: 'entrada de teste',
+    }, dir);
+    assert.equal(offerTypeEntries.length, 1);
+  });
+});
+
 test('an image learning entry records which project it was actually uploaded from (sourceProjectId), so a DIFFERENT project sharing the same segment can still resolve the file', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'boss-pizza-a', name: 'Boss Pizza A', handle: '@bossa', approvalEmail: 'a@example.com' }, dir);

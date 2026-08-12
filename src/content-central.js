@@ -3665,7 +3665,11 @@ function projectSegmentKey(project = {}) {
 async function readSegmentLearningStore(paths) {
   const stored = await readJson(paths.segmentLearningsPath, null);
   if (!stored) return { schemaVersion: 2, nodes: {} };
-  if (stored.schemaVersion === 2) return stored;
+  // A store file that exists but was hand-edited/corrupted into `{}` (or
+  // any shape missing `nodes`) would otherwise pass the schemaVersion
+  // check as-is and blow up the first time a caller does
+  // store.nodes[path] — defend here once instead of at every access site.
+  if (stored.schemaVersion === 2) return { ...stored, nodes: stored.nodes || {} };
   return migrateSegmentLearningStoreV1ToV2(stored);
 }
 
@@ -3686,7 +3690,10 @@ function learningStorePath(paths, scope) {
 async function readLearningStore(paths, scope) {
   if (scope === 'segment') return readSegmentLearningStore(paths);
   const stored = await readJson(paths.offerTypeLearningsPath, null);
-  return stored || { schemaVersion: 1, types: {} };
+  if (!stored) return { schemaVersion: 1, types: {} };
+  // Same defensive fallback as readSegmentLearningStore above, for a
+  // corrupted/hand-edited offer-type-learnings.json missing `types`.
+  return { ...stored, types: stored.types || {} };
 }
 
 async function writeLearningStore(paths, scope, store) {

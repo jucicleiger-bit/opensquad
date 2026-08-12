@@ -525,6 +525,11 @@ export function Offers() {
                     {learning.hasOverride ? "personalizado" : "usando padrão"}
                   </span>
                 </div>
+                {!learning.hasOverride ? (
+                  <p className="muted" style={{ margin: "4px 0", fontSize: 12 }}>
+                    Prévia genérica do texto padrão. O texto real usado pela IA encaixa o nome da oferta no meio da frase — não é exatamente o que está escrito abaixo até você salvar uma versão personalizada.
+                  </p>
+                ) : null}
                 <textarea
                   value={editingInstruction[learning.type] || ""}
                   onChange={(e) => setEditingInstruction((current) => ({ ...current, [learning.type]: e.target.value }))}
