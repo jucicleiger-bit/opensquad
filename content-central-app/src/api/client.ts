@@ -745,30 +745,27 @@ export function researchOnline(projectId: string): Promise<OnlineResearchResult>
 }
 
 export function analyzeLearningImage(
-  projectId: string,
   input: { scope: "segment" | "offerType"; groupKey: string; dataUrl: string; filename: string },
 ): Promise<{ imagePath: string; suggestedText: string }> {
-  return api(`/api/projects/${encodeURIComponent(projectId)}/segment-learnings/analyze-image`, {
+  return api(`/api/segment-learnings/analyze-image`, {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
 export function saveLearningEntry(
-  projectId: string,
   input: { scope: "segment" | "offerType"; groupKey: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; text: string; imagePath?: string },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
-  return api(`/api/projects/${encodeURIComponent(projectId)}/segment-learnings/entries`, {
+  return api(`/api/segment-learnings/entries`, {
     method: "POST",
     body: JSON.stringify(input),
   });
 }
 
 export function deleteLearningEntry(
-  projectId: string,
   input: { scope: "segment" | "offerType"; groupKey: string; entryId: string },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
-  return api(`/api/projects/${encodeURIComponent(projectId)}/segment-learnings/entries-delete`, {
+  return api(`/api/segment-learnings/entries-delete`, {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -781,16 +778,15 @@ export interface OfferTypeLearning {
   hasOverride?: boolean;
 }
 
-export function getOfferTypeLearnings(projectId: string): Promise<{ types: OfferTypeLearning[] }> {
-  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-type-learnings`);
+export function getOfferTypeLearnings(): Promise<{ types: OfferTypeLearning[] }> {
+  return api(`/api/offer-type-learnings`);
 }
 
 export function saveOfferTypeBaseInstruction(
-  projectId: string,
   type: string,
   baseInstruction: string,
 ): Promise<{ type: string; baseInstruction: string }> {
-  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-type-learnings`, {
+  return api(`/api/offer-type-learnings`, {
     method: "POST",
     body: JSON.stringify({ type, baseInstruction }),
   });
@@ -1030,6 +1026,15 @@ export const PROJECT_TYPE_LABELS: Record<string, string> = {
   marketing: "Marketing de conteúdo",
   catalog: "Catálogo de produtos (venda direta)",
 };
+
+export const SEGMENT_TREE = [
+  { group: "Alimentício", categories: ["Hamburgueria", "Pizzaria", "Espetaria", "Restaurante", "Açaí / sorveteria", "Padaria / confeitaria"] },
+  { group: "Negócios locais e lojas", categories: ["Casa de embalagem", "Papelaria", "Aviamentos", "Loja de roupas", "Mercado / mercearia", "Material de construção"] },
+  { group: "Engenharia", categories: ["Controle tecnológico / concreto / solos / asfalto", "Construção civil / obras", "Geotecnia e fundações", "Projetos e consultoria", "Topografia"] },
+  { group: "Saúde e estética", categories: ["Clínica odontológica", "Estética facial/corporal", "Barbearia", "Salão de beleza", "Clínica médica"] },
+  { group: "Educação", categories: ["Curso livre", "Escola profissionalizante", "Aulas particulares", "Treinamento corporativo"] },
+  { group: "Serviços profissionais", categories: ["Contabilidade", "Advocacia", "Marketing / agência", "Imobiliária", "Consultoria"] },
+];
 
 export const OFFER_TYPE_LABELS: Record<string, string> = {
   offer: "Oferta direta",

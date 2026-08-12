@@ -12,6 +12,7 @@ import {
   approveBrandXray,
   saveBrandInput,
   saveOffer,
+  SEGMENT_TREE,
   type BrandXrayBlockId,
   type SiteOfferCandidate,
 } from "@/api/client";
@@ -19,14 +20,6 @@ import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 
 const REQUIRED_MESSAGE = "Preencha nome, segmento e o que a empresa vende/oferece.";
-const SEGMENT_TREE = [
-  { group: "Alimentício", categories: ["Hamburgueria", "Pizzaria", "Espetaria", "Restaurante", "Açaí / sorveteria", "Padaria / confeitaria"] },
-  { group: "Negócios locais e lojas", categories: ["Casa de embalagem", "Papelaria", "Aviamentos", "Loja de roupas", "Mercado / mercearia", "Material de construção"] },
-  { group: "Engenharia", categories: ["Controle tecnológico / concreto / solos / asfalto", "Construção civil / obras", "Geotecnia e fundações", "Projetos e consultoria", "Topografia"] },
-  { group: "Saúde e estética", categories: ["Clínica odontológica", "Estética facial/corporal", "Barbearia", "Salão de beleza", "Clínica médica"] },
-  { group: "Educação", categories: ["Curso livre", "Escola profissionalizante", "Aulas particulares", "Treinamento corporativo"] },
-  { group: "Serviços profissionais", categories: ["Contabilidade", "Advocacia", "Marketing / agência", "Imobiliária", "Consultoria"] },
-];
 
 const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
 const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
