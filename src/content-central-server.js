@@ -55,6 +55,8 @@ import {
   listCentralProjects,
   listProjectContent,
   listSystemAlerts,
+  loadOfferTypeLearning,
+  OFFER_TYPES,
   sendDueAlertEmails,
   publishSingleContent,
   readProjectToken,
@@ -64,6 +66,7 @@ import {
   researchOnlineVisualTrends,
   runDuePublishSweep,
   saveLearningEntry,
+  saveOfferTypeBaseInstruction,
   saveProjectAsset,
   saveProjectOffer,
   saveProjectOfferGroup,
@@ -482,6 +485,11 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { adCreatives: await listAdCreatives(projectId, targetDir) });
   }
 
+  if (method === 'GET' && parts.length === 4 && parts[3] === 'offer-type-learnings') {
+    const types = await Promise.all([...OFFER_TYPES].map((type) => loadOfferTypeLearning(targetDir, type)));
+    return sendJson(res, 200, { types });
+  }
+
   if (method === 'GET' && parts.length === 4 && parts[3] === 'briefing') {
     const [projects, content] = await Promise.all([
       listCentralProjects(targetDir),
@@ -683,6 +691,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const entries = await deleteLearningEntry(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
     return sendJson(res, 200, { entries });
+  }
+
+  if (parts.length === 4 && parts[3] === 'offer-type-learnings') {
+    const body = await readBody(req);
+    await saveOfferTypeBaseInstruction(targetDir, body.type, body.baseInstruction);
+    return sendJson(res, 200, { type: body.type, baseInstruction: body.baseInstruction });
   }
 
   if (parts.length === 4 && parts[3] === 'offers') {

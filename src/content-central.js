@@ -20,7 +20,7 @@ const CHANNEL_LABELS = {
   facebook_story: 'Facebook Story',
 };
 
-const OFFER_TYPES = new Set([
+export const OFFER_TYPES = new Set([
   'offer',
   'combo',
   'rodizio',

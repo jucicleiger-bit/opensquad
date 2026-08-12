@@ -768,6 +768,27 @@ export function deleteLearningEntry(
   });
 }
 
+export interface OfferTypeLearning {
+  type: string;
+  baseInstruction: string;
+  entries: SegmentLearningEntry[];
+}
+
+export function getOfferTypeLearnings(projectId: string): Promise<{ types: OfferTypeLearning[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-type-learnings`);
+}
+
+export function saveOfferTypeBaseInstruction(
+  projectId: string,
+  type: string,
+  baseInstruction: string,
+): Promise<{ type: string; baseInstruction: string }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-type-learnings`, {
+    method: "POST",
+    body: JSON.stringify({ type, baseInstruction }),
+  });
+}
+
 export function analyzeBrandXray(projectId: string, input: BrandInput): Promise<{ project: ProjectSummary; xray: BrandXray }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/brand-xray/analyze`, {
     method: "POST",
