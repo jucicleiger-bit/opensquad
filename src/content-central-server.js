@@ -409,7 +409,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { entries });
   }
 
-  if (method === 'GET' && route.startsWith('/api/segment-learnings/nodes')) {
+  if (method === 'GET' && route === '/api/segment-learnings/nodes') {
     const nodes = await loadSegmentLearningNodesForSelection(getCentralPaths(targetDir), {
       segmentGroup: url.searchParams.get('segmentGroup') || '',
       segmentCategory: url.searchParams.get('segmentCategory') || '',
