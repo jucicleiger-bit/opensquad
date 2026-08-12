@@ -1147,7 +1147,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
   const startDate = options.startDate || formatDate(new Date());
   const postTime = options.postTime || project.contentSettings.defaultPostTime || DEFAULT_TIME;
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
-  const topicCount = contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly });
+  const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
   if (options.offersOnly && !topicCount) {
     throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
   }
@@ -1176,7 +1176,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     const scheduledDate = addDays(startDate, index);
     const dimensions = imageDimensionsForChannel(channel);
     const aspectRatio = imageAspectRatioForChannel(channel);
-    const contentTopic = buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) });
+    const contentTopic = await buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) }, targetDir);
     const contentId = `${project.projectId}-${scheduledDate}-${channel}`;
     const filePath = join(batchDir, `day-${String(dayNumber).padStart(2, '0')}.json`);
     const imageFileName = `day-${String(dayNumber).padStart(2, '0')}.svg`;
@@ -1354,10 +1354,10 @@ export function listCommemorativeDates(fromDateString, toDateString) {
     .sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
 }
 
-function buildSpecialDateContentTopic({ date, label, project, offer }) {
+async function buildSpecialDateContentTopic({ date, label, project, offer, targetDir }) {
   const idSuffix = `${date}-${slugify(label)}`;
   if (offer) {
-    const offerTopic = offerToContentTopic(offer);
+    const offerTopic = await offerToContentTopic(offer, targetDir);
     return {
       ...offerTopic,
       id: `special-date-${idSuffix}`,
@@ -1425,7 +1425,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
   // Built once, outside the per-channel loop below, and reused for every
   // channel — same topic/message across formats is what makes sharing one
   // creative across a shape group correct in the first place.
-  const contentTopic = buildSpecialDateContentTopic({ date, label, project, offer });
+  const contentTopic = await buildSpecialDateContentTopic({ date, label, project, offer, targetDir });
   const createdAt = new Date().toISOString();
 
   const items = [];
@@ -1790,12 +1790,12 @@ function buildAdCreativeNoteLine(note, noteMode) {
   return `Ideia sugerida pelo operador (use como inspiração adicional, sem abandonar o restante da direção do anúncio): "${note}"`;
 }
 
-function buildAdCreativeContentTopic({ project, offer, objective, note, noteMode }) {
+async function buildAdCreativeContentTopic({ project, offer, objective, note, noteMode, targetDir }) {
   const id = `ad-creative-${Date.now()}`;
   const objectiveLabel = AD_OBJECTIVE_LABELS[objective];
   const noteLine = buildAdCreativeNoteLine(note, noteMode);
   if (offer) {
-    const offerTopic = offerToContentTopic(offer);
+    const offerTopic = await offerToContentTopic(offer, targetDir);
     return {
       ...offerTopic,
       id,
@@ -1868,7 +1868,7 @@ export async function generateAdCreative(projectId, options = {}, targetDir = pr
   const channel = options.channel === 'instagram_story' ? 'instagram_story' : 'instagram_feed';
   const dimensions = imageDimensionsForChannel(channel);
   const aspectRatio = imageAspectRatioForChannel(channel);
-  const contentTopic = buildAdCreativeContentTopic({ project, offer, objective, note, noteMode });
+  const contentTopic = await buildAdCreativeContentTopic({ project, offer, objective, note, noteMode, targetDir });
 
   const adCreativeId = `${project.projectId}-anuncio-${Date.now()}`;
   const imageDir = join(paths.adCreativesDir, 'images');
@@ -2173,7 +2173,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
-  const topicCount = contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly });
+  const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
   if (options.offersOnly && !topicCount) {
     throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
   }
@@ -2217,7 +2217,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const pillarSequence = activePillars.length ? buildPillarRotationSequence(activePillars) : [];
   let pillarCursor = normalizeTopicIndex(project.contentStrategy?.nextPillarSequenceIndex, pillarSequence.length || 1);
   let topicCursor = topicOffset;
-  function nextContentTopic(channel, creativeGroupKey, weekday) {
+  async function nextContentTopic(channel, creativeGroupKey, weekday) {
     if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) {
       return topicByCreativeGroupKey.get(creativeGroupKey);
     }
@@ -2225,7 +2225,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     if (pillarSequence.length) {
       const pillar = pillarSequence[pillarCursor % pillarSequence.length];
       pillarCursor += 1;
-      const pool = buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday });
+      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
       const matching = pool.filter((candidate) => resolveTopicPillar(candidate, activePillars)?.id === pillar.id);
       const bucket = matching.length ? matching : pool;
       const raw = bucket[topicCursor % bucket.length];
@@ -2237,7 +2237,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         pillar: pillarSnapshotFrom(pillar),
       };
     } else {
-      topic = buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday });
+      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
       topicCursor += 1;
     }
     if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
@@ -2257,7 +2257,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const aspectRatio = imageAspectRatioForChannel(format.channel);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
         const creativeGroupKey = shapeGroup ? `${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
-        const contentTopic = { ...nextContentTopic(format.channel, creativeGroupKey, weekday), channel: format.channel };
+        const contentTopic = { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel };
         const contentId = `${project.projectId}-${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const filePath = join(batchDir, `${fileName}.json`);
@@ -2407,7 +2407,7 @@ export async function generateCatalogSchedulePlan(projectId, options = {}, targe
       const scheduledTime = addMinutesToTime(startTime, slotIndex * intervalMinutes);
       const product = activeProducts[productCursor % activeProducts.length];
       productCursor += 1;
-      const contentTopic = { ...offerToContentTopic(product), channel };
+      const contentTopic = { ...(await offerToContentTopic(product, targetDir)), channel };
       const contentId = `${project.projectId}-${scheduledDate}-${channel}-${String(slotNumber).padStart(2, '0')}`;
       const fileName = `day-${String(dayNumber).padStart(2, '0')}-${channel}-${String(slotNumber).padStart(2, '0')}`;
       const filePath = join(batchDir, `${fileName}.json`);
@@ -2550,9 +2550,9 @@ export async function simulateTestPost(projectId, options = {}, targetDir = proc
   if (project.projectType === 'catalog') {
     throw new Error('"Teste seguro" ainda não tem suporte para projetos de catálogo. Gere e revise os cards direto em "Agenda e geração" / "Aguardando aprovação".');
   }
-  const topicCount = contentTopicCount(project);
+  const topicCount = await contentTopicCount(project, {}, targetDir);
   const topicOffset = project.contentStrategy?.nextTestTopicIndex === undefined
-    ? await inferNextTestTopicIndex(paths, project, topicCount)
+    ? await inferNextTestTopicIndex(paths, project, topicCount, targetDir)
     : normalizeTopicIndex(project.contentStrategy.nextTestTopicIndex, topicCount);
   const channel = options.channel || DEFAULT_CHANNEL;
   const note = options.note ? String(options.note).trim() : '';
@@ -2627,7 +2627,7 @@ export async function simulateTestPost(projectId, options = {}, targetDir = proc
 // regenerateContentDay (single card) and regenerateContentGroup (a whole
 // shared-creative group, where this only ever runs once, on the leader,
 // before its result gets copied onto the other members).
-async function applyContentRegeneration(content, project, projectId, options, paths = null) {
+async function applyContentRegeneration(content, project, projectId, options, paths = null, targetDir = process.cwd()) {
   const regenerate = options.regenerate || 'all';
   if (options.note) content.dayRules.push(options.note);
   let creativeRegenerated = false;
@@ -2643,7 +2643,7 @@ async function applyContentRegeneration(content, project, projectId, options, pa
       const currentOffer = (project.contentStrategy?.offers || []).find(
         (offer) => offer.id === content.contentTopic.offerId
       );
-      if (currentOffer) content.contentTopic = offerToContentTopic(currentOffer);
+      if (currentOffer) content.contentTopic = await offerToContentTopic(currentOffer, targetDir);
     }
     if (paths) content.image.references = buildImageReferencePayload(project, paths);
     if (project.projectType === 'catalog') {
@@ -2719,7 +2719,7 @@ export async function regenerateContentDay(projectId, contentId, options = {}, t
   const contentPath = await findContentPath(paths.draftsDir, contentId, options.batchId);
   const content = await readJson(contentPath);
 
-  const { creativeRegenerated } = await applyContentRegeneration(content, project, projectId, options, paths);
+  const { creativeRegenerated } = await applyContentRegeneration(content, project, projectId, options, paths, targetDir);
   if (creativeRegenerated) {
     // A fresh, independently-generated image no longer matches whatever
     // sibling cards it used to share a creative with (if any) — clear
@@ -2757,7 +2757,7 @@ export async function regenerateContentGroup(projectId, contentIds, options = {}
 
   const [leaderEntry, ...followerEntries] = entries;
   const leader = leaderEntry.content;
-  await applyContentRegeneration(leader, project, projectId, options, paths);
+  await applyContentRegeneration(leader, project, projectId, options, paths, targetDir);
 
   const regenerate = options.regenerate || 'all';
   const allContentIds = entries.map((entry) => entry.content.contentId);
@@ -4214,13 +4214,15 @@ function pillarSnapshotFrom(pillar) {
 // fallback entirely — an empty result here (group has no active offers) is
 // a real error, validated by the caller before this ever runs, not
 // something to silently paper over with unrelated content.
-function buildTopicPool(project, options = {}) {
+async function buildTopicPool(project, options = {}, targetDir) {
   const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
-  const offerTopics = normalizeProjectOffers(project.contentStrategy?.offers || [])
-    .filter((offer) => offer.active)
-    .filter((offer) => !groupIds || groupIds.has(offer.groupId))
-    .filter((offer) => !options.weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(options.weekday))
-    .map(offerToContentTopic);
+  const offerTopics = await Promise.all(
+    normalizeProjectOffers(project.contentStrategy?.offers || [])
+      .filter((offer) => offer.active)
+      .filter((offer) => !groupIds || groupIds.has(offer.groupId))
+      .filter((offer) => !options.weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(options.weekday))
+      .map((offer) => offerToContentTopic(offer, targetDir))
+  );
   if (options.offersOnly) return offerTopics;
   const goalTopics = (project.brandInput?.contentGoals || [])
     .map((goalKey) => buildGoalContentTopic(goalKey, project))
@@ -4238,8 +4240,8 @@ function buildTopicPool(project, options = {}) {
   return interleaveTopics(boostedOfferTopics, goalTopics);
 }
 
-function buildContentTopic(project, index, context = {}) {
-  const topics = buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday });
+async function buildContentTopic(project, index, context = {}, targetDir) {
+  const topics = await buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday }, targetDir);
   const topic = topics[index % topics.length];
   return {
     ...topic,
@@ -4248,12 +4250,12 @@ function buildContentTopic(project, index, context = {}) {
   };
 }
 
-function contentTopicCount(project, options = {}) {
-  return buildTopicPool(project, options).length;
+async function contentTopicCount(project, options = {}, targetDir) {
+  return (await buildTopicPool(project, options, targetDir)).length;
 }
 
-async function inferNextTestTopicIndex(paths, project, topicCount) {
-  const topics = buildTopicPool(project);
+async function inferNextTestTopicIndex(paths, project, topicCount, targetDir) {
+  const topics = await buildTopicPool(project, {}, targetDir);
   const latestTest = (await readDraftContents(paths.draftsDir))
     .filter((item) => item?.status === 'test_post_simulated')
     .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0];
@@ -4297,7 +4299,8 @@ function normalizeTopicIndex(value, count) {
   return ((integer % safeCount) + safeCount) % safeCount;
 }
 
-function offerToContentTopic(offer) {
+async function offerToContentTopic(offer, targetDir) {
+  const learning = await loadOfferTypeLearning(targetDir, offer.type);
   return {
     id: offer.id,
     type: offer.type,
@@ -4310,18 +4313,73 @@ function offerToContentTopic(offer) {
     cta: offer.cta,
     autoGenerateCta: offer.autoGenerateCta,
     notes: offer.notes,
-    objective: offerObjective(offer),
+    objective: await offerObjective(offer, targetDir),
     pillarId: offer.pillarId || null,
     photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
+    learningEntries: learning.entries.filter((entry) => entry.bucket === 'approved').map((entry) => entry.text),
   };
 }
 
-function offerObjective(offer) {
+// Per-offer-type base instruction, editable through offer-type-learnings.json
+// (see loadOfferTypeLearning/saveOfferTypeBaseInstruction below). No stored
+// override yet => exact same hardcoded per-offer wording this function
+// always returned, so existing prompts/tests stay byte-for-byte unchanged.
+// A stored override is type-level (no offer name baked in, see
+// defaultOfferObjectiveTemplate) — appended with "(offer name)" unless the
+// operator's own text already mentions it.
+async function offerObjective(offer, targetDir) {
+  const learning = await loadOfferTypeLearning(targetDir, offer.type);
+  if (!learning.hasOverride) return legacyOfferObjective(offer);
+  return learning.baseInstruction.includes(offer.name)
+    ? learning.baseInstruction
+    : `${learning.baseInstruction} (${offer.name})`;
+}
+
+function legacyOfferObjective(offer) {
   if (offer.type === 'combo') return `Criar oferta de combo para ${offer.name}, com preço e CTA de delivery claros.`;
   if (offer.type === 'rodizio') return `Criar chamada para rodízio de ${offer.name}, destacando itens inclusos, preço e convite para aproveitar.`;
   if (offer.type === 'delivery') return `Criar chamada para delivery usando ${offer.name}, preço/benefício e pedido rápido.`;
   if (offer.type === 'orientation') return `Criar post de orientação usando ${offer.name} como assunto, sem parecer só promoção.`;
   return `Criar post de ${offerTypeLabel(offer.type)} para ${offer.name}.`;
+}
+
+// Name-less generic per-type default — pre-fills the editable base
+// instruction shown by the (future) offer-type learning UI before the
+// operator has saved a custom one. Not used for the live prompt when no
+// override exists (see legacyOfferObjective, which keeps the original
+// exact wording so behavior is unchanged for untouched types).
+function defaultOfferObjectiveTemplate(type) {
+  if (type === 'combo') return `Criar oferta de combo, com preço e CTA de delivery claros.`;
+  if (type === 'rodizio') return `Criar chamada para rodízio, destacando itens inclusos, preço e convite para aproveitar.`;
+  if (type === 'delivery') return `Criar chamada para delivery, preço/benefício e pedido rápido.`;
+  if (type === 'orientation') return `Criar post de orientação, sem parecer só promoção.`;
+  return `Criar post de ${offerTypeLabel(type)}.`;
+}
+
+// offer-type-learnings.json is global (root-level, not per-project) — every
+// project shares the same editable base instruction + learned examples per
+// offer type. getCentralPaths(targetDir) with no projectId only joins path
+// segments (no existence check), so it's safe to call without a project
+// having been created yet.
+export async function loadOfferTypeLearning(targetDir, type) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readLearningStore(paths, 'offerType');
+  const node = store.types?.[type];
+  return {
+    type,
+    baseInstruction: node?.baseInstruction || defaultOfferObjectiveTemplate(type),
+    hasOverride: Boolean(node?.baseInstruction),
+    entries: (node?.entries || []).map(normalizeSegmentLearningEntry),
+  };
+}
+
+export async function saveOfferTypeBaseInstruction(targetDir, type, baseInstruction) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readLearningStore(paths, 'offerType');
+  const node = store.types[type] || { entries: [] };
+  node.baseInstruction = cleanText(baseInstruction);
+  store.types = { ...store.types, [type]: node };
+  await writeLearningStore(paths, 'offerType', store);
 }
 
 function formatContentTopicLines(topic) {
@@ -4334,6 +4392,7 @@ function formatContentTopicLines(topic) {
     !topic.cta && topic.autoGenerateCta ? 'CTA automático: criar uma chamada curta, natural e contextual depois de analisar o assunto, o formato do post e a composição criada. Evitar CTA massivo, genérico ou apelativo.' : '',
     topic.notes ? `Observações/restrições: ${topic.notes}.` : '',
     topic.objective ? `Objetivo criativo: ${topic.objective}` : '',
+    topic.learningEntries?.length ? `Aprendizados registrados para este tipo de publicação: ${topic.learningEntries.join(' | ')}` : '',
     'Não misturar oferta de delivery com rodízio/presencial se isso não estiver cadastrado no assunto.',
     'Variar o tipo de publicação entre os cards; não fazer todos com a mesma estrutura de oferta.',
   ];

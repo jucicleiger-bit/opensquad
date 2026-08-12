@@ -29,6 +29,7 @@ import {
   listCommemorativeDates,
   listSegmentTemplates,
   listSystemAlerts,
+  loadOfferTypeLearning,
   loadProjectForTest,
   loadSegmentLearningNodes,
   loadSegmentTemplate,
@@ -36,6 +37,7 @@ import {
   registerSegmentTemplate,
   reconcileInterruptedGenerations,
   saveLearningEntry,
+  saveOfferTypeBaseInstruction,
   sendDueAlertEmails,
   listProjectReferences,
   listProjectContent,
@@ -5858,5 +5860,39 @@ test('enqueueSegmentTemplateAdaptation builds items for every piece and never in
     const channels = content.map((item) => item.channel).sort();
     assert.deepEqual(channels, ['instagram_feed', 'instagram_story']);
     assert.ok(content.every((item) => item.image.generatedSource === 'ai'));
+  });
+});
+
+test('offerObjective uses a saved baseInstruction override instead of the hardcoded default, and approved learning entries are appended to the content topic', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boss-pizza-3', name: 'Boss Pizza 3', handle: '@boss3', approvalEmail: 'a@example.com' }, dir);
+    await saveOfferTypeBaseInstruction(dir, 'combo', 'Combo: foco no produto, borda visível, CTA de delivery direto, nunca cortar a caixa.');
+    await saveLearningEntry('boss-pizza-3', {
+      scope: 'offerType',
+      groupKey: 'combo',
+      bucket: 'approved',
+      kind: 'text',
+      text: 'Anúncios de combo com preço em selo circular convertem mais.',
+    }, dir);
+
+    const loaded = await loadOfferTypeLearning(dir, 'combo');
+    assert.equal(loaded.baseInstruction, 'Combo: foco no produto, borda visível, CTA de delivery direto, nunca cortar a caixa.');
+    assert.equal(loaded.entries.length, 1);
+  });
+});
+
+test('offerObjective falls back to the original hardcoded default (unchanged wording) for an offer type with no saved override', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'boss-pizza-4', name: 'Boss Pizza 4', handle: '@boss4', approvalEmail: 'a@example.com' }, dir);
+    const loaded = await loadOfferTypeLearning(dir, 'combo');
+    // No override saved for this global file yet: baseInstruction is the
+    // name-less generic template (used to pre-fill a future edit UI), while
+    // the live prompt (see the "uses a saved override" test's sibling
+    // assertions elsewhere in this file, e.g. the "Criar oferta de combo
+    // para 2 Pizzas Grande" test) keeps using the original per-offer wording
+    // via legacyOfferObjective — this only asserts the loader's own default.
+    assert.equal(loaded.baseInstruction, 'Criar oferta de combo, com preço e CTA de delivery claros.');
+    assert.equal(loaded.entries.length, 0);
+    assert.equal(loaded.hasOverride, false);
   });
 });
