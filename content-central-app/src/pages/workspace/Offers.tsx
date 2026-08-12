@@ -130,6 +130,7 @@ export function Offers() {
   const [typeLearningLoaded, setTypeLearningLoaded] = useState(false);
   const [editingInstruction, setEditingInstruction] = useState<Record<string, string>>({});
   const [savingType, setSavingType] = useState<string | null>(null);
+  const [typeLearningError, setTypeLearningError] = useState<string | null>(null);
 
   const [generalInfo, setGeneralInfo] = useState(project.contentSettings?.catalogGeneralInfo || "");
   const [generalInfoBusy, setGeneralInfoBusy] = useState(false);
@@ -291,11 +292,14 @@ export function Offers() {
 
   async function handleSaveTypeInstruction(type: string) {
     setSavingType(type);
+    setTypeLearningError(null);
     try {
       await saveOfferTypeBaseInstruction(project.projectId, type, editingInstruction[type]);
       setTypeLearnings((current) =>
         current.map((t) => (t.type === type ? { ...t, baseInstruction: editingInstruction[type], hasOverride: true } : t)),
       );
+    } catch (err) {
+      setTypeLearningError((err as Error).message);
     } finally {
       setSavingType(null);
     }
@@ -506,6 +510,7 @@ export function Offers() {
           <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
             Vale pra todo projeto, não só este. Instrução base é o que a IA sempre lê pra esse tipo; a galeria abaixo acumula exemplos de estrutura/composição que você aprovar.
           </p>
+          {typeLearningError ? <div className="pill bad" style={{ marginBottom: 12 }}>{typeLearningError}</div> : null}
           <div style={{ display: "grid", gap: 16 }}>
             {typeLearnings.map((learning) => (
               <Card key={learning.type} style={{ padding: 16 }}>

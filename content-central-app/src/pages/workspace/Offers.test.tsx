@@ -478,8 +478,8 @@ describe("Offers", () => {
       {
         body: {
           types: [
-            { type: "combo", baseInstruction: "Combo: foco no produto, CTA de delivery claro.", entries: [] },
-            { type: "offer", baseInstruction: "Criar post de Oferta direta.", entries: [] },
+            { type: "combo", baseInstruction: "Combo: foco no produto, CTA de delivery claro.", entries: [], hasOverride: false },
+            { type: "offer", baseInstruction: "Criar post de Oferta direta.", entries: [], hasOverride: true },
           ],
         },
       },
@@ -490,6 +490,9 @@ describe("Offers", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Aprendizado por tipo" }));
     expect(await screen.findByDisplayValue("Combo: foco no produto, CTA de delivery claro.")).toBeInTheDocument();
 
+    expect(screen.getAllByText("usando padrão").length).toBe(1);
+    expect(screen.getAllByText("personalizado").length).toBe(1);
+
     const instructionField = screen.getByDisplayValue("Combo: foco no produto, CTA de delivery claro.");
     await userEvent.clear(instructionField);
     await userEvent.type(instructionField, "Combo: sempre mostrar a caixa fechada e aberta lado a lado.");
@@ -498,5 +501,9 @@ describe("Offers", () => {
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
     expect(call[0]).toBe("/api/projects/boss-pizzaria/offer-type-learnings");
     expect(JSON.parse(call[1].body as string).type).toBe("combo");
+
+    // The type saved above (combo) flips from "usando padrão" to "personalizado".
+    expect(await screen.findAllByText("personalizado")).toHaveLength(2);
+    expect(screen.queryByText("usando padrão")).not.toBeInTheDocument();
   });
 });
