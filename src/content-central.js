@@ -3465,12 +3465,11 @@ function normalizeSegmentLearningEntry(input = {}) {
     text: cleanText(input.text),
     imagePath: kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
     source: input.source === 'auto' ? 'auto' : 'manual',
-    // segment-learnings.json/offer-type-learnings.json are GLOBAL (shared
-    // across every project), but analyzeLearningImage saves the uploaded
-    // file under the uploading project's OWN directory — so an image
-    // entry's thumbnail can only be resolved through the project it was
-    // actually uploaded from, not whichever project happens to be open
-    // when it's displayed. Only meaningful for kind: 'image'.
+    // Retained on the entry shape only so a legacy entry written before
+    // this project moved image-learning storage to a global (non-per-
+    // project) location would keep its value across re-normalization.
+    // saveLearningEntry (the only writer for current entries) never sets
+    // this field, so every entry saved today has sourceProjectId === ''.
     sourceProjectId: kind === 'image' ? String(input.sourceProjectId || '') : '',
     createdAt: input.createdAt || new Date().toISOString(),
   };
