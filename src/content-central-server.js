@@ -669,19 +669,19 @@ async function handleRequest(req, res, targetDir, context = {}) {
       return sendJson(res, 501, { error: 'Análise de imagem por IA não está disponível neste servidor.' });
     }
     const body = await readBody(req);
-    const result = await analyzeLearningImage(projectId, { ...body, scope: 'segment' }, targetDir, new Date(), { learningImageAnalyzer: context.learningImageAnalyzer });
+    const result = await analyzeLearningImage(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir, new Date(), { learningImageAnalyzer: context.learningImageAnalyzer });
     return sendJson(res, 200, result);
   }
 
   if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'entries') {
     const body = await readBody(req);
-    const entries = await saveLearningEntry(projectId, { ...body, scope: 'segment' }, targetDir);
+    const entries = await saveLearningEntry(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
     return sendJson(res, 200, { entries });
   }
 
   if (parts.length === 5 && parts[3] === 'segment-learnings' && parts[4] === 'entries-delete') {
     const body = await readBody(req);
-    const entries = await deleteLearningEntry(projectId, { ...body, scope: 'segment' }, targetDir);
+    const entries = await deleteLearningEntry(projectId, { ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
     return sendJson(res, 200, { entries });
   }
 

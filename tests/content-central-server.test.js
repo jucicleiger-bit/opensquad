@@ -3474,3 +3474,45 @@ test('POST .../token still returns 200 with a githubSyncWarning when the GitHub 
     }
   });
 });
+
+// Regression for a bug found during Task 6 review: the segment-learnings
+// routes (analyze-image/entries/entries-delete) always hardcoded
+// `scope: 'segment'` when calling into content-central.js, silently
+// discarding any `scope: 'offerType'` the client actually sent. This test
+// goes through the real HTTP route (not the underlying saveLearningEntry
+// function directly, which Task 5's tests already cover) to prove the route
+// itself now respects an explicit scope: 'offerType' by writing to
+// offer-type-learnings.json, not segment-learnings.json.
+test('POST .../segment-learnings/entries route respects scope: "offerType" from the client and writes to offer-type-learnings.json, not segment-learnings.json', async () => {
+  await withServer(async (dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'scope-route-test', name: 'Scope Route Test', handle: '@scoperoute', approvalEmail: 'a@example.com' }),
+    });
+
+    const res = await request(server, '/api/projects/scope-route-test/segment-learnings/entries', {
+      method: 'POST',
+      body: JSON.stringify({
+        scope: 'offerType',
+        groupKey: 'combo',
+        bucket: 'approved',
+        kind: 'text',
+        text: 'Route-level scope regression: must land in offer-type-learnings.json.',
+      }),
+    });
+
+    assert.equal(res.response.status, 200);
+    assert.equal(res.body.entries.length, 1);
+
+    const offerTypeStorePath = join(dir, '_opensquad', 'content-central', 'offer-type-learnings.json');
+    const offerTypeStore = JSON.parse(await readFile(offerTypeStorePath, 'utf8'));
+    assert.equal(offerTypeStore.types.combo.entries.length, 1);
+    assert.equal(offerTypeStore.types.combo.entries[0].text, 'Route-level scope regression: must land in offer-type-learnings.json.');
+
+    const segmentStorePath = join(dir, '_opensquad', 'content-central', 'segment-learnings.json');
+    if (existsSync(segmentStorePath)) {
+      const segmentStore = JSON.parse(await readFile(segmentStorePath, 'utf8'));
+      assert.ok(!JSON.stringify(segmentStore).includes('Route-level scope regression'), 'the entry must not have been written to segment-learnings.json');
+    }
+  });
+});
