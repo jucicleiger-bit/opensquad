@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -5901,6 +5901,57 @@ test('withProjectLock now guards against a second OS process too, via a real loc
     await utimes(lockPath, staleMtime, staleMtime);
     const { offer: offerAfterStaleLock } = await saveProjectOffer('lock-teste', { name: 'Pizza Média' }, dir);
     assert.equal(offerAfterStaleLock.name, 'Pizza Média');
+  });
+});
+
+test('saveLearningEntry/deleteLearningEntry/saveOfferTypeBaseInstruction share one global lock, not a per-project one, since they read-modify-write GLOBAL learning stores shared across every project', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'projeto-a', name: 'Projeto A', handle: '@a', approvalEmail: 'a@example.com' }, dir);
+    await createCentralProject({ projectId: 'projeto-b', name: 'Projeto B', handle: '@b', approvalEmail: 'b@example.com' }, dir);
+
+    // Two different projects writing to the shared learning store must take
+    // the SAME lock — a per-projectId lock (the old bug) would let them
+    // proceed concurrently and lose one of the two writes. Plant a fresh
+    // lock file under the shared global-lock directory (whatever fixed key
+    // withProjectLock is now called with for these three functions) and
+    // confirm a write from an UNRELATED project ('projeto-b') still blocks
+    // on it — proving it's the same lock, not projeto-b's own.
+    const globalLockPaths = getCentralPaths(dir, '__global-learning__');
+    const lockPath = join(globalLockPaths.projectDir, '.lock');
+    await mkdir(globalLockPaths.projectDir, { recursive: true });
+    await writeFile(lockPath, 'held-by-projeto-a\n' + new Date().toISOString());
+
+    let resolved = false;
+    const pending = saveLearningEntry('projeto-b', {
+      scope: 'offerType',
+      groupKey: 'combo',
+      bucket: 'approved',
+      kind: 'text',
+      text: 'sempre mostrar o combo completo',
+    }, dir).then((result) => {
+      resolved = true;
+      return result;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(resolved, false, 'a write from a different project must still block on the shared global learning lock');
+
+    await rm(lockPath, { force: true });
+    await pending;
+    assert.equal(resolved, true);
+
+    // saveOfferTypeBaseInstruction previously took no lock at all — confirm
+    // it now also honors the same shared lock instead of writing straight
+    // through a held one.
+    await writeFile(lockPath, 'held-again\n' + new Date().toISOString());
+    let baseInstructionResolved = false;
+    const pendingBaseInstruction = saveOfferTypeBaseInstruction(dir, 'combo', 'Novo texto base do combo').then(() => {
+      baseInstructionResolved = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(baseInstructionResolved, false, 'saveOfferTypeBaseInstruction must also honor the shared global learning lock');
+    await rm(lockPath, { force: true });
+    await pendingBaseInstruction;
+    assert.equal(baseInstructionResolved, true);
   });
 });
 

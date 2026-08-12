@@ -3434,6 +3434,17 @@ async function loadGlobalRules(paths) {
 const MAX_LEARNING_ENTRIES = 20;
 const MAX_SEGMENT_LEARNING_ENTRIES = 40;
 
+// segment-learnings.json/offer-type-learnings.json are GLOBAL stores shared
+// across every project — a lock keyed on whichever projectId happens to be
+// making the request lets two different projects' concurrent writes take
+// two different locks and race each other. Every read-modify-write of these
+// files goes through this one fixed lock key instead of a per-request
+// projectId (see saveLearningEntry/deleteLearningEntry/
+// saveOfferTypeBaseInstruction). withProjectLock only uses this as a
+// directory name under projects/ to host a lock file — it's never treated
+// as a real project.
+const GLOBAL_LEARNING_LOCK_ID = '__global-learning__';
+
 function normalizeLearnings(input) {
   const approved = Array.isArray(input?.approved) ? input.approved : [];
   const avoid = Array.isArray(input?.avoid) ? input.avoid : [];
@@ -3725,7 +3736,7 @@ async function defaultLearningImageAnalyzer() {
 // there (mirrors OFFER_TYPES-style handling elsewhere in this file).
 export async function saveLearningEntry(projectId, input, targetDir = process.cwd(), now = new Date()) {
   const paths = getCentralPaths(targetDir, projectId);
-  return withProjectLock(targetDir, projectId, async () => {
+  return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
     const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
     const store = scope === 'segment' ? await readSegmentLearningStore(paths) : await readLearningStore(paths, scope);
     const nodesKey = learningStoreNodesKey(scope);
@@ -3749,7 +3760,7 @@ export async function saveLearningEntry(projectId, input, targetDir = process.cw
 
 export async function deleteLearningEntry(projectId, input, targetDir = process.cwd()) {
   const paths = getCentralPaths(targetDir, projectId);
-  return withProjectLock(targetDir, projectId, async () => {
+  return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
     const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
     const store = scope === 'segment' ? await readSegmentLearningStore(paths) : await readLearningStore(paths, scope);
     const nodesKey = learningStoreNodesKey(scope);
@@ -4405,11 +4416,13 @@ export async function loadOfferTypeLearning(targetDir = process.cwd(), type) {
 
 export async function saveOfferTypeBaseInstruction(targetDir = process.cwd(), type, baseInstruction) {
   const paths = getCentralPaths(targetDir);
-  const store = await readLearningStore(paths, 'offerType');
-  const node = store.types[type] || { entries: [] };
-  node.baseInstruction = cleanText(baseInstruction);
-  store.types = { ...store.types, [type]: node };
-  await writeLearningStore(paths, 'offerType', store);
+  return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
+    const store = await readLearningStore(paths, 'offerType');
+    const node = store.types[type] || { entries: [] };
+    node.baseInstruction = cleanText(baseInstruction);
+    store.types = { ...store.types, [type]: node };
+    await writeLearningStore(paths, 'offerType', store);
+  });
 }
 
 function formatContentTopicLines(topic) {
