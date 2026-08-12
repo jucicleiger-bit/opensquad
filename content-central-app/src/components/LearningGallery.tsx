@@ -84,8 +84,17 @@ export function LearningGallery({
   return (
     <div>
       {entries.map((entry) => (
-        <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
-          <span>{entry.text}</span>
+        <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {entry.kind === "image" && entry.imagePath ? (
+              <img
+                src={`/api/projects/${encodeURIComponent(projectId)}/assets/${entry.imagePath}`}
+                alt={entry.text || "Referência de aprendizado"}
+                style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flex: "0 0 auto" }}
+              />
+            ) : null}
+            <span>{entry.text}</span>
+          </div>
           <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
         </div>
       ))}

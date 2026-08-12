@@ -66,4 +66,42 @@ describe("SegmentLearning", () => {
     expect(call[0]).toBe("/api/projects/boss-pizzaria/segment-learnings/entries");
     expect(JSON.parse(call[1].body as string).groupKey).toBe("alimenticio/pizzaria");
   });
+
+  it("uploads a reference image, analyzes it with AI, and renders a thumbnail after confirming", async () => {
+    stubFetchSequence([
+      { body: projectState([{ path: "alimenticio/pizzaria", label: "Alimentício / Pizzaria", level: "nicho", entries: [] }]) },
+      { body: { imagePath: "assets/learning/pizza-redonda.png", suggestedText: "Esfihas dispostas em círculo na bandeja" } },
+      {
+        body: {
+          entries: [
+            {
+              id: "e3",
+              bucket: "approved",
+              kind: "image",
+              text: "Esfihas dispostas em círculo na bandeja",
+              imagePath: "assets/learning/pizza-redonda.png",
+              source: "auto",
+              createdAt: "2026-08-01",
+            },
+          ],
+        },
+      },
+    ]);
+    renderPage();
+
+    await screen.findByText("Alimentício / Pizzaria");
+    const photoFile = new File(["fake-image-bytes"], "pizza.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText("Adicionar imagem de referência"), photoFile);
+
+    expect(await screen.findByText("A IA descreveu: revise antes de confirmar.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Confirmar" }));
+
+    const image = await screen.findByAltText("Esfihas dispostas em círculo na bandeja");
+    expect(image).toHaveAttribute("src", "/api/projects/boss-pizzaria/assets/assets/learning/pizza-redonda.png");
+
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/segment-learnings/analyze-image");
+    expect(calls[2][0]).toBe("/api/projects/boss-pizzaria/segment-learnings/entries");
+    expect(JSON.parse(calls[2][1].body as string).imagePath).toBe("assets/learning/pizza-redonda.png");
+  });
 });
