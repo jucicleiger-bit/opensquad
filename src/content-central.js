@@ -3741,6 +3741,9 @@ export async function analyzeLearningImage(input, targetDir = process.cwd(), now
   const filename = sanitizeFilename(input?.filename || 'referencia.bin');
   const buffer = decodeDataUrl(input?.dataUrl);
   const relativePath = `${scope === 'segment' ? 'segment' : 'offer-type'}/${groupSlug}/${filename}`;
+  // ponytail: global storage path, no migration for pre-existing per-project-
+  // relative imagePath values — none existed in the real store at the time
+  // this branch moved image learning off per-project directories.
   const destination = join(paths.root, 'assets', 'learning', relativePath);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, buffer);

@@ -86,7 +86,7 @@ export function LearningGallery({
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             {entry.kind === "image" && entry.imagePath ? (
               <img
-                src={`/api/learning-assets/${entry.imagePath}`}
+                src={`/api/learning-assets/${entry.imagePath.split("/").map(encodeURIComponent).join("/")}`}
                 alt={entry.text || "Referência de aprendizado"}
                 style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flex: "0 0 auto" }}
               />
