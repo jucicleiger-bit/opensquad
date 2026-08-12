@@ -32,6 +32,7 @@ import {
   loadOfferTypeLearning,
   loadProjectForTest,
   loadSegmentLearningNodes,
+  loadSegmentLearningNodesForSelection,
   loadSegmentTemplate,
   migrateSegmentLearningStoreV1ToV2,
   registerSegmentTemplate,
@@ -461,6 +462,36 @@ test('migrateSegmentLearningStoreV1ToV2 splits the flat label into a Setor/Nicho
   const deepest = v2.nodes['engenharia/controle-tecnologico/solos-e-pavimentacao'].entries;
   assert.ok(deepest.some((e) => e.bucket === 'technical' && e.text === 'CBR, limite de liquidez'));
   assert.ok(deepest.some((e) => e.bucket === 'avoid' && e.text === 'não misturar concreto com obra predial genérica'));
+});
+
+test('loadSegmentLearningNodesForSelection returns the same nodes as loadSegmentLearningNodes for an equivalent project', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sel-test', name: 'Sel Test', handle: '@sel', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('sel-test', {
+      brandName: 'Sel Test',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segmentSpecialty: 'napolitana',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+    const badBatch = await generateContentBatch('sel-test', { days: 1, startDate: '2026-07-20' }, dir);
+    await deleteProjectContent('sel-test', badBatch.items[0].contentId, dir, badBatch.batchId, 'esfiha vindo retangular, tem que ser redonda');
+
+    const paths = getCentralPaths(dir, 'sel-test');
+    const project = await loadProjectForTest('sel-test', dir);
+    const fromProject = await loadSegmentLearningNodes(paths, project);
+    const fromSelection = await loadSegmentLearningNodesForSelection(paths, {
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segmentSpecialty: 'napolitana',
+    });
+
+    assert.deepEqual(fromSelection.map((n) => n.path), fromProject.map((n) => n.path));
+    assert.deepEqual(fromSelection.map((n) => n.label), fromProject.map((n) => n.label));
+    const napolitanaNode = fromSelection.find((n) => n.level === 'especialidade');
+    assert.ok(napolitanaNode.entries.some((e) => e.text.includes('esfiha vindo retangular')));
+  });
 });
 
 test('real operator-authored v1 segment-learnings data (pre-v2, flat-keyed) stays reachable in prompts and survives a write after the v1->v2 upgrade-on-read, instead of being silently orphaned then deleted', async () => {

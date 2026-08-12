@@ -3476,34 +3476,10 @@ function normalizeSegmentLearningEntry(input = {}) {
   };
 }
 
-function segmentNodePaths(project) {
-  const profile = normalizeCompanyProfile(project.companyProfile);
-  const brandInput = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(profile, project.name));
-  // slugify('') falls back to the literal string 'data' (its "nothing to
-  // slug" default for filenames) — checking the raw trimmed value first
-  // keeps an unset field genuinely empty here instead of every no-Setor
-  // project silently colliding into one shared "data" node.
-  const rawGroup = cleanText(profile.segmentGroup || brandInput.segmentGroup || '');
-  const rawCategory = cleanText(profile.segmentCategory || brandInput.segmentCategory || '');
-  const rawSpecialty = cleanText(profile.segmentSpecialty || brandInput.segmentSpecialty || '');
-  // Build cumulative paths from whichever levels are actually present, in
-  // group -> category -> specialty order, without requiring group itself to
-  // be set. A strict "no group means no path at all" gate would silently
-  // stop sharing/isolating by category+specialty for any project that never
-  // filled in Setor — which is exactly the fixture the pre-existing
-  // 'segment learnings are reused only for the same selected segment
-  // category/specialty' test uses (no segmentGroup, matching
-  // segmentCategory/segmentSpecialty) and is required to keep passing
-  // unmodified.
-  //
-  // Each kept segment is tagged with the field it came from (group:/
-  // category:/specialty:) instead of a bare slug — two projects only share
-  // a node when they have the IDENTICAL set of populated fields with
-  // identical values, never merely an identical trailing slug. Without the
-  // tag, group='Engenharia'+category='Solos'+specialty='' and
-  // group='Engenharia'+category=''+specialty='Solos' both collapse to the
-  // same 'engenharia/solos' path and silently merge two unrelated
-  // businesses (one categorized under "Solos", the other specialized in it).
+function segmentNodePathsFromFields(rawGroupInput, rawCategoryInput, rawSpecialtyInput) {
+  const rawGroup = cleanText(rawGroupInput || '');
+  const rawCategory = cleanText(rawCategoryInput || '');
+  const rawSpecialty = cleanText(rawSpecialtyInput || '');
   const parts = [
     rawGroup ? `group:${slugify(rawGroup)}` : '',
     rawCategory ? `category:${slugify(rawCategory)}` : '',
@@ -3512,15 +3488,33 @@ function segmentNodePaths(project) {
   return parts.map((_, index) => parts.slice(0, index + 1).join('/'));
 }
 
-function segmentNodeLabel(project, level) {
-  const profile = normalizeCompanyProfile(project.companyProfile);
-  const brandInput = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(profile, project.name));
-  const group = cleanText(profile.segmentGroup || brandInput.segmentGroup || '');
-  const category = cleanText(profile.segmentCategory || brandInput.segmentCategory || '');
-  const specialty = cleanText(profile.segmentSpecialty || brandInput.segmentSpecialty || '');
+function segmentNodeLabelFromFields(rawGroupInput, rawCategoryInput, rawSpecialtyInput, level) {
+  const group = cleanText(rawGroupInput || '');
+  const category = cleanText(rawCategoryInput || '');
+  const specialty = cleanText(rawSpecialtyInput || '');
   if (level === 'setor') return group;
   if (level === 'nicho') return [group, category].filter(Boolean).join(' / ');
   return [group, category, specialty].filter(Boolean).join(' / ');
+}
+
+function segmentFieldsFromProject(project) {
+  const profile = normalizeCompanyProfile(project.companyProfile);
+  const brandInput = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(profile, project.name));
+  return {
+    segmentGroup: profile.segmentGroup || brandInput.segmentGroup || '',
+    segmentCategory: profile.segmentCategory || brandInput.segmentCategory || '',
+    segmentSpecialty: profile.segmentSpecialty || brandInput.segmentSpecialty || '',
+  };
+}
+
+function segmentNodePaths(project) {
+  const fields = segmentFieldsFromProject(project);
+  return segmentNodePathsFromFields(fields.segmentGroup, fields.segmentCategory, fields.segmentSpecialty);
+}
+
+function segmentNodeLabel(project, level) {
+  const fields = segmentFieldsFromProject(project);
+  return segmentNodeLabelFromFields(fields.segmentGroup, fields.segmentCategory, fields.segmentSpecialty, level);
 }
 
 // Legacy flat shape (buildManual/buildImagePrompt callers keep working
@@ -3678,6 +3672,16 @@ export async function loadSegmentLearningNodes(paths, project) {
   return segmentNodePaths(project).map((path, index) => ({
     path,
     label: segmentNodeLabel(project, SEGMENT_LEVELS[index]),
+    level: SEGMENT_LEVELS[index],
+    entries: (store.nodes[path]?.entries || []).map(normalizeSegmentLearningEntry),
+  }));
+}
+
+export async function loadSegmentLearningNodesForSelection(paths, { segmentGroup, segmentCategory, segmentSpecialty } = {}) {
+  const store = await readSegmentLearningStore(paths);
+  return segmentNodePathsFromFields(segmentGroup, segmentCategory, segmentSpecialty).map((path, index) => ({
+    path,
+    label: segmentNodeLabelFromFields(segmentGroup, segmentCategory, segmentSpecialty, SEGMENT_LEVELS[index]),
     level: SEGMENT_LEVELS[index],
     entries: (store.nodes[path]?.entries || []).map(normalizeSegmentLearningEntry),
   }));
