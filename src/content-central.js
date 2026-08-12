@@ -6354,7 +6354,10 @@ function buildImageReferencePayload(project, paths) {
   const logoReference = getProjectLogoReference(project, paths);
   const references = uniqueReferences([
     logoReference,
-    ...sortReferencesForPrompt(normalizeProjectReferences(project)),
+    ...sortReferencesForPrompt([
+      ...normalizeProjectReferences(project),
+      ...normalizeProjectOfferAssets(project),
+    ]),
   ].filter(Boolean));
   return references
     .filter((reference) => reference.useInNextGeneration !== false)

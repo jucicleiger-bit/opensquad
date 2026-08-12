@@ -2333,7 +2333,10 @@ function fitTextFont(fontsBiggestFirst, text, maxWidth) {
 async function resolveReferencePhotoAbsolutePaths(project, paths, photoReferenceIds) {
   const ids = Array.isArray(photoReferenceIds) ? photoReferenceIds : [];
   if (!ids.length) return [];
-  const references = Array.isArray(project.brand?.references) ? project.brand.references : [];
+  const references = [
+    ...(Array.isArray(project.brand?.references) ? project.brand.references : []),
+    ...(Array.isArray(project.offerAssets) ? project.offerAssets : []),
+  ];
   const byId = new Map(references.map((reference) => [reference.id, reference]));
   return ids
     .map((id) => byId.get(id))

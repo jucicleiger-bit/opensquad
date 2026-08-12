@@ -2497,6 +2497,60 @@ test('a marketing offer with its own linked photo shows that exact real product,
   });
 });
 
+test('an offer-scoped photo (scope: "offer", stored on project.offerAssets) still reaches the real generation prompt and catalog composition, not just the shared references gallery', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'oferta-foto-gera-imagem',
+      name: 'Oferta Foto Gera Imagem',
+      handle: '@ofgi',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('produto-real').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('oferta-foto-gera-imagem', {
+      kind: 'reference',
+      filename: 'produto-real.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real do produto, autorizada pela marca.',
+      scope: 'offer',
+    }, dir);
+
+    // Confirms the write side still keeps it out of the shared gallery.
+    assert.equal(offerPhoto.project.brand?.references?.length ?? 0, 0);
+    assert.equal(offerPhoto.project.offerAssets?.length, 1);
+
+    await saveProjectOffer('oferta-foto-gera-imagem', {
+      name: 'Produto Real 1un',
+      type: 'offer',
+      price: 'R$ 199',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      active: true,
+    }, dir, new Date('2026-08-01T12:00:00.000Z'));
+
+    const generatorCalls = [];
+    await simulateTestPost('oferta-foto-gera-imagem', {
+      channel: 'instagram_feed',
+      testSeed: 'oferta-foto-gera-imagem',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/produto-real.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-08-01T12:05:00.000Z'));
+
+    const content = generatorCalls[0].content;
+    // The offer-scoped photo must actually reach the AI: both in the prompt
+    // text and in the reference payload sent to the image generator — not
+    // silently dropped because it lives on project.offerAssets instead of
+    // project.brand.references.
+    assert.match(content.image.prompt, /Foto selecionada: assets\/references\/produto-real\.jpg/);
+    assert.ok(content.image.references.some((reference) => reference.relativePath === 'assets/references/produto-real.jpg'));
+  });
+});
+
 test('a marketing offer with NO photo of its own never borrows a photo already claimed by a different offer', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
