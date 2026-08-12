@@ -3477,9 +3477,31 @@ function normalizeSegmentLearningEntry(input = {}) {
 }
 
 function segmentNodePathsFromFields(rawGroupInput, rawCategoryInput, rawSpecialtyInput) {
+  // slugify('') falls back to the literal string 'data' (its "nothing to
+  // slug" default for filenames) — checking the raw trimmed value first
+  // keeps an unset field genuinely empty here instead of every no-Setor
+  // project silently colliding into one shared "data" node.
   const rawGroup = cleanText(rawGroupInput || '');
   const rawCategory = cleanText(rawCategoryInput || '');
   const rawSpecialty = cleanText(rawSpecialtyInput || '');
+  // Build cumulative paths from whichever levels are actually present, in
+  // group -> category -> specialty order, without requiring group itself to
+  // be set. A strict "no group means no path at all" gate would silently
+  // stop sharing/isolating by category+specialty for any project that never
+  // filled in Setor — which is exactly the fixture the pre-existing
+  // 'segment learnings are reused only for the same selected segment
+  // category/specialty' test uses (no segmentGroup, matching
+  // segmentCategory/segmentSpecialty) and is required to keep passing
+  // unmodified.
+  //
+  // Each kept segment is tagged with the field it came from (group:/
+  // category:/specialty:) instead of a bare slug — two projects only share
+  // a node when they have the IDENTICAL set of populated fields with
+  // identical values, never merely an identical trailing slug. Without the
+  // tag, group='Engenharia'+category='Solos'+specialty='' and
+  // group='Engenharia'+category=''+specialty='Solos' both collapse to the
+  // same 'engenharia/solos' path and silently merge two unrelated
+  // businesses (one categorized under "Solos", the other specialized in it).
   const parts = [
     rawGroup ? `group:${slugify(rawGroup)}` : '',
     rawCategory ? `category:${slugify(rawCategory)}` : '',
