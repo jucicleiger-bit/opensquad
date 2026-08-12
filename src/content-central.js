@@ -4361,7 +4361,7 @@ function defaultOfferObjectiveTemplate(type) {
 // offer type. getCentralPaths(targetDir) with no projectId only joins path
 // segments (no existence check), so it's safe to call without a project
 // having been created yet.
-export async function loadOfferTypeLearning(targetDir, type) {
+export async function loadOfferTypeLearning(targetDir = process.cwd(), type) {
   const paths = getCentralPaths(targetDir);
   const store = await readLearningStore(paths, 'offerType');
   const node = store.types?.[type];
@@ -4373,7 +4373,7 @@ export async function loadOfferTypeLearning(targetDir, type) {
   };
 }
 
-export async function saveOfferTypeBaseInstruction(targetDir, type, baseInstruction) {
+export async function saveOfferTypeBaseInstruction(targetDir = process.cwd(), type, baseInstruction) {
   const paths = getCentralPaths(targetDir);
   const store = await readLearningStore(paths, 'offerType');
   const node = store.types[type] || { entries: [] };
