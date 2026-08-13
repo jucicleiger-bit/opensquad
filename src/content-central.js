@@ -1198,7 +1198,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
       image: {
         localPath: imageLocalPath,
         prompt: buildImagePrompt(project, globalRules.rules, contentRules, dayNumber, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-        references: buildImageReferencePayload(project, paths),
+        references: await buildImageReferencePayload(project, paths),
         aspectRatio,
         dimensions,
         generated: true,
@@ -1459,7 +1459,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
       image: {
         localPath: imageLocalPath,
         prompt: buildImagePrompt(project, globalRules.rules, [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-        references: buildImageReferencePayload(project, paths),
+        references: await buildImageReferencePayload(project, paths),
         aspectRatio,
         dimensions,
         generated: true,
@@ -1618,7 +1618,7 @@ export async function listSegmentTemplates(targetDir = process.cwd()) {
 // targeted edit keyed off `templateEditBasePath` set by the caller — this
 // only writes the skeleton/placeholder the same way every other content
 // item starts out.
-export function buildSegmentTemplateContentItem(piece, project, paths) {
+export async function buildSegmentTemplateContentItem(piece, project, paths) {
   const channel = piece.channel || DEFAULT_CHANNEL;
   const dimensions = imageDimensionsForChannel(channel);
   const aspectRatio = imageAspectRatioForChannel(channel);
@@ -1657,7 +1657,7 @@ export function buildSegmentTemplateContentItem(piece, project, paths) {
     image: {
       localPath: imageLocalPath,
       prompt: `Adaptação de template de segmento (${piece.label}) a partir de uma peça já aprovada — ver templateEditBasePath.`,
-      references: buildImageReferencePayload(project, paths),
+      references: await buildImageReferencePayload(project, paths),
       aspectRatio,
       dimensions,
       generated: true,
@@ -1740,12 +1740,11 @@ export function enqueueSegmentTemplateAdaptation(projectId, segmentId, options =
         'Troque a logo/nome da marca pela logo anexada (segunda referência).',
         'Mantenha produto, ícones, layout, tipografia e composição exatamente iguais ao original — só a cor e a logo mudam.',
       ].join(' ');
-      const items = template.pieces.map((piece) => {
-        const item = buildSegmentTemplateContentItem(piece, project, paths);
+      return Promise.all(template.pieces.map(async (piece) => {
+        const item = await buildSegmentTemplateContentItem(piece, project, paths);
         item.templateEditBasePath = piece.imageAbsolutePath;
         return item;
-      });
-      return enrichSegmentTemplateItemsForProspect(items, project, projectId, { imageGenerator: options.imageGenerator, note });
+      })).then((items) => enrichSegmentTemplateItemsForProspect(items, project, projectId, { imageGenerator: options.imageGenerator, note }));
     })
     .catch((err) => {
       console.error(`[content-central] segment template adaptation failed for ${projectId}/${segmentId}:`, err.message);
@@ -1895,7 +1894,7 @@ export async function generateAdCreative(projectId, options = {}, targetDir = pr
     image: {
       localPath: imageLocalPath,
       prompt: buildImagePrompt(project, [], [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-      references: buildImageReferencePayload(project, paths),
+      references: await buildImageReferencePayload(project, paths),
       aspectRatio,
       dimensions,
       generated: true,
@@ -1965,7 +1964,7 @@ export async function regenerateAdCreative(projectId, adCreativeId, targetDir = 
     if (!safeId) throw new Error('ID do criativo inválido.');
     const filePath = join(paths.adCreativesDir, `${safeId}.json`);
     const adCreative = await readJson(filePath);
-    adCreative.image.references = buildImageReferencePayload(project, paths);
+    adCreative.image.references = await buildImageReferencePayload(project, paths);
     return adCreative;
   });
 }
@@ -2283,7 +2282,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           image: {
             localPath: imageLocalPath,
             prompt: buildImagePrompt(project, globalRules.rules, [...contentRules, ruleLabel], dayNumber, { channel: format.channel, formatLabel: format.label, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-            references: buildImageReferencePayload(project, paths),
+            references: await buildImageReferencePayload(project, paths),
             aspectRatio,
             dimensions,
             generated: true,
@@ -2645,7 +2644,7 @@ async function applyContentRegeneration(content, project, projectId, options, pa
       );
       if (currentOffer) content.contentTopic = await offerToContentTopic(currentOffer, targetDir);
     }
-    if (paths) content.image.references = buildImageReferencePayload(project, paths);
+    if (paths) content.image.references = await buildImageReferencePayload(project, paths);
     if (project.projectType === 'catalog') {
       // Catalog cards never go through AI art, including on regenerate —
       // "regenerating" just recomposes the same real photo again (useful
@@ -6513,7 +6512,7 @@ export async function buildSegmentLayoutReferences(project, paths) {
   return references;
 }
 
-function buildImageReferencePayload(project, paths) {
+async function buildImageReferencePayload(project, paths) {
   const logoReference = getProjectLogoReference(project, paths);
   const references = uniqueReferences([
     logoReference,
@@ -6522,13 +6521,15 @@ function buildImageReferencePayload(project, paths) {
       ...normalizeProjectOfferAssets(project),
     ]),
   ].filter(Boolean));
-  return references
+  const projectReferences = references
     .filter((reference) => reference.useInNextGeneration !== false)
     .filter((reference) => String(reference.mimeType || '').startsWith('image/'))
     .map((reference) => ({
-    ...reference,
-    absolutePath: join(paths.projectDir, reference.relativePath),
-  }));
+      ...reference,
+      absolutePath: join(paths.projectDir, reference.relativePath),
+    }));
+  const layoutReferences = await buildSegmentLayoutReferences(project, paths);
+  return [...projectReferences, ...layoutReferences];
 }
 
 function getProjectLogoReference(project, paths) {

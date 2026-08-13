@@ -1693,6 +1693,39 @@ test('image prompt requires uploaded logo to appear and uses product visual and 
   });
 });
 
+test('generated image prompts only include layout references from the SAME segment — a pizzaria never sees Casa de Embalagem\'s approved image and vice versa', async () => {
+  await withTempProject(async (dir) => {
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    await createCentralProject({ projectId: 'pizzaria-cruz', name: 'Pizzaria Cruz', handle: '@pizzariacruz', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('pizzaria-cruz', {
+      brandName: 'Pizzaria Cruz', segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    const pizzaAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'pizza-layout.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Layout de pizza' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'Layout de pizza', imagePath: pizzaAnalyzed.imagePath }, dir, new Date());
+    await saveProjectOffer('pizzaria-cruz', { name: 'Pizza Grande', type: 'offer', price: 'R$ 45' }, dir);
+
+    await createCentralProject({ projectId: 'casa-embalagem', name: 'Casa de Embalagem', handle: '@casaembalagem', approvalEmail: 'b@example.com' }, dir);
+    await updateProjectBrandInput('casa-embalagem', {
+      brandName: 'Casa de Embalagem', segmentGroup: 'Negócios locais e lojas', segmentCategory: 'Casa de embalagem', segment: 'casa de embalagem', productsOrServices: 'embalagens',
+    }, dir);
+    const embalagemAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', dataUrl, filename: 'embalagem-layout.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Layout de embalagem' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', bucket: 'approved', kind: 'image', text: 'Layout de embalagem', imagePath: embalagemAnalyzed.imagePath }, dir, new Date());
+    await saveProjectOffer('casa-embalagem', { name: 'Papel Alumínio 100m', type: 'offer', price: 'R$ 62,40' }, dir);
+
+    const pizzaBatch = await generateContentBatch('pizzaria-cruz', { days: 1, startDate: '2026-07-20', channel: 'instagram_story' }, dir);
+    const embalagemBatch = await generateContentBatch('casa-embalagem', { days: 1, startDate: '2026-07-20', channel: 'instagram_story' }, dir);
+
+    const pizzaRefs = pizzaBatch.items[0].image.references.filter((r) => r.role === 'layout_model');
+    const embalagemRefs = embalagemBatch.items[0].image.references.filter((r) => r.role === 'layout_model');
+
+    assert.equal(pizzaRefs.length, 1);
+    assert.match(pizzaRefs[0].relativePath, /pizza-layout\.png$/);
+    assert.equal(embalagemRefs.length, 1);
+    assert.match(embalagemRefs[0].relativePath, /embalagem-layout\.png$/);
+  });
+});
+
 test('project logo upload is stored without automatic overlay in local previews', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -6238,11 +6271,11 @@ test('enrichSegmentTemplateItemsForProspect adapts a registered template with a 
 
     const template = await loadSegmentTemplate('embalagens', dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'prospect-embalagens');
-    const items = template.pieces.map((piece) => {
-      const item = buildSegmentTemplateContentItem(piece, project, paths);
+    const items = await Promise.all(template.pieces.map(async (piece) => {
+      const item = await buildSegmentTemplateContentItem(piece, project, paths);
       item.templateEditBasePath = piece.imageAbsolutePath;
       return item;
-    });
+    }));
 
     const calls = [];
     await enrichSegmentTemplateItemsForProspect(items, project, 'prospect-embalagens', {
