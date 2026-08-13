@@ -6470,6 +6470,49 @@ function automaticReferenceRule(category) {
   }[category] || 'Utilizar apenas como inspiração visual. Não copiar informações factuais da referência.';
 }
 
+const MAX_SEGMENT_LAYOUT_REFERENCES = 3;
+
+const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.';
+
+// Approved reference images from the project's own Aprendizado de Segmento
+// nodes (Setor/Nicho/Especialidade) — reused as real composition
+// references for AI image generation (role: 'layout_model'), scoped by
+// segment so a pizzaria's generations never see a Casa de Embalagem
+// approved image or vice versa: both are global stores, but partitioned by
+// segment node (see segmentNodePathsFromFields). Capped to the most recent
+// MAX_SEGMENT_LAYOUT_REFERENCES across all applicable nodes combined — a
+// missing file is skipped, not backfilled from the next-oldest candidate.
+// ponytail: fixed recency cap, no per-entry "use as reference" toggle — add
+// one if the automatic cut ever needs finer control.
+export async function buildSegmentLayoutReferences(project, paths) {
+  const nodes = await loadSegmentLearningNodes(paths, project);
+  const imageEntries = nodes
+    .flatMap((node) => node.entries)
+    .filter((entry) => entry.bucket === 'approved' && entry.kind === 'image' && entry.imagePath)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, MAX_SEGMENT_LAYOUT_REFERENCES);
+
+  const references = [];
+  for (const entry of imageEntries) {
+    const absolutePath = join(paths.root, 'assets', 'learning', entry.imagePath);
+    if (!existsSync(absolutePath)) continue;
+    const reference = normalizeReferenceMetadata({
+      id: `segment-layout-${entry.id}`,
+      filename: entry.imagePath.split('/').pop(),
+      relativePath: entry.imagePath,
+      mimeType: mimeTypeFromFilename(entry.imagePath),
+      role: 'layout_model',
+      weight: 'medium',
+      instruction: SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
+      createdAt: entry.createdAt,
+    });
+    reference.absolutePath = absolutePath;
+    reference.previewUrl = `/api/learning-assets/${entry.imagePath.split('/').map(encodeURIComponent).join('/')}`;
+    references.push(reference);
+  }
+  return references;
+}
+
 function buildImageReferencePayload(project, paths) {
   const logoReference = getProjectLogoReference(project, paths);
   const references = uniqueReferences([

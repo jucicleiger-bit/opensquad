@@ -9,6 +9,7 @@ import {
   buildApprovalPayload,
   calculateTokenDaysRemaining,
   createCentralProject,
+  buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
   deleteAdCreative,
   deleteLearningEntry,
@@ -640,6 +641,75 @@ test('analyzeLearningImage/saveLearningEntry/deleteLearningEntry work without a 
     await deleteLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', entryId: saved[0].id }, dir);
     const nodes = await loadSegmentLearningNodesForSelection(paths, { segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria' });
     assert.equal(nodes.find((n) => n.path === 'group:alimenticio/category:pizzaria').entries.length, 0);
+  });
+});
+
+test('buildSegmentLayoutReferences returns the 3 most recent approved images from the project\'s own segment nodes, skips avoid/text entries and missing files', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('pizzaria-layout', {
+      brandName: 'Pizzaria Layout',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    const imagePaths = {};
+    for (const name of ['img1', 'img2', 'img3', 'img4', 'img5']) {
+      const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => `Descrição ${name}` });
+      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath }, dir, new Date());
+      imagePaths[name] = analyzed.imagePath;
+    }
+    // A non-image approved entry and an "avoid" image entry — both must be
+    // excluded even though they'll be stamped as the most recent below.
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'text', text: 'não parecer gerado por IA' }, dir, new Date());
+    const avoidAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'evitar.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Evitar isso' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'avoid', kind: 'image', text: 'Evitar isso', imagePath: avoidAnalyzed.imagePath }, dir, new Date());
+
+    // Stamp deterministic createdAt so recency order is unambiguous: the
+    // avoid image and the text entry are made the two MOST recent overall,
+    // so if the bucket/kind filter were broken, they'd show up in the
+    // result instead of being excluded.
+    const paths = getCentralPaths(dir, 'pizzaria-layout');
+    const store = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
+    const node = store.nodes[groupKey];
+    const stampOrder = ['img1', 'img2', 'img3', 'img4', 'img5', 'evitar', 'não parecer gerado por IA'];
+    for (const entry of node.entries) {
+      const key = entry.kind === 'image' ? Object.keys(imagePaths).find((name) => imagePaths[name] === entry.imagePath) || 'evitar' : entry.text;
+      const index = stampOrder.indexOf(key);
+      entry.createdAt = `2026-01-01T00:0${index}:00.000Z`;
+    }
+    await writeFile(paths.segmentLearningsPath, JSON.stringify(store, null, 2));
+
+    // Delete img5's file on disk (the newest approved image) to prove a
+    // missing file is skipped instead of crashing or being backfilled.
+    await rm(join(paths.root, 'assets', 'learning', imagePaths.img5));
+
+    const project = await loadProjectForTest('pizzaria-layout', dir);
+    const references = await buildSegmentLayoutReferences(project, paths);
+
+    assert.equal(references.length, 2, 'img5 missing on disk, img4/img3 are the next 2 most recent valid ones');
+    assert.deepEqual(references.map((r) => r.relativePath), [imagePaths.img4, imagePaths.img3]);
+    assert.ok(references.every((r) => r.role === 'layout_model'));
+    assert.ok(references.every((r) => r.weight === 'medium'));
+    assert.equal(
+      references[0].instruction,
+      'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.'
+    );
+    await access(references[0].absolutePath);
+  });
+});
+
+test('buildSegmentLayoutReferences returns nothing when the project has no Setor/Nicho set', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-segmento', name: 'Sem Segmento', handle: '@semsegmento', approvalEmail: 'a@example.com' }, dir);
+    const paths = getCentralPaths(dir, 'sem-segmento');
+    const project = await loadProjectForTest('sem-segmento', dir);
+    const references = await buildSegmentLayoutReferences(project, paths);
+    assert.deepEqual(references, []);
   });
 });
 
