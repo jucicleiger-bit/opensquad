@@ -29,6 +29,8 @@ import {
   openAiImageSizeForChannel,
   publishWithGaveteSync,
   resolveContentImageAbsolutePath,
+  selectImageReferencesForCodex,
+  selectOpenAiImageEditReferences,
   startContentCentralServer,
   startPublishScheduler,
   uploadGeneratedImagePublicly,
@@ -371,6 +373,51 @@ test('Nous/FAL aspect ratio chosen per channel is a supported preset keyword', (
   assert.equal(nousFalAspectRatioForChannel('facebook_story'), 'portrait');
   assert.equal(nousFalAspectRatioForChannel('facebook_feed'), 'portrait');
   assert.equal(nousFalAspectRatioForChannel('unknown_channel'), 'square');
+});
+
+test('selectImageReferencesForCodex forwards a layout_model reference alongside brand_asset/product_photo (Codex/Codex-agent have headroom for it)', () => {
+  const brand = { role: 'brand_asset', absolutePath: '/brand.png' };
+  const product1 = { role: 'product_photo', absolutePath: '/product1.png' };
+  const product2 = { role: 'product_photo', absolutePath: '/product2.png' };
+  const product3 = { role: 'product_photo', absolutePath: '/product3.png' };
+  const layout = { role: 'layout_model', absolutePath: '/layout.png' };
+
+  const selected = selectImageReferencesForCodex([brand, product1, product2, product3, layout]);
+
+  assert.deepEqual(selected, [brand, product1, product2, layout]);
+});
+
+test('selectImageReferencesForCodex still returns an empty list when there are no references at all', () => {
+  assert.deepEqual(selectImageReferencesForCodex([]), []);
+});
+
+test('selectOpenAiImageEditReferences reserves a slot for the layout reference instead of letting a well-configured project\'s own 4+ references push it out by array position under the 4-image cap', () => {
+  const logo = { role: 'brand_asset', absolutePath: '/logo.png' };
+  const photos = ['/p1.png', '/p2.png', '/p3.png', '/p4.png'].map((absolutePath) => ({ role: 'product_photo', absolutePath }));
+  const layout = { role: 'layout_model', absolutePath: '/layout.png' };
+  // Mirrors buildImageReferencePayload's real order: project's own
+  // references first, layout reference appended last.
+  const references = [logo, ...photos, layout];
+
+  const selected = selectOpenAiImageEditReferences(references, 4);
+
+  assert.equal(selected.length, 4);
+  assert.ok(selected.includes(layout), 'the layout reference must not be dropped just because it is last in array order');
+  assert.deepEqual(selected, [logo, photos[0], photos[1], layout]);
+});
+
+test('selectOpenAiImageEditReferences never returns a layout reference alone — it must not become the sole/leading image for /v1/images/edits', () => {
+  const layout = { role: 'layout_model', absolutePath: '/layout.png' };
+
+  assert.deepEqual(selectOpenAiImageEditReferences([layout], 4), []);
+  assert.deepEqual(selectOpenAiImageEditReferences([layout, layout], 4), []);
+});
+
+test('selectOpenAiImageEditReferences keeps a layout reference when at least one real project reference is present', () => {
+  const logo = { role: 'brand_asset', absolutePath: '/logo.png' };
+  const layout = { role: 'layout_model', absolutePath: '/layout.png' };
+
+  assert.deepEqual(selectOpenAiImageEditReferences([logo, layout], 4), [logo, layout]);
 });
 
 test('cropOpenAiImageToChannel resizes a generated buffer to the exact target aspect ratio', async () => {

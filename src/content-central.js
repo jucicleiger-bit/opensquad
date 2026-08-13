@@ -6469,7 +6469,11 @@ function automaticReferenceRule(category) {
   }[category] || 'Utilizar apenas como inspiração visual. Não copiar informações factuais da referência.';
 }
 
-const MAX_SEGMENT_LAYOUT_REFERENCES = 3;
+// Kept at 1: providers that forward references cap out around 4 images
+// total (see requestOpenAiImageEdit's 4-image cap in
+// content-central-server.js), so at most one segment layout reference is
+// ever worth competing for a slot against the project's own references.
+const MAX_SEGMENT_LAYOUT_REFERENCES = 1;
 
 const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.';
 

@@ -644,7 +644,7 @@ test('analyzeLearningImage/saveLearningEntry/deleteLearningEntry work without a 
   });
 });
 
-test('buildSegmentLayoutReferences returns the 3 most recent approved images from the project\'s own segment nodes, skips avoid/text entries and missing files', async () => {
+test('buildSegmentLayoutReferences returns only the single most recent approved image from the project\'s own segment nodes, skips avoid/text entries', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);
     await updateProjectBrandInput('pizzaria-layout', {
@@ -684,15 +684,11 @@ test('buildSegmentLayoutReferences returns the 3 most recent approved images fro
     }
     await writeFile(paths.segmentLearningsPath, JSON.stringify(store, null, 2));
 
-    // Delete img5's file on disk (the newest approved image) to prove a
-    // missing file is skipped instead of crashing or being backfilled.
-    await rm(join(paths.root, 'assets', 'learning', imagePaths.img5));
-
     const project = await loadProjectForTest('pizzaria-layout', dir);
     const references = await buildSegmentLayoutReferences(project, paths);
 
-    assert.equal(references.length, 2, 'img5 missing on disk, img4/img3 are the next 2 most recent valid ones');
-    assert.deepEqual(references.map((r) => r.relativePath), [imagePaths.img4, imagePaths.img3]);
+    assert.equal(references.length, 1, 'MAX_SEGMENT_LAYOUT_REFERENCES caps this at the single most recent valid image');
+    assert.deepEqual(references.map((r) => r.relativePath), [imagePaths.img5]);
     assert.ok(references.every((r) => r.role === 'layout_model'));
     assert.ok(references.every((r) => r.weight === 'medium'));
     assert.equal(
@@ -700,6 +696,46 @@ test('buildSegmentLayoutReferences returns the 3 most recent approved images fro
       'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.'
     );
     await access(references[0].absolutePath);
+  });
+});
+
+test('buildSegmentLayoutReferences skips a missing-on-disk most recent image instead of crashing or backfilling from the next-oldest candidate', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pizzaria-layout-missing', name: 'Pizzaria Layout Missing', handle: '@pizzarialayoutmissing', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('pizzaria-layout-missing', {
+      brandName: 'Pizzaria Layout Missing',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'pizzaria',
+      productsOrServices: 'pizzas',
+    }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    const imagePaths = {};
+    for (const name of ['img1', 'img2']) {
+      const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => `Descrição ${name}` });
+      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath }, dir, new Date());
+      imagePaths[name] = analyzed.imagePath;
+    }
+
+    const paths = getCentralPaths(dir, 'pizzaria-layout-missing');
+    const store = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
+    const node = store.nodes[groupKey];
+    for (const entry of node.entries) {
+      const key = Object.keys(imagePaths).find((name) => imagePaths[name] === entry.imagePath);
+      entry.createdAt = `2026-01-01T00:0${['img1', 'img2'].indexOf(key)}:00.000Z`;
+    }
+    await writeFile(paths.segmentLearningsPath, JSON.stringify(store, null, 2));
+
+    // Delete img2's file on disk (the newest, and only, candidate under the
+    // cap of 1) to prove it's skipped rather than backfilled from img1.
+    await rm(join(paths.root, 'assets', 'learning', imagePaths.img2));
+
+    const project = await loadProjectForTest('pizzaria-layout-missing', dir);
+    const references = await buildSegmentLayoutReferences(project, paths);
+
+    assert.deepEqual(references, []);
   });
 });
 

@@ -1286,6 +1286,25 @@ export async function generateAiImageForActiveProvider(payload) {
   return generateAiImageWithChatGpt(payload);
 }
 
+// Picks which references requestOpenAiImageEdit's `image[]` (capped at 4
+// total, canvas included) actually gets. Two rules layered on top of the
+// project's own array order:
+// - a layout_model reference (composition inspiration borrowed from another
+//   project's approved creative) must never be the sole/leading reference —
+//   with no real project reference alongside it, that would silently flip a
+//   from-scratch generation into "edit this foreign image". If there are no
+//   non-layout references, drop layout ones entirely.
+// - otherwise, reserve it one of the `capacity` slots instead of letting a
+//   well-configured project's own 4+ references push it out by array
+//   position alone (buildImageReferencePayload always appends it last).
+export function selectOpenAiImageEditReferences(references, capacity = 4) {
+  const primary = references.filter((reference) => reference.role !== 'layout_model');
+  if (!primary.length) return primary;
+  const layout = references.filter((reference) => reference.role === 'layout_model');
+  const layoutSlots = Math.min(layout.length, capacity > 0 ? 1 : 0);
+  return [...primary.slice(0, Math.max(capacity - layoutSlots, 0)), ...layout.slice(0, layoutSlots)];
+}
+
 async function generateAiImageWithChatGpt({ content, projectId, targetDir, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false, targetedEdit = false }) {
   const editBasePath = targetedEdit
     ? await resolveExistingGeneratedImagePath(content, projectId, targetDir)
@@ -1299,9 +1318,12 @@ async function generateAiImageWithChatGpt({ content, projectId, targetDir, note,
 
   const model = process.env.OPENSQUAD_OPENAI_IMAGE_MODEL || 'gpt-image-1';
   const imageSize = process.env.OPENSQUAD_OPENAI_IMAGE_SIZE || openAiImageSizeForChannel(content?.channel);
-  const imageReferences = Array.isArray(content.image?.references)
+  const rawReferences = Array.isArray(content.image?.references)
     ? content.image.references.filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     : [];
+  // The edit canvas (when targeted) takes one of the 4 image[] slots, so
+  // only the rest is available for references.
+  const imageReferences = selectOpenAiImageEditReferences(rawReferences, isTargetedEdit ? 3 : 4);
   // The image being edited must lead the list — /images/edits has no other
   // way to say "this one is the canvas, the rest are just style/identity
   // references".
@@ -2055,6 +2077,20 @@ async function generateAiImageWithNousFal({ content, projectId, targetDir, note,
   };
 }
 
+// Shared by both Codex providers below (direct HTTP and agent transport):
+// picks which of content.image.references are worth spending one of the
+// provider's reference-image slots on. brand_asset/product_photo are real
+// facts about the project and always come first; layout_model is borrowed
+// composition inspiration from another project's approved creative, so it's
+// capped to at most 1 and only fills a slot after the real references.
+export function selectImageReferencesForCodex(imageReferences) {
+  return [
+    ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1),
+    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2),
+    ...imageReferences.filter((reference) => reference.role === 'layout_model').slice(0, 1),
+  ];
+}
+
 // OpenAI images through the user's own ChatGPT/Codex login (OAuth), not the
 // pay-per-token OPENAI_API_KEY path — this is what stays usable when the
 // API billing account is capped but the ChatGPT/Codex subscription itself
@@ -2078,16 +2114,14 @@ async function generateAiImageWithCodex({ content, projectId, targetDir, note, a
 
   // Unlike Nous/FAL's single-reference edit endpoints, Codex's Responses API
   // accepts up to 16 input_image parts in one call, so there's no tradeoff
-  // between "attach the logo" and "attach the product photo" here — send
-  // both. The real logo goes first (identity matters most and some models
-  // weight earlier reference images more heavily); product photos follow.
+  // between "attach the logo" and "attach the product photo" (and one
+  // layout reference) here — send all of them. The real logo goes first
+  // (identity matters most and some models weight earlier reference images
+  // more heavily); product photos follow, then the layout reference.
   const imageReferences = Array.isArray(content.image?.references)
     ? content.image.references.filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     : [];
-  const referencePaths = [
-    ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1),
-    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2),
-  ].map((reference) => reference.absolutePath);
+  const referencePaths = selectImageReferencesForCodex(imageReferences).map((reference) => reference.absolutePath);
 
   const promptFile = join(tmpdir(), `opensquad-codex-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
   await writeFile(promptFile, prompt, 'utf-8');
@@ -2166,8 +2200,7 @@ async function generateAiImageWithCodexAgent({ content, projectId, targetDir, no
     : [];
   const referencePaths = [
     editBasePath,
-    ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1).map((reference) => reference.absolutePath),
-    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2).map((reference) => reference.absolutePath),
+    ...selectImageReferencesForCodex(imageReferences).map((reference) => reference.absolutePath),
   ].filter(Boolean);
 
   const outputDir = resolve(targetDir, '_opensquad', 'content-central', 'projects', projectId, 'assets', 'generated');
