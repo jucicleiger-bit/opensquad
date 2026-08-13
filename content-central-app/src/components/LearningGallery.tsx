@@ -79,23 +79,38 @@ export function LearningGallery({
     }
   }
 
+  const buckets: { key: SegmentLearningEntry["bucket"]; label: string }[] = [
+    { key: "approved", label: "Aprovado" },
+    { key: "avoid", label: "Evitar" },
+    { key: "technical", label: "Base técnica" },
+  ];
+
   return (
     <div>
-      {entries.map((entry) => (
-        <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            {entry.kind === "image" && entry.imagePath ? (
-              <img
-                src={`/api/learning-assets/${entry.imagePath.split("/").map(encodeURIComponent).join("/")}`}
-                alt={entry.text || "Referência de aprendizado"}
-                style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flex: "0 0 auto" }}
-              />
-            ) : null}
-            <span>{entry.text}</span>
+      {buckets.map(({ key, label }) => {
+        const bucketEntries = entries.filter((entry) => entry.bucket === key);
+        if (!bucketEntries.length) return null;
+        return (
+          <div key={key} style={{ marginBottom: 12 }}>
+            <div className="muted" style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+            {bucketEntries.map((entry) => (
+              <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  {entry.kind === "image" && entry.imagePath ? (
+                    <img
+                      src={`/api/learning-assets/${entry.imagePath.split("/").map(encodeURIComponent).join("/")}`}
+                      alt={entry.text || "Referência de aprendizado"}
+                      style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 8, flex: "0 0 auto" }}
+                    />
+                  ) : null}
+                  <span>{entry.text}</span>
+                </div>
+                <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
+              </div>
+            ))}
           </div>
-          <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
-        </div>
-      ))}
+        );
+      })}
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <input
           aria-label="Novo aprendizado (texto)"
