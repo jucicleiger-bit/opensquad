@@ -692,6 +692,54 @@ test('analyzeLearningImage asks for structure-only analysis when the uploaded le
   });
 });
 
+test('saveLearningEntry tags a creative-purpose image entry with postType and shape, and strips them from any other entry kind/purpose', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'template-tags', name: 'Template Tags', handle: '@templatetags', approvalEmail: 'a@example.com' }, dir);
+    const groupKey = 'group:alimenticio/category:pizzaria';
+
+    const creativeEntries = await saveLearningEntry({
+      scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
+      text: 'modelo de oferta', imagePath: 'segment/x/oferta.png',
+      purpose: 'creative', postType: 'offer', shape: 'vertical',
+    }, dir);
+    const creative = creativeEntries[0];
+    assert.equal(creative.postType, 'offer');
+    assert.equal(creative.shape, 'vertical');
+
+    // A product-purpose image entry never carries these tags, even if the
+    // caller sends them — postType/shape describe LAYOUT templates, and a
+    // product-purpose entry isn't one (see buildSegmentLayoutReferences,
+    // which only ever tags the 'creative' branch).
+    const productEntries = await saveLearningEntry({
+      scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
+      text: 'foto de produto', imagePath: 'segment/x/produto.png',
+      purpose: 'product', postType: 'offer', shape: 'vertical',
+    }, dir);
+    const product = productEntries.find((entry) => entry.text === 'foto de produto');
+    assert.equal(product.postType, '');
+    assert.equal(product.shape, '');
+
+    // A text entry (no image at all) never carries these tags either.
+    const textEntries = await saveLearningEntry({
+      scope: 'segment', groupKey, bucket: 'approved', kind: 'text',
+      text: 'não parecer gerado por IA', postType: 'offer', shape: 'vertical',
+    }, dir);
+    const textEntry = textEntries.find((entry) => entry.text === 'não parecer gerado por IA');
+    assert.equal(textEntry.postType, '');
+    assert.equal(textEntry.shape, '');
+
+    // An unrecognized value gets dropped to '' instead of stored verbatim.
+    const junkEntries = await saveLearningEntry({
+      scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
+      text: 'lixo', imagePath: 'segment/x/lixo.png',
+      purpose: 'creative', postType: 'nao-existe', shape: 'quadrado',
+    }, dir);
+    const junk = junkEntries.find((entry) => entry.text === 'lixo');
+    assert.equal(junk.postType, '');
+    assert.equal(junk.shape, '');
+  });
+});
+
 test('buildSegmentLayoutReferences returns only the single most recent approved image from the project\'s own segment nodes, skips avoid/text entries', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);

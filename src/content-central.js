@@ -3801,13 +3801,23 @@ const SEGMENT_LEVELS = ['setor', 'nicho', 'especialidade'];
 
 function normalizeSegmentLearningEntry(input = {}) {
   const kind = input.kind === 'image' ? 'image' : 'text';
+  const purpose = kind === 'image' ? (input.purpose === 'product' ? 'product' : 'creative') : undefined;
+  const isCreativeImage = kind === 'image' && purpose === 'creative';
+  const postType = isCreativeImage && ['offer', 'institutional', 'special_date', 'ad_creative'].includes(input.postType)
+    ? input.postType
+    : '';
+  const shape = isCreativeImage && ['vertical', 'feed'].includes(input.shape)
+    ? input.shape
+    : '';
   return {
     id: String(input.id || `entry-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
     bucket: ['technical', 'approved', 'avoid'].includes(input.bucket) ? input.bucket : 'approved',
     kind,
     text: cleanText(input.text),
     imagePath: kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
-    purpose: kind === 'image' ? (input.purpose === 'product' ? 'product' : 'creative') : undefined,
+    purpose,
+    postType,
+    shape,
     source: input.source === 'auto' ? 'auto' : 'manual',
     // Retained on the entry shape only so a legacy entry written before
     // this project moved image-learning storage to a global (non-per-
@@ -4143,6 +4153,8 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
       text: input.text,
       imagePath: input.imagePath,
       purpose: input.purpose,
+      postType: input.postType,
+      shape: input.shape,
       source: 'manual',
     });
     node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
