@@ -5039,7 +5039,6 @@ function buildContentReview({ channel, aspectRatio, dimensions, contentTopic }) 
 }
 
 async function generateAiImageWithReviewLoop(content, project, projectId, options = {}) {
-  const maxAttempts = normalizeCreativeAttemptLimit(options.maxAttempts);
   const originalPrompt = content.image.prompt;
   const rawReferences = Array.isArray(content.image.references) ? [...content.image.references] : [];
   const baseReferences = buildPrimaryAiImageReferences(
@@ -5061,120 +5060,61 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
   const basePrompt = options.promptFraming === 'ad_creative'
     ? appendAdCreativeFraming(buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences))
     : buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences);
-  const baseContentReview = { ...(content.contentReview || {}) };
-  const reviewAttempts = [];
-  const generationManifest = [];
-  let reviewFeedback = '';
-  let finalReview = null;
-  let allowedAttempts = maxAttempts;
-  let rescueMode = false;
 
-  for (let attempt = 1; attempt <= allowedAttempts; attempt += 1) {
-    content.image.references = rescueMode ? buildRescueImageReferences(baseReferences) : baseReferences;
-    content.image.prompt = rescueMode
-      ? appendCreativeRescueCorrections(basePrompt, reviewAttempts, options.channel)
-      : reviewFeedback
-        ? appendCreativeReviewCorrections(basePrompt, reviewAttempts)
-        : basePrompt;
+  content.image.references = baseReferences;
+  content.image.prompt = basePrompt;
 
-    const previousReview = reviewAttempts[reviewAttempts.length - 1];
-    const targetedReviewRepair = attempt > 1 && !rescueMode && shouldUseTargetedReviewRepair(previousReview);
-    const generatedImage = await options.imageGenerator({
-      content,
-      projectId,
-      note: targetedReviewRepair
-        ? `Corrigir somente os problemas apontados pelo revisor:\n${reviewFeedback}`
-        : options.note,
-      channel: options.channel,
-      // Only the very first attempt of an operator-requested correction is a
-      // real edit of the existing image — a rescue pass is fixing a
-      // structural problem (wrong canvas/aspect ratio) that editing the same
-      // broken image can't fix, and a review-retry (attempt > 1) is already
-      // the AI's own correction loop, not the operator's original request.
-      targetedEdit: (Boolean(options.targetedEdit) && attempt === 1 && !rescueMode) || targetedReviewRepair,
-      attempt,
-      maxAttempts: allowedAttempts,
-      rescueMode,
-      reviewFeedback,
-      previousReviews: [...reviewAttempts],
-    });
+  const generatedImage = await options.imageGenerator({
+    content,
+    projectId,
+    note: options.note,
+    channel: options.channel,
+    targetedEdit: Boolean(options.targetedEdit),
+    attempt: 1,
+    maxAttempts: 1,
+    rescueMode: false,
+    reviewFeedback: '',
+    previousReviews: [],
+  });
 
-    if (!generatedImage?.url) {
-      // A generator that resolves without throwing but with no usable url
-      // (empty object, provider quirk) used to silently fall through here —
-      // the card kept its local SVG placeholder forever, generatedSource
-      // never became 'ai', and the caller's try/catch never fired, so
-      // imageGenerationError got set to null (success!) even though no real
-      // image was ever generated. Throwing routes it through the same
-      // caught-and-recorded error path a thrown generator already has.
-      throw new Error('O gerador de imagem não retornou uma URL de imagem (resposta vazia ou inválida).');
-    }
-
-    content.image = {
-      ...content.image,
-      prompt: generatedImage.prompt || content.image.prompt,
-      originalPrompt,
-      generated: true,
-      generatedSource: 'ai',
-      generationStatus: 'ai_generated',
-      generationAttempts: attempt,
-      mimeType: generatedImage.mimeType || 'image/png',
-      url: generatedImage.url,
-      previewUrl: generatedImage.url,
-      previewMode: 'direct_ai_css_cover',
-      previewFit: 'cover',
-    };
-
-    generationManifest.push({
-      attempt,
-      rescueMode,
-      provider: generatedImage.provider || '',
-      prompt: content.image.prompt,
-      references: content.image.references.map((reference) => ({
-        id: reference.id || '',
-        role: reference.role || '',
-        relativePath: reference.relativePath || '',
-      })),
-      resultUrl: generatedImage.url,
-    });
-
-    if (typeof options.imageReviewer !== 'function' || content.image?.generatedSource !== 'ai') break;
-
-    finalReview = normalizeCreativeReview(await options.imageReviewer({
-      content,
-      project,
-      projectId,
-      note: options.note,
-      channel: options.channel,
-      attempt,
-      maxAttempts,
-    }), options.now, content);
-    finalReview.attempt = attempt;
-    reviewAttempts.push(finalReview);
-    generationManifest[generationManifest.length - 1].review = finalReview;
-    reviewFeedback = formatCreativeReviewFeedback(finalReview);
-
-    if (
-      finalReview.status === 'blocked'
-      && attempt === allowedAttempts
-      && !rescueMode
-      && maxAttempts > 1
-      && shouldEnterStoryRescueMode(finalReview, options.channel)
-    ) {
-      rescueMode = true;
-      allowedAttempts = Math.min(maxAttempts + 1, 5);
-      continue;
-    }
-
-    if (finalReview.status !== 'blocked' || attempt === allowedAttempts) break;
+  if (!generatedImage?.url) {
+    // A generator that resolves without throwing but with no usable url
+    // (empty object, provider quirk) used to silently fall through here —
+    // the card kept its local SVG placeholder forever, generatedSource
+    // never became 'ai', and the caller's try/catch never fired, so
+    // imageGenerationError got set to null (success!) even though no real
+    // image was ever generated. Throwing routes it through the same
+    // caught-and-recorded error path a thrown generator already has.
+    throw new Error('O gerador de imagem não retornou uma URL de imagem (resposta vazia ou inválida).');
   }
 
-  if (reviewAttempts.length) {
-    content.creativeReviewAttempts = reviewAttempts;
-    content.creativeReview = finalReview;
-    content.contentReview = mergeCreativeReview(baseContentReview, finalReview);
-  }
-  content.creativeGenerationManifest = generationManifest;
+  content.image = {
+    ...content.image,
+    prompt: generatedImage.prompt || content.image.prompt,
+    originalPrompt,
+    generated: true,
+    generatedSource: 'ai',
+    generationStatus: 'ai_generated',
+    generationAttempts: 1,
+    mimeType: generatedImage.mimeType || 'image/png',
+    url: generatedImage.url,
+    previewUrl: generatedImage.url,
+    previewMode: 'direct_ai_css_cover',
+    previewFit: 'cover',
+  };
+
+  content.creativeGenerationManifest = [{
+    attempt: 1,
+    rescueMode: false,
+    provider: generatedImage.provider || '',
+    prompt: content.image.prompt,
+    references: content.image.references.map((reference) => ({
+      id: reference.id || '',
+      role: reference.role || '',
+      relativePath: reference.relativePath || '',
+    })),
+    resultUrl: generatedImage.url,
+  }];
 }
 
 // Returns up to `count` items starting at a seed-derived offset, wrapping
@@ -6010,52 +5950,6 @@ function referenceOrientation(reference = {}) {
   return '';
 }
 
-function normalizeCreativeAttemptLimit(value) {
-  const numeric = Number(value || 3);
-  if (!Number.isFinite(numeric)) return 3;
-  return Math.min(5, Math.max(1, Math.trunc(numeric)));
-}
-
-function appendCreativeReviewCorrections(basePrompt, reviews) {
-  return [
-    basePrompt,
-    section('CORREÇÕES OBRIGATÓRIAS DO REVISOR', [
-      'A tentativa anterior foi bloqueada. Refazer a imagem obedecendo todas as correções abaixo antes de qualquer preferência estética.',
-      ...reviews.flatMap((review) => [
-        `Tentativa ${review.attempt || '?'} bloqueada: ${review.summary || 'corrigir imagem.'}`,
-        ...(review.errors || []).map((error) => `Erro: ${error}`),
-        ...(review.warnings || []).map((warning) => `Alerta: ${warning}`),
-      ]),
-      'Se o canal for Story/Reels, a nova imagem precisa nascer como Story vertical nativo 9:16 real; não criar arte quadrada dentro de moldura vertical.',
-      'Não criar bloco central com aparência 1:1; distribuir a composição entre topo, centro e base do canvas.',
-      'Reposicionar título, preço, logo e CTA para dentro da área segura, com margem interna generosa.',
-      'Se houver preço, usar destaque compacto e premium; não usar retângulo branco gigante, moldura simples ou caixa cobrindo o produto/serviço principal.',
-      'O produto deve continuar protagonista; se a oferta for de esfiha, o visual deve parecer esfiha aberta, não pizza ou mini pizza genérica.',
-    ]),
-  ].join('\n\n');
-}
-
-function appendCreativeRescueCorrections(basePrompt, reviews, channel) {
-  const channelName = channel === 'instagram_reels' ? 'Reels' : 'Story';
-  return [
-    basePrompt,
-    section(`MODO RESGATE DE ${channelName.toUpperCase()}`, [
-      `As tentativas anteriores falharam por formato/canvas. Agora refazer do zero como ${channelName} vertical real 9:16, não como adaptação da arte anterior.`,
-      'Manter o modelo de layout anexado como estrutura de hierarquia e zonas. Se a proporção da referência for diferente, adaptar as mesmas zonas ao canvas 9:16 sem copiar sua moldura externa.',
-      'Criar uma única arte final vertical 1080x1920 preenchendo todo o canvas de Instagram Stories/Reels.',
-      'Não colocar um flyer quadrado dentro do Story. Não usar canvas horizontal. Não usar moldura externa. Não deixar espaço lateral sobrando.',
-      'Composição segura obrigatória: logo no topo dentro da margem, título curto dentro da margem, produto ocupando o centro/baixo sem cortar informações importantes, preço em selo compacto, CTA curto no rodapé dentro da margem.',
-      'Se algum texto ficaria cortado, reduzir texto ou reposicionar; nunca cortar letras, preço, logo ou CTA.',
-      'Priorizar o formato correto sem abandonar a hierarquia do modelo: preservar ordem de leitura, protagonismo, posição relativa de título, produto, preço e CTA.',
-      ...reviews.flatMap((review) => [
-        `Tentativa ${review.attempt || '?'} bloqueada: ${review.summary || 'corrigir formato.'}`,
-        ...(review.errors || []).map((error) => `Erro: ${error}`),
-        ...(review.warnings || []).map((warning) => `Alerta: ${warning}`),
-      ]),
-    ]),
-  ].join('\n\n');
-}
-
 // Ad creative and organic post creative want different things from the same
 // composition rules — an ad has to win attention from someone who wasn't
 // looking for it, in a feed full of other ads, in under a couple seconds.
@@ -6071,201 +5965,6 @@ function appendAdCreativeFraming(basePrompt) {
       'A chamada para ação deve deixar claro que o próximo passo é chamar no WhatsApp — pode usar um ícone de WhatsApp reconhecível na composição, sem inventar número de telefone ou qualquer contato que não esteja cadastrado.',
     ]),
   ].join('\n\n');
-}
-
-function shouldEnterStoryRescueMode(review, channel) {
-  if (!isVerticalStoryChannel(channel)) return false;
-  if (review?.status !== 'blocked') return false;
-  const codes = new Set(normalizeCreativeReviewCodes(review));
-  return codes.has('WRONG_ASPECT_RATIO') || codes.has('STORY_CANVAS_MISMATCH');
-}
-
-function buildRescueImageReferences(references) {
-  const allowedRoles = new Set(['brand_asset', 'product_photo', 'layout_model', 'visual_reference']);
-  const selected = [];
-  for (const reference of references) {
-    const usageRoles = normalizeReferenceUsageRoles(reference.usageRoles, reference.role);
-    if (usageRoles.includes('text_parameter')) continue;
-    if (!allowedRoles.has(reference.role)) continue;
-    selected.push(reference);
-  }
-  const brandAssets = selected.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
-  const productPhotos = selected.filter((reference) => reference.role === 'product_photo').slice(0, 2);
-  const layoutReferences = selected.filter((reference) => reference.role === 'layout_model').slice(0, 1);
-  const visualReferences = selected.filter((reference) => reference.role === 'visual_reference').slice(0, layoutReferences.length ? 0 : 1);
-  return uniqueReferences([...brandAssets, ...productPhotos, ...layoutReferences, ...visualReferences]);
-}
-
-const CREATIVE_REVIEW_CODES = new Set([
-  'WRONG_ASPECT_RATIO',
-  'STORY_CANVAS_MISMATCH',
-  'LAYOUT_MISMATCH',
-  'PLACEHOLDER_LOGO',
-  'LOGO_MISMATCH',
-  'WRONG_PRICE',
-  'MISSING_INFORMATION',
-  'TEXT_UNREADABLE',
-  'PRODUCT_MISMATCH',
-  'VISUAL_QUALITY_LOW',
-]);
-
-function normalizeCreativeReviewCodes(review = {}) {
-  const explicit = (Array.isArray(review.codes) ? review.codes : [])
-    .map((code) => String(code || '').trim().toUpperCase())
-    .filter((code) => CREATIVE_REVIEW_CODES.has(code));
-  const issueLines = [
-    ...(Array.isArray(review.errors) ? review.errors : []),
-    ...(Array.isArray(review.warnings) ? review.warnings : []),
-  ].filter(Boolean).map(normalizeComparableText);
-  const issueText = issueLines.join(' ');
-  const placeholderIssueText = issueLines
-    .filter((line) => !/(?:sem|nenhum|nao ha|ausencia de)\s+(?:qualquer\s+)?placeholder/.test(line))
-    .join(' ');
-  const inferred = [];
-  if (/formato|proporcao|aspect ratio|canvas horizontal|quadrad|1 1|9 16/.test(issueText)) inferred.push('WRONG_ASPECT_RATIO');
-  if (/card 1 1|flyer quadrad|massa visual.*centro|story.*canvas/.test(issueText)) inferred.push('STORY_CANVAS_MISMATCH');
-  if (/layout|hierarquia|modelo de estrutura|distribuicao/.test(issueText)) inferred.push('LAYOUT_MISMATCH');
-  if (/sua marca|your logo|logo aqui|placeholder.*(?:marca|logo)|(?:marca|logo).*placeholder/.test(placeholderIssueText)) inferred.push('PLACEHOLDER_LOGO');
-  if (/preco.*(?:diferente|incorreto|errado)|valor.*(?:diferente|incorreto|errado)/.test(issueText)) inferred.push('WRONG_PRICE');
-  if (/informacao.*falt|item.*falt|beneficio.*falt|nao aparece/.test(issueText)) inferred.push('MISSING_INFORMATION');
-  if (/ilegivel|embaralhad|texto.*cortad|letra.*cortad/.test(issueText)) inferred.push('TEXT_UNREADABLE');
-  if (/produto.*(?:errado|diferente|ambiguo)|nao parece|outra categoria/.test(issueText)) inferred.push('PRODUCT_MISMATCH');
-  if (/qualidade.*baixa|amador|artefato|aparencia de ia/.test(issueText)) inferred.push('VISUAL_QUALITY_LOW');
-  return [...new Set([...explicit, ...inferred])];
-}
-
-function shouldUseTargetedReviewRepair(review = {}) {
-  const codes = normalizeCreativeReviewCodes(review);
-  if (!codes.length) return false;
-  const targetedCodes = new Set(['PLACEHOLDER_LOGO', 'LOGO_MISMATCH', 'WRONG_PRICE', 'TEXT_UNREADABLE']);
-  return codes.every((code) => targetedCodes.has(code));
-}
-
-function formatCreativeReviewFeedback(review) {
-  return [
-    review?.summary,
-    ...(review?.codes || []).map((code) => `Código: ${code}`),
-    ...(review?.errors || []),
-    ...(review?.warnings || []),
-  ].filter(Boolean).join('\n');
-}
-
-function mergeCreativeReview(contentReview = {}, creativeReview = {}) {
-  const checks = [...(contentReview.checks || []), ...(creativeReview.checks || [])];
-  const warnings = [...(contentReview.warnings || [])];
-  const errors = [...(contentReview.errors || []), ...(creativeReview.errors || [])];
-  if (creativeReview.status === 'blocked') {
-    warnings.push(`Revisor de Criativo bloqueou: ${creativeReview.summary || 'corrigir imagem antes de aprovar.'}`);
-  } else if (creativeReview.status === 'warning') {
-    warnings.push(`Revisor de Criativo alertou: ${creativeReview.summary || 'revisar imagem antes de aprovar.'}`);
-  } else if (creativeReview.status === 'ok') {
-    checks.push('Revisor de Criativo aprovou a imagem IA.');
-  }
-  return {
-    ...contentReview,
-    status: errors.length || creativeReview.status === 'blocked'
-      ? 'blocked'
-      : warnings.length || creativeReview.status === 'warning'
-        ? 'warning'
-        : 'ok',
-    checks,
-    warnings,
-    ...(errors.length ? { errors } : {}),
-  };
-}
-
-function contentHasOfficialLogoReference(content = {}) {
-  return Array.isArray(content.image?.references)
-    && content.image.references.some((reference) => reference.role === 'brand_asset');
-}
-
-function reviewMentionsPlaceholderLogo(review = {}) {
-  if (normalizeCreativeReviewCodes(review).includes('PLACEHOLDER_LOGO')) return true;
-  // Only issue fields may create a blocking defect. Positive checks must not
-  // be reinterpreted as errors merely because they mention a placeholder.
-  const text = [
-    ...(Array.isArray(review?.warnings) ? review.warnings : []),
-    ...(Array.isArray(review?.errors) ? review.errors : []),
-  ].filter(Boolean)
-    .map(normalizeComparableText)
-    .filter((line) => !/(?:sem|nenhum|nao ha|ausencia de)\s+(?:qualquer\s+)?placeholder/.test(line))
-    .join(' ');
-  return text.includes('sua marca')
-    || /placeholder.*(marca|logo)|(?:marca|logo).*placeholder/.test(text)
-    || /substituir.*identidade final/.test(text);
-}
-
-function normalizeCreativeReview(review, now = new Date(), content = {}) {
-  const placeholderLogoError = contentHasOfficialLogoReference(content) && reviewMentionsPlaceholderLogo(review)
-    ? 'Logo oficial cadastrada não foi aplicada; a arte mostrou placeholder de marca (ex.: “SUA MARCA”).'
-    : '';
-  let errors = normalizeRuleList([...(review?.errors || []), placeholderLogoError].filter(Boolean));
-  const warnings = normalizeRuleList(review?.warnings || []);
-  const checks = normalizeRuleList(review?.checks || []);
-  let codes = normalizeCreativeReviewCodes({ ...review, errors, warnings });
-  const rawScores = review?.scores && typeof review.scores === 'object' ? review.scores : {};
-  const scores = Object.fromEntries(Object.entries(rawScores)
-    .map(([key, value]) => [key, Math.max(0, Math.min(100, Number(value)))])
-    .filter(([, value]) => Number.isFinite(value)));
-  const hasLayoutReference = Boolean(content.creativeSpec?.layout?.referenceId || content.creativeSpec?.layout?.referencePath);
-  const hasProductReference = Boolean(content.creativeSpec?.product?.referenceIds?.length)
-    || Boolean(content.image?.references?.some((reference) => reference.role === 'product_photo'));
-  const thresholds = {
-    format: 90,
-    facts: 90,
-    visualQuality: 80,
-    ...(contentHasOfficialLogoReference(content) ? { brand: 85 } : {}),
-    ...(hasLayoutReference ? { layout: 80 } : {}),
-    ...(hasProductReference ? { product: 75 } : {}),
-  };
-  const scoreErrors = Object.entries(thresholds)
-    .filter(([key, minimum]) => Number.isFinite(scores[key]) && scores[key] < minimum)
-    .map(([key, minimum]) => `Nota ${key} abaixo do mínimo: ${scores[key]}/${minimum}.`);
-  if (scoreErrors.length) {
-    errors = normalizeRuleList([...errors, ...scoreErrors]);
-    codes = [...new Set([
-      ...codes,
-      ...(scoreErrors.some((error) => error.includes('format')) ? ['WRONG_ASPECT_RATIO'] : []),
-      ...(scoreErrors.some((error) => error.includes('facts')) ? ['MISSING_INFORMATION'] : []),
-      ...(scoreErrors.some((error) => error.includes('brand')) ? ['LOGO_MISMATCH'] : []),
-      ...(scoreErrors.some((error) => error.includes('layout')) ? ['LAYOUT_MISMATCH'] : []),
-      ...(scoreErrors.some((error) => error.includes('product')) ? ['PRODUCT_MISMATCH'] : []),
-      ...(scoreErrors.some((error) => error.includes('visualQuality')) ? ['VISUAL_QUALITY_LOW'] : []),
-    ])];
-  }
-  const requestedStatus = String(review?.status || '').trim();
-  // A malformed-but-valid-JSON response (e.g. "{}") has no status and no
-  // checks/errors/warnings — that used to fall through to 'ok' by default,
-  // silently treating "the reviewer didn't actually say anything" the same
-  // as "the reviewer looked and approved it". Anything with zero signal
-  // needs a human to look instead of sailing through as approved.
-  const hasReviewSignal = ['blocked', 'warning', 'ok'].includes(requestedStatus)
-    || errors.length || warnings.length || checks.length;
-  const status = requestedStatus === 'blocked' || errors.length
-    ? 'blocked'
-    : requestedStatus === 'warning' || warnings.length
-      ? 'warning'
-      : hasReviewSignal
-        ? 'ok'
-        : 'warning';
-  const defaultSummary = status === 'ok'
-    ? 'Imagem aprovada na revisão automática.'
-    : hasReviewSignal
-      ? 'Imagem precisa de revisão.'
-      : 'Revisor retornou resposta vazia/inesperada — revise manualmente antes de aprovar.';
-  const rawSummary = String(review?.summary || '').trim();
-  const contradictoryApprovalSummary = status === 'blocked' && /aprovad|pront[ao] para publicar/i.test(rawSummary);
-  return {
-    agent: 'Agente Revisor de Criativo',
-    status,
-    summary: contradictoryApprovalSummary ? defaultSummary : (rawSummary || defaultSummary),
-    checks,
-    warnings: hasReviewSignal ? warnings : [...warnings, 'Revisor não retornou avaliação válida (resposta vazia ou incompleta).'],
-    errors,
-    codes,
-    ...(Object.keys(scores).length ? { scores } : {}),
-    reviewedAt: now.toISOString(),
-  };
 }
 
 function filterImageRulesForTopic(imageRules, contentTopic, project) {

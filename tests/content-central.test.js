@@ -2544,31 +2544,6 @@ test('animateContentForReels rejects an animator that resolves without a usable 
   });
 });
 
-test('creative reviewer treats an empty/malformed AI response as needing manual review, not automatic approval', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'revisor-vazio',
-      name: 'Revisor Vazio',
-      handle: '@revisorvazio',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-    await updateProjectBrandInput('revisor-vazio', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
-
-    const content = await simulateTestPost('revisor-vazio', {
-      channel: 'instagram_story',
-      imageGenerator: async () => ({ url: 'https://cdn.example.com/story.png', mimeType: 'image/png' }),
-      // Simulates a reviewer call that resolved with valid-but-empty JSON —
-      // no status, no checks, no errors, no warnings.
-      imageReviewer: async () => ({}),
-    }, dir, new Date('2026-07-15T12:00:00.000Z'));
-
-    assert.equal(content.creativeReview.status, 'warning');
-    assert.match(content.creativeReview.summary, /resposta vazia/i);
-    assert.ok(content.creativeReview.warnings.some((w) => /não retornou avaliação válida/i.test(w)));
-  });
-});
-
 test('AI safe test asks ChatGPT for a complete designed card and avoids automatic overlay fields', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -2598,11 +2573,6 @@ test('AI safe test asks ChatGPT for a complete designed card and avoids automati
           prompt: payload.content.image.prompt,
         };
       },
-      imageReviewer: async () => ({
-        status: 'ok',
-        summary: 'Card final ChatGPT aprovado com texto e preço corretos.',
-        checks: ['Canvas Story 9:16 ok.', 'Texto, preço e CTA conferem.'],
-      }),
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
 
     assert.equal(generatorCalls.length, 1);
@@ -2619,7 +2589,6 @@ test('AI safe test asks ChatGPT for a complete designed card and avoids automati
     assert.equal(content.image.previewMode, 'direct_ai_css_cover');
     assert.equal(content.image.composition, undefined);
     assert.equal(content.image.baseUrl, undefined);
-    assert.match(content.creativeReview.summary, /Card final ChatGPT aprovado/);
   });
 });
 
@@ -3524,273 +3493,28 @@ test('single-offer safe test variations avoid asking for two price cards', async
   });
 });
 
-test('creative reviewer blocks AI images with cropped text or unrelated offer prices', async () => {
+test('generateAiImageWithReviewLoop (via generation) never calls imageReviewer and always generates exactly once', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'revisor-criativo',
-      name: 'Revisor Criativo',
-      handle: '@revisorcriativo',
-      approvalEmail: 'aprovacao@example.com',
+    await createCentralProject({ projectId: 'sem-revisor', name: 'Sem Revisor', handle: '@semrevisor', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('sem-revisor', {
+      brandName: 'Sem Revisor', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
     }, dir);
-    await saveProjectOffer('revisor-criativo', {
-      name: 'Combo 3 pizzas',
-      type: 'combo',
-      price: '99,99',
-      items: '3 pizzas grandes',
-    }, dir, new Date('2026-07-15T12:00:00.000Z'));
-    await updateProjectBrandInput('revisor-criativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
-
-    const content = await simulateTestPost('revisor-criativo', {
-      channel: 'instagram_feed',
-      imageGenerator: async () => ({
-        url: 'https://cdn.example.com/combo-ruim.png',
-        mimeType: 'image/png',
-      }),
-      imageReviewer: async () => ({
-        status: 'blocked',
-        summary: 'Texto cortado e preço de rodízio indevido.',
-        errors: ['Texto principal cortado na borda.', 'Preço/oferta extra: Rodízio R$39,90.'],
-        warnings: [],
-        checks: ['Preço esperado 99,99 encontrado.'],
-      }),
-    }, dir, new Date('2026-07-18T09:00:00.000Z'));
-
-    assert.equal(content.creativeReview.status, 'blocked');
-    assert.match(content.creativeReview.summary, /Texto cortado/);
-    assert.deepEqual(content.creativeReview.errors, [
-      'Texto principal cortado na borda.',
-      'Preço/oferta extra: Rodízio R$39,90.',
-    ]);
-    assert.equal(content.contentReview.status, 'blocked');
-    assert.ok(content.contentReview.warnings.some((warning) => warning.includes('Revisor de Criativo bloqueou')));
-  });
-});
-
-test('creative reviewer blocks placeholder brand text when an official logo is attached', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'revisor-logo-placeholder',
-      name: 'Hygi Embalagem',
-      handle: '@hygi',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-
-    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-    await saveProjectAsset('revisor-logo-placeholder', {
-      kind: 'logo',
-      filename: 'logo.png',
-      dataUrl,
-    }, dir, new Date('2026-08-14T12:00:00.000Z'), {
-      logoColorAnalyzer: async () => ['#A8A8C0', '#D8D8F0'],
-    });
-    await updateProjectBrandInput('revisor-logo-placeholder', { segmentGroup: 'Servicos', segmentCategory: 'Embalagem' }, dir);
-    await registerCreativeTemplate('group:servicos/category:embalagem', 'offer', 'feed', dir);
+    await saveProjectOffer('sem-revisor', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'modelo.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'modelo', imagePath: analyzed.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
 
     const generatorCalls = [];
-    const reviewerCalls = [];
-    const content = await simulateTestPost('revisor-logo-placeholder', {
-      channel: 'instagram_feed',
-      maxCreativeAttempts: 2,
-      imageGenerator: async ({ content: currentContent, reviewFeedback }) => {
-        generatorCalls.push({ reviewFeedback, references: currentContent.image.references });
-        return { url: `https://cdn.example.com/tentativa-${generatorCalls.length}.png`, mimeType: 'image/png' };
-      },
-      imageReviewer: async () => {
-        reviewerCalls.push(true);
-        if (reviewerCalls.length === 1) {
-          return {
-            status: 'warning',
-            summary: 'A marca aparece como placeholder “SUA MARCA”.',
-            warnings: ['A marca aparece como placeholder “SUA MARCA”; substituir pela identidade final antes da publicação, se aplicável.'],
-            errors: [],
-            checks: ['Texto legível.'],
-          };
-        }
-        return { status: 'ok', summary: 'Logo oficial aplicada.', checks: ['Logo Hygi legível.'], warnings: [], errors: [] };
-      },
-    }, dir, new Date('2026-08-14T12:30:00.000Z'));
-
-    assert.ok(generatorCalls[0].references.some((reference) => reference.role === 'brand_asset'));
-    assert.equal(generatorCalls.length, 2);
-    assert.equal(content.creativeReview.status, 'ok');
-    assert.match(generatorCalls[1].reviewFeedback, /placeholder/i);
-    assert.match(generatorCalls[1].content?.image?.prompt || generatorCalls[1].reviewFeedback, /SUA MARCA|placeholder/i);
-  });
-});
-
-test('safe test retries AI image generation with reviewer feedback until creative review passes', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'revisor-refaz',
-      name: 'Revisor Refaz',
-      handle: '@revisorrefaz',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-    await saveProjectOffer('revisor-refaz', {
-      name: 'Combo 10 Esfiha',
-      type: 'combo',
-      price: '55,00',
-      items: 'Salgadas: Presunto, Queijo, Bacon, Atum, Milho, Carne, Calabresa, Frango e Palmito.',
-      cta: 'Peça no delivery',
-    }, dir, new Date('2026-07-15T12:00:00.000Z'));
-    await updateProjectBrandInput('revisor-refaz', { segmentGroup: 'Alimenticio', segmentCategory: 'Esfiharia' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:esfiharia', 'offer', 'vertical', dir);
-
-    const generatorCalls = [];
-    const reviewerCalls = [];
-    const content = await simulateTestPost('revisor-refaz', {
+    let reviewerCalls = 0;
+    await simulateTestPost('sem-revisor', {
       channel: 'instagram_story',
-      imageGenerator: async (payload) => {
-        generatorCalls.push(payload);
-        return {
-          url: `https://cdn.example.com/tentativa-${generatorCalls.length}.png`,
-          mimeType: 'image/png',
-          prompt: payload.content.image.prompt,
-        };
-      },
-      imageReviewer: async (payload) => {
-        reviewerCalls.push(payload);
-        if (reviewerCalls.length === 1) {
-          return {
-            status: 'blocked',
-            summary: 'Formato quadrado e texto cortado.',
-            errors: [
-              'Formato visual está quadrado, incompatível com Instagram Stories 9:16.',
-              'Texto principal cortado na lateral esquerda.',
-              'Box do preço está grande demais e com moldura simples.',
-            ],
-          };
-        }
-        return {
-          status: 'ok',
-          summary: 'Imagem refeita em Story 9:16 com texto e preço dentro da área segura.',
-          checks: ['Formato Story 9:16 aprovado.', 'Preço 55,00 legível e sem moldura exagerada.'],
-        };
-      },
-    }, dir, new Date('2026-07-18T09:00:00.000Z'));
+      imageGenerator: async (payload) => { generatorCalls.push(payload); return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+      imageReviewer: async () => { reviewerCalls += 1; return { status: 'blocked', errors: ['nunca deveria rodar'] }; },
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
 
-    assert.equal(generatorCalls.length, 2);
-    assert.equal(reviewerCalls.length, 2);
-    assert.equal(content.image.url, 'https://cdn.example.com/tentativa-2.png');
-    assert.equal(content.creativeReview.status, 'ok');
-    assert.equal(content.contentReview.status, 'ok');
-    assert.equal(content.image.generationAttempts, 2);
-    assert.match(generatorCalls[1].reviewFeedback, /Formato visual está quadrado/i);
-    assert.match(generatorCalls[1].content.image.prompt, /Correções obrigatórias do revisor/i);
-    assert.match(generatorCalls[1].content.image.prompt, /moldura simples/i);
-  });
-});
-
-test('safe test enters rescue mode after repeated Story canvas format blocks', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'story-resgate',
-      name: 'Story Resgate',
-      handle: '@storyresgate',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lm9U5wAAAABJRU5ErkJggg==';
-    await saveProjectAsset('story-resgate', {
-      kind: 'reference',
-      filename: 'layout-horizontal.png',
-      dataUrl,
-      role: 'layout_model',
-      usageRoles: ['layout_model'],
-      weight: 'high',
-    }, dir, new Date('2026-07-15T12:00:00.000Z'));
-    await saveProjectAsset('story-resgate', {
-      kind: 'reference',
-      filename: 'pizza-produto.png',
-      dataUrl,
-      role: 'product_photo',
-      usageRoles: ['product_photo'],
-      weight: 'high',
-    }, dir, new Date('2026-07-15T12:01:00.000Z'));
-    await saveProjectOffer('story-resgate', {
-      name: 'Pizza Grande',
-      type: 'direct_offer',
-      price: '49,99',
-      items: 'Pizza grande.',
-      cta: 'Peça no delivery',
-    }, dir, new Date('2026-07-15T12:02:00.000Z'));
-    await updateProjectBrandInput('story-resgate', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
-
-    const generatorCalls = [];
-    const reviewerCalls = [];
-    const content = await simulateTestPost('story-resgate', {
-      channel: 'instagram_story',
-      imageGenerator: async (payload) => {
-        generatorCalls.push(payload);
-        return {
-          url: `https://cdn.example.com/story-resgate-${generatorCalls.length}.png`,
-          mimeType: 'image/png',
-          prompt: payload.content.image.prompt,
-        };
-      },
-      imageReviewer: async () => {
-        reviewerCalls.push(true);
-        if (reviewerCalls.length < 4) {
-          return {
-            status: 'blocked',
-            summary: 'Bloqueado por formato incompatível com Instagram Stories.',
-            errors: [
-              'Formato visual claramente incompatível com Instagram Stories: imagem em canvas horizontal com área central vertical, não em arte final 9:16 própria para Stories.',
-              'A composição parece uma prévia vertical dentro de formato horizontal, o que viola a regra de bloquear Story/Reels quando não estiver claramente em formato vertical adequado.',
-            ],
-          };
-        }
-        return {
-          status: 'ok',
-          summary: 'Story vertical resgatado e aprovado.',
-          checks: ['Canvas final 9:16 real aprovado.'],
-        };
-      },
-    }, dir, new Date('2026-07-18T09:00:00.000Z'));
-
-    assert.equal(generatorCalls.length, 4);
-    assert.equal(reviewerCalls.length, 4);
-    assert.equal(content.creativeReview.status, 'ok');
-    assert.equal(content.image.generationAttempts, 4);
-    assert.equal(generatorCalls[3].rescueMode, true);
-    assert.match(generatorCalls[3].content.image.prompt, /MODO RESGATE DE STORY/i);
-    assert.ok(generatorCalls[3].content.image.references.some((reference) => reference.role === 'layout_model'));
-    assert.ok(generatorCalls[3].content.image.references.some((reference) => reference.role === 'product_photo'));
-    assert.match(generatorCalls[3].content.image.prompt, /manter o modelo de layout anexado como estrutura/i);
-  });
-});
-
-test('blocked creative review prevents approval payload creation', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'bloqueia-aprovacao',
-      name: 'Bloqueia Aprovacao',
-      handle: '@bloqueiaaprovacao',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-    await saveProjectOffer('bloqueia-aprovacao', {
-      name: 'Combo 3 pizzas',
-      type: 'combo',
-      price: '99,99',
-      items: '3 pizzas grandes',
-    }, dir, new Date('2026-07-15T12:00:00.000Z'));
-    await updateProjectBrandInput('bloqueia-aprovacao', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
-    const content = await simulateTestPost('bloqueia-aprovacao', {
-      channel: 'instagram_feed',
-      imageGenerator: async () => ({ url: 'https://cdn.example.com/bloqueado.png', mimeType: 'image/png' }),
-      imageReviewer: async () => ({
-        status: 'blocked',
-        summary: 'Texto cortado.',
-        errors: ['Texto cortado na lateral.'],
-      }),
-    }, dir, new Date('2026-07-18T09:00:00.000Z'));
-
-    await assert.rejects(
-      () => buildApprovalPayload('bloqueia-aprovacao', content.contentId, dir),
-      /Revisor de Criativo bloqueou/
-    );
+    assert.equal(reviewerCalls, 0);
+    assert.equal(generatorCalls.length, 1);
+    assert.equal(generatorCalls[0].content.image.generationAttempts, 1);
   });
 });
 
@@ -4182,72 +3906,6 @@ test('a registered sales offer keeps its CTA and full notes even when assigned t
     assert.doesNotMatch(calls[0].content.image.prompt, /Visual gastronômico|arroz\/prato|ambiente real de pizzaria/i);
     assert.equal(content.creativeSpec.offer.isSales, true);
     assert.equal(content.creativeGenerationManifest[0].provider, 'fake');
-  });
-});
-
-test('creative reviewer does not turn a positive "sem placeholder" check into a false logo block or Story rescue', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'revisor-logo-sem-falso-positivo',
-      name: 'Marca Real',
-      handle: '@marcareal',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-    await saveProjectAsset('revisor-logo-sem-falso-positivo', {
-      kind: 'logo',
-      filename: 'logo.png',
-      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
-    }, dir);
-    await updateProjectBrandInput('revisor-logo-sem-falso-positivo', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
-    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
-
-    const generatorCalls = [];
-    const content = await simulateTestPost('revisor-logo-sem-falso-positivo', {
-      channel: 'instagram_story',
-      maxCreativeAttempts: 2,
-      imageGenerator: async (payload) => {
-        generatorCalls.push(payload);
-        return { url: 'https://cdn.example.com/logo-ok.png', mimeType: 'image/png' };
-      },
-      imageReviewer: async () => ({
-        status: 'ok',
-        summary: 'Arte aprovada para Instagram Stories.',
-        checks: ['Logo real aplicada corretamente, sem placeholder.'],
-        warnings: [],
-        errors: [],
-      }),
-    }, dir, new Date('2026-08-15T12:00:00.000Z'));
-
-    assert.equal(generatorCalls.length, 1);
-    assert.equal(content.creativeReview.status, 'ok');
-    assert.deepEqual(content.creativeReview.errors, []);
-    assert.ok(!content.creativeReview.codes.includes('PLACEHOLDER_LOGO'));
-  });
-});
-
-test('creative reviewer score gates block an inconsistent ok response and persist structured repair codes', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'revisor-score-gate', name: 'Score Gate' }, dir);
-    await updateProjectBrandInput('revisor-score-gate', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
-    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
-    const content = await simulateTestPost('revisor-score-gate', {
-      channel: 'instagram_feed',
-      maxCreativeAttempts: 1,
-      imageGenerator: async () => ({ url: 'https://cdn.example.com/score.png', mimeType: 'image/png' }),
-      imageReviewer: async () => ({
-        status: 'ok',
-        summary: 'Aprovada para publicar.',
-        scores: { format: 100, facts: 70, visualQuality: 90 },
-        checks: ['Formato correto.'],
-        warnings: [],
-        errors: [],
-      }),
-    }, dir, new Date('2026-08-15T12:30:00.000Z'));
-
-    assert.equal(content.creativeReview.status, 'blocked');
-    assert.match(content.creativeReview.summary, /precisa de revisão/i);
-    assert.ok(content.creativeReview.codes.includes('MISSING_INFORMATION'));
-    assert.ok(content.creativeReview.errors.some((error) => error.includes('facts')));
   });
 });
 
@@ -6529,7 +6187,6 @@ test('an institutional special-date post (no offer linked) gets a warm, celebrat
         generatorCalls.push(payload);
         return { url: 'https://cdn.example.com/dia-dos-pais.png', mimeType: 'image/png' };
       },
-      imageReviewer: async () => ({ status: 'ok', summary: 'ok', checks: [] }),
     });
 
     assert.equal(generatorCalls.length, 1);
