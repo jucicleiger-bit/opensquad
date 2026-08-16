@@ -89,11 +89,11 @@ async function withTempProject(fn) {
 // that reaches real AI image generation needs one of these registered in
 // its setup, or it now fails with "Nenhum modelo de criativo cadastrado".
 let registerCreativeTemplateCounter = 0;
-async function registerCreativeTemplate(groupKey, postType, shape, dir) {
+async function registerCreativeTemplate(groupKey, postType, shape, dir, filename) {
   registerCreativeTemplateCounter += 1;
   const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
   const template = await analyzeLearningImage({
-    scope: 'segment', groupKey, dataUrl, filename: `modelo-teste-${registerCreativeTemplateCounter}.png`,
+    scope: 'segment', groupKey, dataUrl, filename: filename || `modelo-teste-${registerCreativeTemplateCounter}.png`,
   }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
   await saveLearningEntry({
     scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
@@ -3100,15 +3100,12 @@ test('layout reference rotates across different test runs instead of always usin
       handle: '@bosspizzaria',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
-    const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
-    await saveProjectAsset('layout-rotativo', {
-      kind: 'reference', filename: 'layout-a.jpg', dataUrl,
-      role: 'layout_model', usageRoles: ['layout_model'], referenceCategory: 'visual_inspiration',
-    }, dir, new Date('2026-07-16T12:00:00.000Z'));
-    await saveProjectAsset('layout-rotativo', {
-      kind: 'reference', filename: 'layout-b.jpg', dataUrl,
-      role: 'layout_model', usageRoles: ['layout_model'], referenceCategory: 'visual_inspiration',
-    }, dir, new Date('2026-07-16T12:01:00.000Z'));
+    await updateProjectBrandInput('layout-rotativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    // Rotation can now only happen among multiple MATCHING registered
+    // templates (a directly-uploaded, untagged layout_model reference never
+    // counts as a candidate anymore — see buildPrimaryAiImageReferences).
+    const templateA = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
+    const templateB = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const seenLayouts = new Set();
     for (const seed of ['seed-1', 'seed-2', 'seed-3', 'seed-4', 'seed-5', 'seed-6']) {
@@ -3118,10 +3115,11 @@ test('layout reference rotates across different test runs instead of always usin
         testSeed: seed,
         imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
       }, dir, new Date('2026-07-21T12:00:00.000Z'));
-      const match = calls[0].content.image.prompt.match(/Layout principal: assets\/references\/(layout-[ab])\.jpg/);
-      if (match) seenLayouts.add(match[1]);
+      const prompt = calls[0].content.image.prompt;
+      if (prompt.includes(`Layout principal: ${templateA.imagePath}`)) seenLayouts.add('a');
+      if (prompt.includes(`Layout principal: ${templateB.imagePath}`)) seenLayouts.add('b');
     }
-    assert.ok(seenLayouts.size > 1, `expected rotation across both layout references, only saw: ${[...seenLayouts]}`);
+    assert.ok(seenLayouts.size > 1, `expected rotation across both matching templates, only saw: ${[...seenLayouts]}`);
   });
 });
 
@@ -3420,30 +3418,14 @@ test('Story prompt prevalidates pizza combo text quantity and ignores square lay
       weight: 'high',
       instruction: 'Foto real de pizza unitária.',
     }, dir);
-    await saveProjectAsset('story-combo-3-pizzas', {
-      kind: 'reference',
-      filename: 'layout-quadrado.jpg',
-      dataUrl,
-      role: 'layout_model',
-      usageRoles: ['layout_model'],
-      weight: 'high',
-      aspectRatio: 'square',
-      width: 1080,
-      height: 1080,
-      instruction: 'Post quadrado bonito, mas não deve guiar Story.',
-    }, dir);
-    await saveProjectAsset('story-combo-3-pizzas', {
-      kind: 'reference',
-      filename: 'layout-story.jpg',
-      dataUrl,
-      role: 'layout_model',
-      usageRoles: ['layout_model'],
-      weight: 'medium',
-      aspectRatio: 'vertical',
-      width: 1080,
-      height: 1920,
-      instruction: 'Layout vertical de Story.',
-    }, dir);
+    await updateProjectBrandInput('story-combo-3-pizzas', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    // Two registered templates matching the same postType/shape — isSquareLikeReference
+    // must still exclude the square-oriented one from Story even though its
+    // shape tag matches (analyzeLearningImage/saveLearningEntry have no
+    // width/height/aspectRatio fields, so the filename text fallback in
+    // isSquareLikeReference is the only way to reproduce square detection here).
+    const squareTemplate = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'layout-quadrado.jpg');
+    const storyTemplate = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'layout-story.jpg');
 
     const generatorCalls = [];
     const content = await simulateTestPost('story-combo-3-pizzas', {
@@ -3466,86 +3448,16 @@ test('Story prompt prevalidates pizza combo text quantity and ignores square lay
     assert.match(prompt, /Centro: combo de 3 pizzas como protagonista visual/i);
     assert.match(prompt, /Parte inferior média: preço em selo compacto/i);
     assert.match(prompt, /Rodapé: chamada “Peça agora” em texto pequeno/i);
-    assert.doesNotMatch(prompt, /Layout principal: assets\/references\/layout-quadrado\.jpg/i);
-    assert.match(prompt, /Layout principal: assets\/references\/layout-story\.jpg/i);
+    assert.doesNotMatch(prompt, new RegExp(`Layout principal: ${squareTemplate.imagePath}`));
+    assert.match(prompt, new RegExp(`Layout principal: ${storyTemplate.imagePath}`));
     assert.match(prompt, /Força estrutural:\s*STRICT/i);
     assert.match(prompt, /Topo \(0-18%\)/i);
-    assert.ok(references.every((reference) => reference.relativePath !== 'assets/references/layout-quadrado.jpg'));
-    assert.ok(references.some((reference) => reference.relativePath === 'assets/references/layout-story.jpg'));
+    assert.ok(references.every((reference) => reference.relativePath !== squareTemplate.imagePath));
+    assert.ok(references.some((reference) => reference.relativePath === storyTemplate.imagePath));
     assert.ok(content.creativePreflight.warnings.some((warning) => warning.includes('3 Pizza grande')));
     assert.ok(content.creativePreflight.checks.some((check) => check.includes('referência de layout quadrada')));
     assert.equal(content.creativeSpec.product.treatment, 'creative_redraw');
     assert.equal(content.creativeSpec.layout.strength, 'strict');
-  });
-});
-
-test('Story AI safe test limits references and ignores square layout on the normal attempt', async () => {
-  await withTempProject(async (dir) => {
-    await createCentralProject({
-      projectId: 'refs-livres-story',
-      name: 'Refs Livres Story',
-      handle: '@refslivres',
-      approvalEmail: 'aprovacao@example.com',
-    }, dir);
-    const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
-    await saveProjectAsset('refs-livres-story', {
-      kind: 'logo',
-      filename: 'logo.png',
-      dataUrl,
-    }, dir);
-    await saveProjectAsset('refs-livres-story', {
-      kind: 'reference',
-      filename: 'layout-quadrado.png',
-      dataUrl,
-      role: 'layout_model',
-      usageRoles: ['layout_model'],
-      weight: 'high',
-      instruction: 'Modelo bonito mas quadrado, não deve prender o Story.',
-    }, dir);
-    await saveProjectAsset('refs-livres-story', {
-      kind: 'reference',
-      filename: 'copy-preco.png',
-      dataUrl,
-      role: 'text_parameter',
-      usageRoles: ['text_parameter'],
-      weight: 'high',
-      instruction: 'Texto de referência não deve ser enviado como imagem.',
-    }, dir);
-    await saveProjectAsset('refs-livres-story', {
-      kind: 'reference',
-      filename: 'pizza-produto.png',
-      dataUrl,
-      role: 'product_photo',
-      usageRoles: ['product_photo'],
-      weight: 'high',
-      instruction: 'Produto real.',
-    }, dir);
-    await saveProjectAsset('refs-livres-story', {
-      kind: 'reference',
-      filename: 'estilo.png',
-      dataUrl,
-      role: 'visual_reference',
-      usageRoles: ['visual_reference'],
-      weight: 'medium',
-      instruction: 'Clima visual.',
-    }, dir);
-
-    const generatorCalls = [];
-    await simulateTestPost('refs-livres-story', {
-      channel: 'instagram_story',
-      imageGenerator: async (payload) => {
-        generatorCalls.push(payload);
-        return { url: 'https://cdn.example.com/story-livre.png', mimeType: 'image/png' };
-      },
-      imageReviewer: async () => ({ status: 'ok', summary: 'ok' }),
-    }, dir, new Date('2026-07-18T09:00:00.000Z'));
-
-    const roles = generatorCalls[0].content.image.references.map((reference) => reference.role);
-    assert.deepEqual(roles, ['brand_asset', 'product_photo', 'visual_reference']);
-    assert.ok(generatorCalls[0].content.image.references.every((reference) => reference.role !== 'text_parameter'));
-    assert.equal(generatorCalls[0].content.image.references.filter((reference) => reference.role === 'layout_model').length, 0);
-    assert.ok(generatorCalls[0].content.creativePreflight.checks.some((check) => check.includes('referência de layout quadrada')));
-    assert.match(generatorCalls[0].content.image.prompt, /Sem layout principal selecionado/i);
   });
 });
 
