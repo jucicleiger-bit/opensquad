@@ -3322,11 +3322,19 @@ async function reviewAiImageWithCodexAgent({ content, project, note }) {
     .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     .map((reference) => reference.absolutePath)
     .filter((referencePath) => referencePath && referencePath !== imagePath);
-  const raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath, ...comparisonPaths]);
+  // An empty response here used to ship the card with no real review at
+  // all — a transient hiccup (the CLI call returning null) silently became
+  // "warning, review it yourself later" and the card went out anyway. Retry
+  // a couple of times first; only fall back to the manual-review warning
+  // once the reviewer has genuinely failed 3 times in a row.
+  let raw = null;
+  for (let attempt = 1; attempt <= 3 && !raw; attempt += 1) {
+    raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath, ...comparisonPaths]);
+  }
   if (!raw) {
     return {
       status: 'warning',
-      summary: 'Revisor automático indisponível (a IA não retornou resposta).',
+      summary: 'Revisor automático indisponível (a IA não retornou resposta após 3 tentativas).',
       checks: [],
       warnings: ['Faça revisão visual manual antes de aprovar.'],
       errors: [],

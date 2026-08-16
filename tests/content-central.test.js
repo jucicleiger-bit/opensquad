@@ -2495,8 +2495,8 @@ test('Feed offer prompt uses a sales hook title, stronger CTA and blocks fake ur
 
     const prompt = generatorCalls[0].content.image.prompt;
     assert.match(prompt, /Título: criar um título-gancho curto.*Combo Família/i);
-    assert.match(prompt, /CTA exato: Peça agora/i);
-    assert.doesNotMatch(prompt, /CTA exato: Saiba mais/i);
+    assert.match(prompt, /CTA sutil: "Peça agora"/i);
+    assert.doesNotMatch(prompt, /CTA sutil: "Saiba mais"/i);
     assert.match(prompt, /Não criar urgência, estoque, prazo, desconto ou garantia falsa/i);
   });
 });
@@ -2567,7 +2567,7 @@ test('Urgency offer prompt uses only the real urgency written by the operator', 
     const prompt = generatorCalls[0].content.image.prompt;
     assert.match(prompt, /Urgência real cadastrada: Válido somente nesta sexta-feira no salão\.?/i);
     assert.match(prompt, /Não inventar outra urgência além da cadastrada/i);
-    assert.match(prompt, /CTA exato: Peça agora/i);
+    assert.match(prompt, /CTA sutil: "Peça agora"/i);
   });
 });
 
@@ -3912,14 +3912,14 @@ test('Feed gets a direct default CTA for sales offers when the offer has no expl
       channel: 'instagram_feed',
       imageGenerator: async (payload) => { feedCalls.push(payload); return { url: 'https://cdn.example.com/feed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(feedCalls[0].content.image.prompt, /CTA exato:\s*Peça agora/i);
+    assert.match(feedCalls[0].content.image.prompt, /CTA sutil: "Peça agora"/i);
 
     const fbFeedCalls = [];
     await simulateTestPost('cta-feed-suave', {
       channel: 'facebook_feed',
       imageGenerator: async (payload) => { fbFeedCalls.push(payload); return { url: 'https://cdn.example.com/fbfeed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(fbFeedCalls[0].content.image.prompt, /CTA exato:\s*Peça agora/i);
+    assert.match(fbFeedCalls[0].content.image.prompt, /CTA sutil: "Peça agora"/i);
 
     const storyCalls = [];
     await simulateTestPost('cta-feed-suave', {
@@ -3930,7 +3930,7 @@ test('Feed gets a direct default CTA for sales offers when the offer has no expl
   });
 });
 
-test('an offer\'s explicit CTA is still respected on Feed, instead of being overridden by the softer default', async () => {
+test('an offer\'s explicit CTA is still respected on Feed, folded into the same subtle text treatment as Story — no drawn button/selo outside ad creatives', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'cta-explicito-feed',
@@ -3950,7 +3950,7 @@ test('an offer\'s explicit CTA is still respected on Feed, instead of being over
       channel: 'instagram_feed',
       imageGenerator: async (payload) => { feedCalls.push(payload); return { url: 'https://cdn.example.com/feed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(feedCalls[0].content.image.prompt, /CTA exato:\s*Reserve sua mesa/i);
+    assert.match(feedCalls[0].content.image.prompt, /CTA sutil: "Reserve sua mesa"/i);
   });
 });
 

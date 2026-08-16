@@ -5263,7 +5263,15 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   const layoutReference = selectedReferences.find((reference) => reference.role === 'layout_model');
   const cta = chooseCreativeCta(topic, targetChannel);
   const productTreatment = normalizeProductTreatment(topic.productTreatment, productReferences.length > 0);
-  const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference));
+  // A layout_model's zones (price selo in the base band, CTA in the
+  // footer) are learned from approved OFFER cards. Forcing STRICT
+  // adherence onto a topic with neither price nor CTA makes the model
+  // cram title/benefit text into bands sized for elements that don't
+  // exist here — the exact "benefit block invades the footer zone" defect
+  // the reviewer kept flagging on institutional/goal posts. Only an offer
+  // with a real price or CTA gets the strict zone lock by default.
+  const hasPriceOrCta = Boolean(normalizeCreativePrice(topic.price)) || Boolean(cta);
+  const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference) && hasPriceOrCta);
   return {
     schemaVersion: 1,
     project: {
@@ -5352,13 +5360,14 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   const isVerticalStory = isVerticalStoryChannel(targetChannel);
   const useSalesHookTitle = creativeShapeGroupForChannel(targetChannel) === 'feed' && !isFreeTitleTopic && isSalesTopic(topic);
   const realUrgency = topic.type === 'urgency' ? cleanPromptText(topic.notes) : '';
-  // A drawn button/selo isn't actually clickable in a Story/Reels asset —
-  // the real action there happens through DM/reply, not a tap on the image
-  // — so a bold CTA button reads as a UI element that does nothing. Feed
-  // keeps the bold button treatment (bio link makes it a real next step);
-  // vertical formats get the same CTA text folded into a small, subtitle-
-  // style line instead, never a button/pill/selo.
-  const useSubtleCta = isVerticalStory && Boolean(exactCta);
+  // Client policy: a drawn CTA button/selo is reserved for actual paid ad
+  // creatives (topic.source === 'ad_creative') — those compete for
+  // scroll-stopping attention and appendAdCreativeFraming() already frames
+  // them that way. Every organic post, Story or Feed alike, keeps the CTA
+  // folded into a small, subtitle-style text line instead — never a
+  // button/pill/selo, even on Feed where a bio-link CTA button used to be
+  // allowed.
+  const useSubtleCta = topic.source !== 'ad_creative' && Boolean(exactCta);
   const logoReferences = selectedReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
   const productReferences = selectedReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2);
   // Only trust a photo as "this exact real product" when it's the one this
@@ -5429,7 +5438,12 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Utilizar a logo oficial anexada.',
       'Preservar desenho, nome, cores e proporções; não redesenhar nem criar outra versão.',
       'Cores oficiais da marca têm prioridade absoluta.',
-      'Posicionar a logo em área natural, legível, sem corte, tamanho pequeno (~8% da largura), não dominante.',
+      // ~8% of a 1080px canvas is ~86px — too small to stay crisp once the
+      // logo has any text/tagline/contact line inside it, and "logo pequena
+      // e desfocada" was a recurring block reason across attempts. 12% keeps
+      // it clearly non-dominant while giving compound logos room to render
+      // legibly.
+      'Posicionar a logo em área natural, legível, sem corte, tamanho pequeno a médio (~12% da largura), não dominante. Se a logo tiver texto, nome ou contato dentro dela, esse texto precisa ficar nítido e legível — nunca borrado ou pequeno demais para ler.',
       ...logoReferences.map((reference) => `Logo: ${reference.relativePath}`),
     ] : ['Não há logo oficial anexada; não inventar logotipo.']),
     section('PRODUTOS OU FOTOS REAIS', productReferences.length ? [
@@ -5901,9 +5915,19 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   const linkedPhotos = linkedPhotoIds.size
     ? selected.filter((reference) => reference.role === 'product_photo' && linkedPhotoIds.has(reference.id)).slice(0, 2)
     : [];
+  // Institutional/authority/relationship posts (source 'goal') aren't about
+  // one specific product — with a multi-product catalog, the keyword-guess
+  // pool below hands them 2 unrelated photos (e.g. a random marmita for a
+  // generic "packaging builds trust" post) and the prompt then mandates
+  // that photo as the visual protagonist, turning every goal post into a
+  // plain product shot instead of the conceptual/benefit-led piece it
+  // should be. Only an explicit photoReferenceIds pick opts a goal topic
+  // into a real product photo; the pool guess stays offer-topics-only.
   const productPhotos = linkedPhotos.length
     ? linkedPhotos
-    : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
+    : options.topic?.source === 'goal'
+      ? []
+      : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
   const storyCompatibleLayouts = selected.filter((reference) => (
     reference.role === 'layout_model'
     && (!isStory || !isSquareLikeReference(reference))
