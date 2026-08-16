@@ -147,7 +147,7 @@ In `generateAiImageWithReviewLoop` (content-central.js):
 **Update (Task 5, merged):** the plan above described leaving
 `normalizeCreativeReview`, its `thresholds` object, and the rest of the
 AI-scored review subsystem in place as dead code. That's no longer what
-shipped — Task 5 went further and deleted all twelve of those
+shipped — Task 5 went further and deleted all thirteen of those
 functions/consts outright from `content-central.js`
 (`normalizeCreativeAttemptLimit`, `appendCreativeReviewCorrections`,
 `appendCreativeRescueCorrections`, `shouldEnterStoryRescueMode`,
@@ -212,7 +212,7 @@ works.
   (`buildAiImageReviewPrompt`, `reviewAiImageWithCodexAgent`,
   `reviewImageForActiveTextProvider` in content-central-server.js) instead
   of leaving it wired but unreachable. (The content-central.js half of
-  this — `normalizeCreativeReview` and the other eleven
+  this — `normalizeCreativeReview` and the other twelve
   functions/consts — is no longer an open follow-up: Task 5 already
   deleted it. See "Review loop removal" above.)
 - A dedicated "Modelos de criativo" management UI in content-central-app
