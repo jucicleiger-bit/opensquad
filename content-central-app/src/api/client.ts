@@ -186,6 +186,8 @@ export interface SegmentLearningEntry {
   text: string;
   imagePath?: string;
   purpose?: "product" | "creative";
+  postType?: "offer" | "institutional" | "special_date" | "ad_creative";
+  shape?: "vertical" | "feed";
   // The project the image was actually uploaded to — segment/offer-type
   // learning stores are global (shared across projects), but the file
   // itself lives under this project's own assets directory. Only set for
@@ -826,7 +828,7 @@ export function analyzeLearningImage(
 }
 
 export function saveLearningEntry(
-  input: { scope: "segment" | "offerType"; groupKey: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; text: string; imagePath?: string; purpose?: "product" | "creative" },
+  input: { scope: "segment" | "offerType"; groupKey: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; text: string; imagePath?: string; purpose?: "product" | "creative"; postType?: "offer" | "institutional" | "special_date" | "ad_creative"; shape?: "vertical" | "feed" },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
   return api(`/api/segment-learnings/entries`, {
     method: "POST",

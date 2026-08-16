@@ -20,6 +20,8 @@ export function LearningGallery({
   const [busy, setBusy] = useState(false);
   const [pendingImage, setPendingImage] = useState<{ imagePath: string; suggestedText: string; purpose?: "product" | "creative" } | null>(null);
   const [pendingImageText, setPendingImageText] = useState("");
+  const [pendingPostType, setPendingPostType] = useState<"offer" | "institutional" | "special_date" | "ad_creative" | "">("");
+  const [pendingShape, setPendingShape] = useState<"vertical" | "feed" | "">("");
   const [error, setError] = useState<string | null>(null);
 
   async function handleAddText() {
@@ -57,10 +59,15 @@ export function LearningGallery({
     setBusy(true);
     setError(null);
     try {
-      const result = await saveLearningEntry({ scope, groupKey, bucket: "approved", kind: "image", text: pendingImageText, imagePath: pendingImage.imagePath, purpose: pendingImage.purpose });
+      const result = await saveLearningEntry({
+        scope, groupKey, bucket: "approved", kind: "image", text: pendingImageText, imagePath: pendingImage.imagePath, purpose: pendingImage.purpose,
+        ...(pendingImage.purpose === "creative" ? { postType: pendingPostType || undefined, shape: pendingShape || undefined } : {}),
+      });
       onEntriesChange(result.entries);
       setPendingImage(null);
       setPendingImageText("");
+      setPendingPostType("");
+      setPendingShape("");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -146,9 +153,31 @@ export function LearningGallery({
         <Card style={{ padding: 12, marginTop: 8 }}>
           <p className="muted">A IA descreveu: revise antes de confirmar.</p>
           <textarea value={pendingImageText} onChange={(e) => setPendingImageText(e.target.value)} />
+          {pendingImage.purpose === "creative" ? (
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <div>
+                <label htmlFor="pending-post-type">Tipo de post</label>
+                <select id="pending-post-type" value={pendingPostType} onChange={(e) => setPendingPostType(e.target.value as typeof pendingPostType)}>
+                  <option value="">Selecione</option>
+                  <option value="offer">Oferta</option>
+                  <option value="institutional">Institucional</option>
+                  <option value="special_date">Data comemorativa</option>
+                  <option value="ad_creative">Anúncio pago</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="pending-shape">Formato</label>
+                <select id="pending-shape" value={pendingShape} onChange={(e) => setPendingShape(e.target.value as typeof pendingShape)}>
+                  <option value="">Selecione</option>
+                  <option value="vertical">Vertical (Stories/Reels)</option>
+                  <option value="feed">Feed</option>
+                </select>
+              </div>
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <Button disabled={busy} onClick={handleConfirmImage}>Confirmar</Button>
-            <Button variant="secondary" onClick={() => setPendingImage(null)}>Descartar</Button>
+            <Button variant="secondary" onClick={() => { setPendingImage(null); setPendingPostType(""); setPendingShape(""); }}>Descartar</Button>
           </div>
         </Card>
       ) : null}
