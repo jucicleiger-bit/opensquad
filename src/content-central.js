@@ -5881,6 +5881,17 @@ function cleanPromptText(value) {
     .trim();
 }
 
+// Mirrors the same classification buildChatGptFinalCardPrompt already
+// computes inline as isGoalTopic/isSpecialDateFreeTitle/isAdCreativeFreeTitle
+// — pulled out here as its own function so template lookup and prompt
+// building never drift into disagreeing about what counts as which type.
+function deriveCreativePostType(topic = {}) {
+  if (topic.source === 'goal') return 'institutional';
+  if (topic.source === 'special_date' && !topic.offerId) return 'special_date';
+  if (topic.source === 'ad_creative' && !topic.offerId) return 'ad_creative';
+  return 'offer';
+}
+
 function buildPrimaryAiImageReferences(references, options = {}) {
   const allowedRoles = new Set(['brand_asset', 'product_photo', 'layout_model', 'visual_reference']);
   const isStory = isVerticalStoryChannel(options.channel);
@@ -5940,16 +5951,26 @@ function buildPrimaryAiImageReferences(references, options = {}) {
     : options.topic?.source === 'goal'
       ? []
       : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
-  const storyCompatibleLayouts = selected.filter((reference) => (
+  const postType = deriveCreativePostType(options.topic);
+  const shape = creativeShapeGroupForChannel(options.channel);
+  // A template is now mandatory, not a suggestion — an untagged legacy
+  // layout_model reference (postType/shape both '') never counts as a
+  // match, or generation would silently keep working exactly like before
+  // this change for any project holding one, defeating the whole point.
+  const matchingLayouts = selected.filter((reference) => (
     reference.role === 'layout_model'
     && (!isStory || !isSquareLikeReference(reference))
+    && reference.postType === postType
+    && reference.shape === shape
   ));
-  // Rotate which single layout/inspiration reference gets used instead of
-  // always the same array-order match — with several layout references
-  // uploaded, every generation (even across separate test runs) was
-  // otherwise anchored to whichever one happened to be first, which is a
-  // big part of why repeated tests looked near-identical.
-  const layoutReferences = pickRotatingReferenceList(storyCompatibleLayouts, options.variationSeed, 1);
+  if (!matchingLayouts.length) {
+    throw new Error(`Nenhum modelo de criativo cadastrado para "${postType}" / "${shape || 'formato desconhecido'}" neste segmento — cadastre um modelo antes de gerar.`);
+  }
+  // Rotate which single layout reference gets used instead of always the
+  // same array-order match — with several matching templates uploaded,
+  // every generation (even across separate test runs) was otherwise
+  // anchored to whichever one happened to be first.
+  const layoutReferences = pickRotatingReferenceList(matchingLayouts, options.variationSeed, 1);
   const visualCandidates = selected.filter((reference) => reference.role === 'visual_reference');
   const visualReferences = pickRotatingReferenceList(visualCandidates, `${options.variationSeed || ''}-visual`, layoutReferences.length ? 0 : 1);
   return uniqueReferences([...brandAssets, ...productPhotos, ...layoutReferences, ...visualReferences]);

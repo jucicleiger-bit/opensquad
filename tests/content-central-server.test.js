@@ -40,14 +40,17 @@ import {
 } from '../src/content-central-server.js';
 import * as serverModule from '../src/content-central-server.js';
 import {
+  analyzeLearningImage,
   approveContent,
   createCentralProject,
   generateCatalogSchedulePlan,
   generateContentSchedulePlan,
   registerSegmentTemplate,
+  saveLearningEntry,
   saveProjectAsset,
   saveProjectOffer,
   saveProjectToken,
+  updateProjectBrandInput,
 } from '../src/content-central.js';
 
 async function withServer(fn, options = {}) {
@@ -72,6 +75,27 @@ async function request(server, path, options = {}) {
 }
 
 const execFileAsync = promisify(execFile);
+
+// buildPrimaryAiImageReferences now requires a registered creative template
+// (a segment-learning entry tagged purpose:'creative' with a matching
+// postType/shape) before AI generation is allowed to proceed — see task-3 of
+// the mandatory-creative-templates plan. Every pre-existing test that
+// reaches real AI image generation needs one of these registered in its
+// setup, or it now fails with "Nenhum modelo de criativo cadastrado".
+let registerCreativeTemplateCounter = 0;
+async function registerCreativeTemplate(groupKey, postType, shape, dir) {
+  registerCreativeTemplateCounter += 1;
+  const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const template = await analyzeLearningImage({
+    scope: 'segment', groupKey, dataUrl, filename: `modelo-teste-${registerCreativeTemplateCounter}.png`,
+  }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+  await saveLearningEntry({
+    scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
+    text: 'modelo de referência', imagePath: template.imagePath,
+    purpose: 'creative', postType, shape,
+  }, dir);
+  return template;
+}
 
 // Builds one approved-and-scheduled content item the same way the panel
 // does (create project -> generate a schedule plan -> approve one item
@@ -1002,6 +1026,9 @@ test('POST /api/projects/:id/adapt-segment-template adapts a registered template
       body: JSON.stringify({ projectId: 'prospect-adapt', name: 'Prospect Adapt', isProspect: true }),
     });
     const projectId = created.project.projectId;
+    await updateProjectBrandInput(projectId, { segmentGroup: 'Embalagens', segmentCategory: 'Casa de Embalagem' }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'vertical', dir);
 
     const { response, body } = await request(server, `/api/projects/${projectId}/adapt-segment-template`, {
       method: 'POST',
@@ -1736,6 +1763,8 @@ test('content central server regenerates a shared-creative group through /conten
       // background auto-enrichment involved) so the AI-call count below only
       // reflects the explicit group-regenerate call being tested.
       await createCentralProject({ projectId: 'grupo-web', name: 'Grupo Web' }, dir);
+      await updateProjectBrandInput('grupo-web', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+      await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
       const batch = await generateContentSchedulePlan('grupo-web', {
         days: 1,
         startDate: '2026-07-20',
@@ -1959,6 +1988,8 @@ test('client-facing briefing page serves a resized/compressed JPEG preview of ea
           approvalEmail: 'aprovacao@example.com',
         }),
       });
+      await updateProjectBrandInput('briefing-heavy', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+      await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
       await request(server, '/api/projects/briefing-heavy/generate', {
         method: 'POST',
         body: JSON.stringify({ days: 1, startDate: '2026-07-20', channel: 'instagram_feed' }),
@@ -2836,7 +2867,7 @@ test('content central API runs a safe test post simulation without real publishi
 test('content central API runs creative reviewer after AI safe test image generation', async () => {
   const generatorCalls = [];
   const reviewerCalls = [];
-  await withServer(async (_dir, server) => {
+  await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
       body: JSON.stringify({
@@ -2855,6 +2886,8 @@ test('content central API runs creative reviewer after AI safe test image genera
         items: '3 pizzas grandes',
       }),
     });
+    await updateProjectBrandInput('review-agent-web', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const result = await request(server, '/api/projects/review-agent-web/test-post', {
       method: 'POST',
@@ -2891,7 +2924,7 @@ test('content central API runs creative reviewer after AI safe test image genera
 test('content central API keeps safe test fast when Story review blocks canvas', async () => {
   const generatorCalls = [];
   const reviewerCalls = [];
-  await withServer(async (_dir, server) => {
+  await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
       body: JSON.stringify({
@@ -2901,6 +2934,8 @@ test('content central API keeps safe test fast when Story review blocks canvas',
         approvalEmail: 'aprovacao@example.com',
       }),
     });
+    await updateProjectBrandInput('quick-story-web', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const result = await request(server, '/api/projects/quick-story-web/test-post', {
       method: 'POST',
@@ -3400,6 +3435,8 @@ test('content central server wires the injected videoAnimator through the real a
   await withServer(
     async (dir, server) => {
       await createCentralProject({ projectId: 'animar-web-ok', name: 'Animar Web Ok' }, dir);
+      await updateProjectBrandInput('animar-web-ok', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+      await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
       const batch = await generateContentSchedulePlan('animar-web-ok', {
         days: 1,
         startDate: '2026-07-20',
@@ -3437,11 +3474,13 @@ test('content central server wires the injected videoAnimator through the real a
 test('content central server animates Reels slots automatically as part of /generate, with no separate animate-reels call', async () => {
   let animateCalls = 0;
   await withServer(
-    async (_dir, server) => {
+    async (dir, server) => {
       await request(server, '/api/projects', {
         method: 'POST',
         body: JSON.stringify({ projectId: 'reels-auto-web', name: 'Reels Auto Web' }),
       });
+      await updateProjectBrandInput('reels-auto-web', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+      await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
       const generated = await request(server, '/api/projects/reels-auto-web/generate', {
         method: 'POST',
@@ -3585,7 +3624,7 @@ test('GET commemorative-dates returns upcoming national holidays/commercial date
 test('POST generate-special-date creates a real content card for the chosen date, wired through the same image/caption generators as a normal batch', async () => {
   const captions = [];
   await withServer(
-    async (_dir, server) => {
+    async (dir, server) => {
       await request(server, '/api/projects', {
         method: 'POST',
         body: JSON.stringify({
@@ -3595,6 +3634,8 @@ test('POST generate-special-date creates a real content card for the chosen date
           approvalEmail: 'aprovacao@example.com',
         }),
       });
+      await updateProjectBrandInput('gerar-data-especial', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+      await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'special_date', 'feed', dir);
 
       const generated = await request(server, '/api/projects/gerar-data-especial/generate-special-date', {
         method: 'POST',
@@ -3652,11 +3693,13 @@ test('POST ad-creatives with format "ambos" generates one Story and one Feed ad 
 
 test('POST ad-creatives-regenerate with a note performs a targeted image edit and never touches the existing copy variations', async () => {
   await withServer(
-    async (_dir, server) => {
+    async (dir, server) => {
       await request(server, '/api/projects', {
         method: 'POST',
         body: JSON.stringify({ projectId: 'anuncio-regen-http', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
       });
+      await updateProjectBrandInput('anuncio-regen-http', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+      await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'ad_creative', 'feed', dir);
 
       const generated = await request(server, '/api/projects/anuncio-regen-http/ad-creatives', {
         method: 'POST',

@@ -82,6 +82,27 @@ async function withTempProject(fn) {
   }
 }
 
+// buildPrimaryAiImageReferences now requires a registered creative template
+// (a segment-learning entry tagged purpose:'creative' with a matching
+// postType/shape) before AI generation is allowed to proceed at all — see
+// task-3 of the mandatory-creative-templates plan. Every pre-existing test
+// that reaches real AI image generation needs one of these registered in
+// its setup, or it now fails with "Nenhum modelo de criativo cadastrado".
+let registerCreativeTemplateCounter = 0;
+async function registerCreativeTemplate(groupKey, postType, shape, dir) {
+  registerCreativeTemplateCounter += 1;
+  const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+  const template = await analyzeLearningImage({
+    scope: 'segment', groupKey, dataUrl, filename: `modelo-teste-${registerCreativeTemplateCounter}.png`,
+  }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+  await saveLearningEntry({
+    scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
+    text: 'modelo de referência', imagePath: template.imagePath,
+    purpose: 'creative', postType, shape,
+  }, dir);
+  return template;
+}
+
 test('createCentralProject creates isolated project files with global and project rules', async () => {
   await withTempProject(async (dir) => {
     const project = await createCentralProject({
@@ -904,6 +925,47 @@ test('buildSegmentLayoutReferences returns nothing when the project has no Setor
   });
 });
 
+test('generation blocks with a clear error when no creative template matches the topic\'s postType and shape', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-modelo', name: 'Sem Modelo', handle: '@semmodelo', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('sem-modelo', {
+      brandName: 'Sem Modelo', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('sem-modelo', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+
+    await assert.rejects(
+      simulateTestPost('sem-modelo', {
+        channel: 'instagram_story',
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      }, dir, new Date('2026-07-20T12:00:00.000Z')),
+      /Nenhum modelo de criativo cadastrado/,
+    );
+  });
+});
+
+test('generation proceeds once a matching creative template exists for the topic\'s postType and shape', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'com-modelo', name: 'Com Modelo', handle: '@commodelo', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('com-modelo', {
+      brandName: 'Com Modelo', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('com-modelo', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'modelo-oferta.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'modelo', imagePath: analyzed.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
+
+    const generatorCalls = [];
+    await simulateTestPost('com-modelo', {
+      channel: 'instagram_story',
+      imageGenerator: async (payload) => { generatorCalls.push(payload); return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(generatorCalls.length, 1);
+    assert.match(generatorCalls[0].content.image.prompt, /modelo-oferta\.png/);
+  });
+});
+
 test('a corrupted/hand-edited learning store file (schemaVersion set but nodes/types missing) does not crash saveLearningEntry — it self-heals with an empty collection instead of throwing', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'store-corrompido', name: 'Store Corrompido', handle: '@sc', approvalEmail: 'a@example.com' }, dir);
@@ -1107,6 +1169,8 @@ test('simulateTestPost uses the approved brand xray for content goal, segment, v
     await updateProjectBrandInput('teste-seguro-xray', {
       brandName: 'Boss Pizzaria',
       segment: 'Pizzaria',
+      segmentGroup: 'Alimenticio',
+      segmentCategory: 'Pizzaria',
       productsOrServices: 'rodízio de pizzas, delivery, bebidas e atendimento no salão',
       description: 'Pizzaria familiar com rodízio de terça a domingo.',
       serviceRegion: 'Várzea Grande/MT',
@@ -1130,6 +1194,8 @@ test('simulateTestPost uses the approved brand xray for content goal, segment, v
     await analyzeProjectBrandXray('teste-seguro-xray', {}, dir, new Date('2026-07-20T12:00:00.000Z'));
     const approved = await approveProjectBrandXray('teste-seguro-xray', {}, dir, new Date('2026-07-20T12:05:00.000Z'));
     assert.equal(approved.project.brandXray.status, 'approved');
+
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const content = await simulateTestPost('teste-seguro-xray', {
       channel: 'instagram_story',
@@ -2028,6 +2094,8 @@ test('AI image results keep the raw ChatGPT-designed final image without automat
       filename: 'logo.svg',
       dataUrl: `data:image/svg+xml;base64,${Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><text>LOGO FINAL</text></svg>').toString('base64')}`,
     }, dir);
+    await updateProjectBrandInput('ai-overlay-logo', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const content = await simulateTestPost('ai-overlay-logo', {
       channel: 'instagram_story',
@@ -2358,6 +2426,8 @@ test('simulateTestPost can attach an AI image URL when a generator is available'
       handle: '@imagemai',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('imagem-ai', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const content = await simulateTestPost('imagem-ai', {
       channel: 'instagram_story',
@@ -2388,6 +2458,8 @@ test('animateContentForReels attaches a rendered video to the card using the inj
       handle: '@animarreels',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('animar-reels', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const batch = await generateContentBatch('animar-reels', { days: 1, startDate: '2026-07-20', channel: 'instagram_reels' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'animar-reels');
     await enrichBatchItemsWithRealImages(batch, project, 'animar-reels', {
@@ -2454,6 +2526,8 @@ test('animateContentForReels rejects an animator that resolves without a usable 
       handle: '@animarvazio',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('animar-vazio', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const batch = await generateContentBatch('animar-vazio', { days: 1, startDate: '2026-07-20', channel: 'instagram_reels' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'animar-vazio');
     await enrichBatchItemsWithRealImages(batch, project, 'animar-vazio', {
@@ -2478,6 +2552,8 @@ test('creative reviewer treats an empty/malformed AI response as needing manual 
       handle: '@revisorvazio',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('revisor-vazio', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const content = await simulateTestPost('revisor-vazio', {
       channel: 'instagram_story',
@@ -2508,6 +2584,8 @@ test('AI safe test asks ChatGPT for a complete designed card and avoids automati
       items: '2 pizzas grandes.',
       cta: 'Peça no delivery',
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
+    await updateProjectBrandInput('overlay-exato', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const generatorCalls = [];
     const content = await simulateTestPost('overlay-exato', {
@@ -2561,6 +2639,8 @@ test('Feed offer prompt uses a sales hook title, stronger CTA and blocks fake ur
       autoGenerateCta: true,
       active: true,
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
+    await updateProjectBrandInput('feed-conversao-real', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const generatorCalls = [];
     await simulateTestPost('feed-conversao-real', {
@@ -2594,6 +2674,8 @@ test('offer prices typed as plain decimals are normalized as Brazilian currency 
       items: '2 unidades',
       active: true,
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
+    await updateProjectBrandInput('preco-moeda-br', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const project = await loadProjectForTest('preco-moeda-br', dir);
     assert.equal(project.contentStrategy.offers[0].price, 'R$ 3,50');
@@ -2632,6 +2714,8 @@ test('Urgency offer prompt uses only the real urgency written by the operator', 
       notes: 'Válido somente nesta sexta-feira no salão.',
       active: true,
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
+    await updateProjectBrandInput('urgencia-real-operador', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const generatorCalls = [];
     await simulateTestPost('urgencia-real-operador', {
@@ -2661,11 +2745,14 @@ test('AI final prompt is compiled into concise creative brief and limited refere
     await updateProjectBrandInput('prompt-compilado', {
       brandName: 'Boss Pizzaria',
       segment: 'pizzaria',
+      segmentGroup: 'Alimenticio',
+      segmentCategory: 'Pizzaria',
       productsOrServices: 'delivery de pizzas e atendimento no salão',
       description: 'Descrição livre ainda não informada',
       serviceRegion: 'Várzea Grande-MT',
       mainDifferential: 'diferencial ainda não informado',
     }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     await approveProjectBrandXray('prompt-compilado', {
       edits: {
         summary: 'Informado pelo usuário: pizzaria local. Sugestão da IA: marca acolhedora e comercial. Descrição livre ainda não informada.',
@@ -2762,6 +2849,8 @@ test('Story prompt treats esfiha offer as native vertical composition with compa
       active: true,
       autoGenerateCta: true,
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
+    await updateProjectBrandInput('story-esfiha-nativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Esfiharia' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:esfiharia', 'offer', 'vertical', dir);
 
     const generatorCalls = [];
     await simulateTestPost('story-esfiha-nativo', {
@@ -2799,6 +2888,8 @@ test('multi-product offers rotate a persisted hero focus and prioritize its matc
     for (const filename of ['pizza-salgada.jpg', 'pizza-doce.jpg', 'batata-frita.jpg', 'esfiha.jpg', 'frango-frito.jpg']) {
       await saveProjectAsset('rodizio-rotativo', { kind: 'reference', filename, dataUrl, role: 'product_photo' }, dir);
     }
+    await updateProjectBrandInput('rodizio-rotativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const batch = await generateContentBatch('rodizio-rotativo', {
       days: 5, startDate: '2026-08-10', channel: 'instagram_feed',
@@ -2841,8 +2932,11 @@ test('food-specific visual language only appears in the prompt for actual food b
     await updateProjectBrandInput('boss-comida', {
       brandName: 'Boss Pizzaria',
       segment: 'pizzaria',
+      segmentGroup: 'Alimenticio',
+      segmentCategory: 'Pizzaria',
       productsOrServices: 'rodízio de pizzas e delivery',
     }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const foodCalls = [];
     await simulateTestPost('boss-comida', {
       channel: 'instagram_story',
@@ -2860,8 +2954,11 @@ test('food-specific visual language only appears in the prompt for actual food b
     await updateProjectBrandInput('inova-engenharia', {
       brandName: 'inova controle de obras',
       segment: 'controle tecnológico de obras',
+      segmentGroup: 'Servicos',
+      segmentCategory: 'Engenharia',
       productsOrServices: 'ensaios técnicos de concreto, solo e asfalto em canteiros de obra',
     }, dir);
+    await registerCreativeTemplate('group:servicos/category:engenharia', 'offer', 'vertical', dir);
     const engineeringCalls = [];
     await simulateTestPost('inova-engenharia', {
       channel: 'instagram_story',
@@ -2884,8 +2981,11 @@ test('a project with no real product/work photo ever uploaded gets a conceptual-
     await updateProjectBrandInput('agencia-sem-produto', {
       brandName: 'Agencia Sem Produto',
       segment: 'Agência de marketing digital',
+      segmentGroup: 'Servicos',
+      segmentCategory: 'Marketing',
       productsOrServices: 'Gestão de redes sociais e criação de anúncios',
     }, dir);
+    await registerCreativeTemplate('group:servicos/category:marketing', 'offer', 'feed', dir);
 
     const calls = [];
     await simulateTestPost('agencia-sem-produto', {
@@ -2914,6 +3014,8 @@ test('a project with a real product/work photo uploaded keeps the existing "no p
       role: 'product_photo',
       weight: 'medium',
     }, dir);
+    await updateProjectBrandInput('agencia-com-portfolio', { segmentGroup: 'Servicos', segmentCategory: 'Marketing' }, dir);
+    await registerCreativeTemplate('group:servicos/category:marketing', 'offer', 'feed', dir);
 
     const calls = [];
     await simulateTestPost('agencia-com-portfolio', {
@@ -2971,6 +3073,8 @@ test('a project whose ONLY product photo was uploaded offer-scoped (scope: "offe
       price: 'R$ 200',
       active: true,
     }, dir, new Date('2026-08-01T12:01:00.000Z'));
+    await updateProjectBrandInput('so-foto-de-oferta', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
 
     const batch = await generateContentBatch('so-foto-de-oferta', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'so-foto-de-oferta');
@@ -3071,6 +3175,8 @@ test('product photo selection prefers a reference matching the offer\'s product 
       weight: 'high',
       instruction: 'Esfiha real da Boss Pizzaria, fechada',
     }, dir, new Date('2026-07-20T12:05:00.000Z'));
+    await updateProjectBrandInput('foto-produto-certa', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const generatorCalls = [];
     await simulateTestPost('foto-produto-certa', {
@@ -3134,6 +3240,8 @@ test('a marketing offer with its own linked photo shows that exact real product,
       photoReferenceIds: [pocoPhoto.metadata.id],
       active: true,
     }, dir, new Date('2026-08-01T12:01:00.000Z'));
+    await updateProjectBrandInput('rei-do-xiaomi-teste', { segmentGroup: 'Varejo', segmentCategory: 'Eletronicos' }, dir);
+    await registerCreativeTemplate('group:varejo/category:eletronicos', 'offer', 'feed', dir);
 
     const generatorCalls = [];
     await simulateTestPost('rei-do-xiaomi-teste', {
@@ -3194,6 +3302,8 @@ test('an offer-scoped photo (scope: "offer", stored on project.offerAssets) stil
       photoReferenceIds: [offerPhoto.metadata.id],
       active: true,
     }, dir, new Date('2026-08-01T12:00:00.000Z'));
+    await updateProjectBrandInput('oferta-foto-gera-imagem', { segmentGroup: 'Varejo', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:varejo/category:geral', 'offer', 'feed', dir);
 
     const generatorCalls = [];
     await simulateTestPost('oferta-foto-gera-imagem', {
@@ -3253,6 +3363,8 @@ test('a marketing offer with NO photo of its own never borrows a photo already c
       price: 'R$ 1.349',
       active: true,
     }, dir, new Date('2026-08-01T12:01:00.000Z'));
+    await updateProjectBrandInput('rei-do-xiaomi-sem-foto', { segmentGroup: 'Varejo', segmentCategory: 'Eletronicos' }, dir);
+    await registerCreativeTemplate('group:varejo/category:eletronicos', 'offer', 'feed', dir);
 
     const batch = await generateContentBatch('rei-do-xiaomi-sem-foto', {
       days: 2,
@@ -3514,6 +3626,8 @@ test('creative reviewer blocks AI images with cropped text or unrelated offer pr
       price: '99,99',
       items: '3 pizzas grandes',
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
+    await updateProjectBrandInput('revisor-criativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const content = await simulateTestPost('revisor-criativo', {
       channel: 'instagram_feed',
@@ -3558,6 +3672,8 @@ test('creative reviewer blocks placeholder brand text when an official logo is a
     }, dir, new Date('2026-08-14T12:00:00.000Z'), {
       logoColorAnalyzer: async () => ['#A8A8C0', '#D8D8F0'],
     });
+    await updateProjectBrandInput('revisor-logo-placeholder', { segmentGroup: 'Servicos', segmentCategory: 'Embalagem' }, dir);
+    await registerCreativeTemplate('group:servicos/category:embalagem', 'offer', 'feed', dir);
 
     const generatorCalls = [];
     const reviewerCalls = [];
@@ -3606,6 +3722,8 @@ test('safe test retries AI image generation with reviewer feedback until creativ
       items: 'Salgadas: Presunto, Queijo, Bacon, Atum, Milho, Carne, Calabresa, Frango e Palmito.',
       cta: 'Peça no delivery',
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
+    await updateProjectBrandInput('revisor-refaz', { segmentGroup: 'Alimenticio', segmentCategory: 'Esfiharia' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:esfiharia', 'offer', 'vertical', dir);
 
     const generatorCalls = [];
     const reviewerCalls = [];
@@ -3684,6 +3802,8 @@ test('safe test enters rescue mode after repeated Story canvas format blocks', a
       items: 'Pizza grande.',
       cta: 'Peça no delivery',
     }, dir, new Date('2026-07-15T12:02:00.000Z'));
+    await updateProjectBrandInput('story-resgate', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const generatorCalls = [];
     const reviewerCalls = [];
@@ -3743,6 +3863,8 @@ test('blocked creative review prevents approval payload creation', async () => {
       price: '99,99',
       items: '3 pizzas grandes',
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
+    await updateProjectBrandInput('bloqueia-aprovacao', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
     const content = await simulateTestPost('bloqueia-aprovacao', {
       channel: 'instagram_feed',
       imageGenerator: async () => ({ url: 'https://cdn.example.com/bloqueado.png', mimeType: 'image/png' }),
@@ -3984,6 +4106,9 @@ test('Feed gets a direct default CTA for sales offers when the offer has no expl
       price: 'R$ 89,90',
       items: '2 pizzas grandes',
     }, dir);
+    await updateProjectBrandInput('cta-feed-suave', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
     const feedCalls = [];
     await simulateTestPost('cta-feed-suave', {
@@ -4022,6 +4147,8 @@ test('an offer\'s explicit CTA is still respected on Feed, folded into the same 
       price: 'R$ 59,90',
       cta: 'Reserve sua mesa',
     }, dir);
+    await updateProjectBrandInput('cta-explicito-feed', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
 
     const feedCalls = [];
     await simulateTestPost('cta-explicito-feed', {
@@ -4042,6 +4169,8 @@ test('a plain orientation/institutional offer with no pillar and no explicit CTA
     }, dir);
     await saveProjectOffer('conteudo-sem-venda', { name: 'O que comprar primeiro', type: 'orientation' }, dir);
     await saveProjectOffer('conteudo-sem-venda', { name: 'Quem somos', type: 'institutional' }, dir);
+    await updateProjectBrandInput('conteudo-sem-venda', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const batch = await generateContentSchedulePlan('conteudo-sem-venda', {
       days: 1,
@@ -4104,8 +4233,11 @@ test('a registered sales offer keeps its CTA and full notes even when assigned t
     await updateProjectBrandInput('oferta-pilar-prova', {
       brandName: 'Loja de Embalagens',
       segment: 'Casa de embalagem e descartáveis',
+      segmentGroup: 'Embalagens',
+      segmentCategory: 'Casa de Embalagem',
       productsOrServices: 'Embalagens para alimentação, limpeza e delivery',
     }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'vertical', dir);
     const { pillar } = await saveProjectPillar('oferta-pilar-prova', {
       name: 'Prova e confiança',
       role: 'prova',
@@ -4154,6 +4286,8 @@ test('creative reviewer does not turn a positive "sem placeholder" check into a 
       filename: 'logo.png',
       dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
     }, dir);
+    await updateProjectBrandInput('revisor-logo-sem-falso-positivo', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const generatorCalls = [];
     const content = await simulateTestPost('revisor-logo-sem-falso-positivo', {
@@ -4182,6 +4316,8 @@ test('creative reviewer does not turn a positive "sem placeholder" check into a 
 test('creative reviewer score gates block an inconsistent ok response and persist structured repair codes', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'revisor-score-gate', name: 'Score Gate' }, dir);
+    await updateProjectBrandInput('revisor-score-gate', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
     const content = await simulateTestPost('revisor-score-gate', {
       channel: 'instagram_feed',
       maxCreativeAttempts: 1,
@@ -4923,6 +5059,8 @@ test('a resolved "convida" pillar drives a real sales CTA, while a non-sales pil
     const ensina = await saveProjectPillar('cta-pilar', { name: 'Dica Rápida', role: 'ensina', weight: 1 }, dir);
     await saveProjectOffer('cta-pilar', { name: 'Combo Família', type: 'institutional', pillarId: convida.pillar.id }, dir);
     await saveProjectOffer('cta-pilar', { name: 'Dica de bastidor', type: 'institutional', pillarId: ensina.pillar.id }, dir);
+    await updateProjectBrandInput('cta-pilar', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const batch = await generateContentSchedulePlan('cta-pilar', {
       days: 2,
@@ -5209,6 +5347,8 @@ test('enrichBatchItemsWithRealImages writes real captions in parallel with the i
       handle: '@copyagentbatch',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('copy-agent-batch', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
     const batch = await generateContentBatch('copy-agent-batch', { days: 1, startDate: '2026-07-20' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'copy-agent-batch');
 
@@ -5255,6 +5395,8 @@ test('enrichBatchItemsWithRealImages records an error instead of silently keepin
       handle: '@imagemsemurl',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('imagem-sem-url', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
     const batch = await generateContentBatch('imagem-sem-url', { days: 1, startDate: '2026-07-20' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'imagem-sem-url');
 
@@ -5316,6 +5458,9 @@ test('enrichBatchItemsWithRealImages generates one creative per shape group and 
       handle: '@compartilharcriativo',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('compartilhar-criativo', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
 
     const batch = await generateContentSchedulePlan('compartilhar-criativo', {
       days: 1,
@@ -5367,6 +5512,9 @@ test('enrichBatchItemsWithRealImages animates Reels slots automatically once the
       handle: '@reelsautoanimar',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('reels-auto-animar', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'feed', dir);
 
     const batch = await generateContentSchedulePlan('reels-auto-animar', {
       days: 1,
@@ -5409,6 +5557,8 @@ test('enrichBatchItemsWithRealImages records a videoGenerationError instead of f
       handle: '@reelsautofalha',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('reels-auto-falha', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const batch = await generateContentSchedulePlan('reels-auto-falha', {
       days: 1,
@@ -5447,6 +5597,8 @@ test('regenerating a card picks up a real photo attached to the offer AFTER the 
       price: 'R$ 749',
       active: true,
     }, dir, new Date('2026-08-02T10:00:00.000Z'));
+    await updateProjectBrandInput('foto-anexada-depois', { segmentGroup: 'Varejo', segmentCategory: 'Eletronicos' }, dir);
+    await registerCreativeTemplate('group:varejo/category:eletronicos', 'offer', 'feed', dir);
 
     // First generation happens with no photo attached yet — matches the
     // real sequence: card generated, sits "aguardando aprovação", THEN the
@@ -5508,6 +5660,8 @@ test('a "Pedido de alteração" note asks the image generator for a targeted edi
       handle: '@casadeembalagemteste',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('pedido-alteracao', { segmentGroup: 'Embalagens', segmentCategory: 'Casa de Embalagem' }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'feed', dir);
     const batch = await generateContentBatch('pedido-alteracao', {
       days: 1,
       startDate: '2026-08-02',
@@ -5553,6 +5707,8 @@ test('regenerating one card\'s image individually unlinks it from its shared-cre
       handle: '@desvincularcriativo',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('desvincular-criativo', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const batch = await generateContentSchedulePlan('desvincular-criativo', {
       days: 1,
@@ -5598,6 +5754,8 @@ test('regenerateContentGroup regenerates a shared creative once and copies it to
       handle: '@regenerargrupo',
       approvalEmail: 'aprovacao@example.com',
     }, dir);
+    await updateProjectBrandInput('regenerar-grupo', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
+    await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);
 
     const batch = await generateContentSchedulePlan('regenerar-grupo', {
       days: 1,
@@ -6443,6 +6601,8 @@ test('generateSpecialDateContent creates a one-off themed post for a commemorati
 test('an institutional special-date post (no offer linked) gets a warm, celebratory hook title about the occasion — not the raw project name, and not a commercial/pitch-style hook either', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'data-sem-oferta', name: 'CASA DE EMBALAGEM' }, dir);
+    await updateProjectBrandInput('data-sem-oferta', { segmentGroup: 'Embalagens', segmentCategory: 'Casa de Embalagem' }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'special_date', 'vertical', dir);
     const batch = await generateSpecialDateContent('data-sem-oferta', {
       date: '2026-08-09',
       label: 'Dia dos Pais',
@@ -6515,6 +6675,9 @@ test('generateSpecialDateContent rejects an invalid date or a missing label inst
 test('generateSpecialDateContent shares one creative across same-shape channels when several formats are requested for the same date, instead of each format paying for its own AI generation', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'data-varios-formatos', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('data-varios-formatos', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'special_date', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'special_date', 'feed', dir);
 
     const batch = await generateSpecialDateContent('data-varios-formatos', {
       date: '2026-08-09',
@@ -6622,6 +6785,8 @@ test('an institutional ad creative (no offer linked) gets a real hook title base
     // label, the actual brand is "Hygi Comércio" — forcing project.name as
     // a literal image headline was doubly wrong here, not just repetitive.
     await createCentralProject({ projectId: 'anuncio-institucional-titulo', name: 'CASA DE EMBALAGEM' }, dir);
+    await updateProjectBrandInput('anuncio-institucional-titulo', { segmentGroup: 'Embalagens', segmentCategory: 'Casa de Embalagem' }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'ad_creative', 'feed', dir);
     const adCreative = await generateAdCreative('anuncio-institucional-titulo', { objective: 'engagement' }, dir);
     assert.equal(adCreative.offerId, null);
 
@@ -6641,6 +6806,8 @@ test('an institutional ad creative (no offer linked) gets a real hook title base
 test('enrichAdCreativeWithRealImage attaches the real image and the 3 angle-based copy variations, and persists them to disk', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'anuncio-enriquecido', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('anuncio-enriquecido', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'ad_creative', 'feed', dir);
     const adCreative = await generateAdCreative('anuncio-enriquecido', { objective: 'whatsapp' }, dir);
 
     let receivedPrompt = null;
@@ -6752,6 +6919,8 @@ test('regenerateAdCreative refreshes the image references from an already-genera
 test('a "Pedido de alteração" note on an existing ad creative triggers a targeted image edit; regenerating with no note does not, and copy variations are left untouched either way', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'anuncio-editar', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('anuncio-editar', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'ad_creative', 'feed', dir);
     const adCreative = await generateAdCreative('anuncio-editar', { objective: 'whatsapp' }, dir);
     await enrichAdCreativeWithRealImage(adCreative, { name: 'Boss Pizzaria', mode: 'semi_automatic', rules: { project: [] } }, 'anuncio-editar', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
@@ -6974,6 +7143,8 @@ test('enrichSegmentTemplateItemsForProspect adapts a registered template with a 
     }, dir);
 
     await createCentralProject({ projectId: 'prospect-embalagens', name: 'Nova Embalagens Prospect' }, dir);
+    await updateProjectBrandInput('prospect-embalagens', { segmentGroup: 'Embalagens', segmentCategory: 'Casa de Embalagem' }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'feed', dir);
     // The real path is saveProjectAsset(logo)'s AI color analyzer, not
     // configured in this unit test — stamp the field directly, same pattern
     // used across this suite whenever a test only needs the field to exist.
@@ -7023,6 +7194,9 @@ test('enqueueSegmentTemplateAdaptation builds items for every piece and never in
       ],
     }, dir);
     await createCentralProject({ projectId: 'prospect-sem-cor', name: 'Prospect Sem Cor Extraída' }, dir);
+    await updateProjectBrandInput('prospect-sem-cor', { segmentGroup: 'Embalagens', segmentCategory: 'Casa de Embalagem' }, dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:embalagens/category:casa-de-embalagem', 'offer', 'vertical', dir);
 
     const calls = [];
     enqueueSegmentTemplateAdaptation('prospect-sem-cor', 'embalagens', {
