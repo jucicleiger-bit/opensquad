@@ -5275,15 +5275,12 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   const layoutReference = selectedReferences.find((reference) => reference.role === 'layout_model');
   const cta = chooseCreativeCta(topic, targetChannel);
   const productTreatment = normalizeProductTreatment(topic.productTreatment, productReferences.length > 0);
-  // A layout_model's zones (price selo in the base band, CTA in the
-  // footer) are learned from approved OFFER cards. Forcing STRICT
-  // adherence onto a topic with neither price nor CTA makes the model
-  // cram title/benefit text into bands sized for elements that don't
-  // exist here — the exact "benefit block invades the footer zone" defect
-  // the reviewer kept flagging on institutional/goal posts. Only an offer
-  // with a real price or CTA gets the strict zone lock by default.
-  const hasPriceOrCta = Boolean(normalizeCreativePrice(topic.price)) || Boolean(cta);
-  const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference) && hasPriceOrCta);
+  // A template is now mandatory (buildPrimaryAiImageReferences throws
+  // before this function is ever called if none matched), so layoutReference
+  // being present is no longer conditional on the topic having a price or
+  // CTA — every generation that reaches here has an operator-authored
+  // template it must follow exactly.
+  const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference));
   return {
     schemaVersion: 1,
     project: {

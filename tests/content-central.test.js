@@ -7164,3 +7164,25 @@ test('offerObjective falls back to the original hardcoded default (unchanged wor
     assert.equal(loaded.hasOverride, false);
   });
 });
+
+test('layoutStrength is strict whenever a matching creative template was found, even for a no-price/no-CTA institutional topic', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'strict-institucional', name: 'Strict Institucional', handle: '@strictinst', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('strict-institucional', {
+      brandName: 'Strict Institucional', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas', contentGoals: ['authority'],
+    }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'modelo-institucional.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'modelo', imagePath: analyzed.imagePath, purpose: 'creative', postType: 'institutional', shape: 'vertical' }, dir);
+
+    const generatorCalls = [];
+    await simulateTestPost('strict-institucional', {
+      channel: 'instagram_story',
+      goalKey: 'authority',
+      imageGenerator: async (payload) => { generatorCalls.push(payload); return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(generatorCalls[0].content.creativeSpec.layout.strength, 'strict');
+  });
+});
