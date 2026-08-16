@@ -67,4 +67,54 @@ describe("LearningGallery — creative template tagging", () => {
     await waitFor(() => screen.getByText("Confirmar"));
     expect(screen.queryByLabelText("Tipo de post")).toBeNull();
   });
+
+  it("keeps Confirmar disabled for a creative-purpose pending image until both postType and shape are set", async () => {
+    stubFetchSequence([{ body: { imagePath: "segment/x/modelo.png", suggestedText: "modelo" } }]);
+    const user = userEvent.setup();
+
+    render(
+      <LearningGallery scope="segment" groupKey="group:x" entries={[]} onEntriesChange={() => {}} splitImagePurposes />,
+    );
+
+    const file = new File(["x"], "modelo.png", { type: "image/png" });
+    const creativeInput = screen.getByLabelText("Referência de estrutura de criativo") as HTMLInputElement;
+    await user.upload(creativeInput, file);
+
+    await waitFor(() => screen.getByLabelText("Tipo de post"));
+    expect(screen.getByText("Confirmar")).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText("Tipo de post"), "offer");
+    expect(screen.getByText("Confirmar")).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText("Formato"), "vertical");
+    expect(screen.getByText("Confirmar")).not.toBeDisabled();
+  });
+
+  it("renders postType/shape pills on an existing tagged creative entry", () => {
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          {
+            id: "1",
+            bucket: "approved",
+            kind: "image",
+            text: "modelo aprovado",
+            imagePath: "segment/x/modelo.png",
+            purpose: "creative",
+            postType: "offer",
+            shape: "vertical",
+            source: "manual",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    expect(screen.getByText("Oferta")).toBeInTheDocument();
+    expect(screen.getByText("Vertical (Stories/Reels)")).toBeInTheDocument();
+  });
 });

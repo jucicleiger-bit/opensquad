@@ -925,7 +925,7 @@ test('buildSegmentLayoutReferences returns nothing when the project has no Setor
   });
 });
 
-test('generation blocks with a clear error when no creative template matches the topic\'s postType and shape', async () => {
+test('generation blocks with a clear error when no creative template matches the topic\'s postType and shape, and simulateTestPost records it instead of leaving a half-written draft', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sem-modelo', name: 'Sem Modelo', handle: '@semmodelo', approvalEmail: 'a@example.com' }, dir);
     await updateProjectBrandInput('sem-modelo', {
@@ -933,13 +933,26 @@ test('generation blocks with a clear error when no creative template matches the
     }, dir);
     await saveProjectOffer('sem-modelo', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
 
-    await assert.rejects(
-      simulateTestPost('sem-modelo', {
-        channel: 'instagram_story',
-        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
-      }, dir, new Date('2026-07-20T12:00:00.000Z')),
-      /Nenhum modelo de criativo cadastrado/,
-    );
+    // Same "record the error on the item, don't throw" contract as every
+    // other real-image call site — simulateTestPost must not reject here,
+    // it must return a well-formed, fully-written content draft with the
+    // error recorded on it (see task-6 final-review fix: this used to throw
+    // uncaught, escaping before the content file was written and before
+    // nextTestTopicIndex advanced).
+    const content = await simulateTestPost('sem-modelo', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.match(content.imageGenerationError, /Nenhum modelo de criativo cadastrado/);
+    assert.equal(content.status, 'test_post_simulated');
+
+    const persisted = JSON.parse(await readFile(content.filePath, 'utf-8'));
+    assert.match(persisted.imageGenerationError, /Nenhum modelo de criativo cadastrado/);
+    assert.equal(persisted.status, 'test_post_simulated');
+
+    const project = await loadProjectForTest('sem-modelo', dir);
+    assert.equal(typeof project.contentStrategy.nextTestTopicIndex, 'number', 'the batch state still advances even when generation failed');
   });
 });
 

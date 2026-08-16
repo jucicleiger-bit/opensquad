@@ -3,6 +3,18 @@ import { analyzeLearningImage, deleteLearningEntry, fileToDataUrl, saveLearningE
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 
+const POST_TYPE_LABELS: Record<NonNullable<SegmentLearningEntry["postType"]>, string> = {
+  offer: "Oferta",
+  institutional: "Institucional",
+  special_date: "Data comemorativa",
+  ad_creative: "Anúncio pago",
+};
+
+const SHAPE_LABELS: Record<NonNullable<SegmentLearningEntry["shape"]>, string> = {
+  vertical: "Vertical (Stories/Reels)",
+  feed: "Feed",
+};
+
 export function LearningGallery({
   scope,
   groupKey,
@@ -114,6 +126,8 @@ export function LearningGallery({
                   ) : null}
                   <span>{entry.text}</span>
                   {splitImagePurposes && entry.kind === "image" ? <span className="pill">{entry.purpose === "product" ? "Produto" : "Criativo"}</span> : null}
+                  {splitImagePurposes && entry.kind === "image" && entry.purpose === "creative" && entry.postType ? <span className="pill">{POST_TYPE_LABELS[entry.postType]}</span> : null}
+                  {splitImagePurposes && entry.kind === "image" && entry.purpose === "creative" && entry.shape ? <span className="pill">{SHAPE_LABELS[entry.shape]}</span> : null}
                 </div>
                 <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
               </div>
@@ -156,8 +170,8 @@ export function LearningGallery({
           {pendingImage.purpose === "creative" ? (
             <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
               <div>
-                <label htmlFor="pending-post-type">Tipo de post</label>
-                <select id="pending-post-type" value={pendingPostType} onChange={(e) => setPendingPostType(e.target.value as typeof pendingPostType)}>
+                <label htmlFor={`pending-post-type-${groupKey}`}>Tipo de post</label>
+                <select id={`pending-post-type-${groupKey}`} value={pendingPostType} onChange={(e) => setPendingPostType(e.target.value as typeof pendingPostType)}>
                   <option value="">Selecione</option>
                   <option value="offer">Oferta</option>
                   <option value="institutional">Institucional</option>
@@ -166,8 +180,8 @@ export function LearningGallery({
                 </select>
               </div>
               <div>
-                <label htmlFor="pending-shape">Formato</label>
-                <select id="pending-shape" value={pendingShape} onChange={(e) => setPendingShape(e.target.value as typeof pendingShape)}>
+                <label htmlFor={`pending-shape-${groupKey}`}>Formato</label>
+                <select id={`pending-shape-${groupKey}`} value={pendingShape} onChange={(e) => setPendingShape(e.target.value as typeof pendingShape)}>
                   <option value="">Selecione</option>
                   <option value="vertical">Vertical (Stories/Reels)</option>
                   <option value="feed">Feed</option>
@@ -176,7 +190,7 @@ export function LearningGallery({
             </div>
           ) : null}
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <Button disabled={busy} onClick={handleConfirmImage}>Confirmar</Button>
+            <Button disabled={busy || (pendingImage.purpose === "creative" && (!pendingPostType || !pendingShape))} onClick={handleConfirmImage}>Confirmar</Button>
             <Button variant="secondary" onClick={() => { setPendingImage(null); setPendingPostType(""); setPendingShape(""); }}>Descartar</Button>
           </div>
         </Card>

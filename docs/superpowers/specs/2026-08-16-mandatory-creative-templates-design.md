@@ -144,12 +144,29 @@ In `generateAiImageWithReviewLoop` (content-central.js):
   "generated, awaiting human approval" — same as content that already
   skips AI review today (e.g. catalog-project recomposed photos).
 
-`normalizeCreativeReview`, its `thresholds` object, and
-`buildAiImageReviewPrompt` (content-central-server.js) become dead code
-under this flow — left in place (not deleted) as part of this change,
-since deleting a whole review subsystem is a separate decision from
-wiring it out of the default path; a follow-up cleanup can remove it once
-the new flow is proven.
+**Update (Task 5, merged):** the plan above described leaving
+`normalizeCreativeReview`, its `thresholds` object, and the rest of the
+AI-scored review subsystem in place as dead code. That's no longer what
+shipped — Task 5 went further and deleted all twelve of those
+functions/consts outright from `content-central.js`
+(`normalizeCreativeAttemptLimit`, `appendCreativeReviewCorrections`,
+`appendCreativeRescueCorrections`, `shouldEnterStoryRescueMode`,
+`buildRescueImageReferences`, `CREATIVE_REVIEW_CODES`,
+`normalizeCreativeReviewCodes`, `shouldUseTargetedReviewRepair`,
+`formatCreativeReviewFeedback`, `mergeCreativeReview`,
+`contentHasOfficialLogoReference`, `reviewMentionsPlaceholderLogo`,
+`normalizeCreativeReview`), not just stopped calling them. This
+supersedes the "left in place" description below the fold in this
+section and in "Open follow-ups."
+
+The server-side half is unaffected by that deletion and is still
+accurately "left in place, follow-up cleanup": `buildAiImageReviewPrompt`
+and `reviewAiImageWithCodexAgent` (`content-central-server.js`) still
+exist, and `reviewImageForActiveTextProvider` is still constructed and
+passed as the `imageReviewer` option into the generation call. But
+`generateAiImageWithReviewLoop` (content-central.js) no longer calls
+`options.imageReviewer` at all, so none of that server-side code ever
+actually runs — it's wired but dead.
 
 ### What doesn't change
 
@@ -191,10 +208,49 @@ works.
 ## Open follow-ups (explicitly deferred, not in scope here)
 
 - A "free model" fallback for segments without templates yet.
-- Deleting the now-dead reviewer infrastructure
-  (`normalizeCreativeReview`, thresholds, `buildAiImageReviewPrompt`,
-  rescue mode) instead of leaving it unreferenced.
+- Deleting the now-dead server-side reviewer infrastructure
+  (`buildAiImageReviewPrompt`, `reviewAiImageWithCodexAgent`,
+  `reviewImageForActiveTextProvider` in content-central-server.js) instead
+  of leaving it wired but unreachable. (The content-central.js half of
+  this — `normalizeCreativeReview` and the other eleven
+  functions/consts — is no longer an open follow-up: Task 5 already
+  deleted it. See "Review loop removal" above.)
 - A dedicated "Modelos de criativo" management UI in content-central-app
   (upload + tag + write rule) — this design covers the data model and
   generation-side lookup; the authoring UI is implementation-plan scope,
   not architecture-decision scope.
+
+## Known limitations (accepted as-is, post-implementation)
+
+These were raised in the final whole-branch review after all tasks
+merged. Both are deliberate product decisions, not bugs — documented
+here so they're not rediscovered as surprises. Neither has code written
+for it; both are intentionally left exactly as they are.
+
+**Three other reference mechanisms went silently inert.** Before this
+design, three separate mechanisms could influence AI creative generation:
+a segment-learning "product reference" hint, the `visual_reference`
+("Inspiração visual") role, and project-level directly-uploaded
+`layout_model` references. The mandatory-template filter in
+`buildPrimaryAiImageReferences` now owns the `layout_model` lane
+exclusively — only a tagged (postType, shape)-matching creative template
+counts as a `layout_model` match — so all three of these became silently
+inert as a side effect: they're still uploadable, still stored, still
+visible in the UI, but none of them influence what the AI actually
+generates anymore. Decision: leave this exactly as it is. None of the
+three get their own selection lane, none get deleted. This is a
+deliberate, currently-accepted narrowing of what previously worked,
+pending a future decision on whether any of them deserves its own lane
+alongside the mandatory-template lookup.
+
+**A paid ad linked to a real offer looks up the wrong template tag.**
+`deriveCreativePostType` checks `!topic.offerId` before checking
+`topic.source === 'ad_creative'` — so a paid-ad topic that's linked to a
+real offer resolves to postType `offer`, not `ad_creative`, and the
+template lookup in `buildPrimaryAiImageReferences` looks for an
+"Oferta"-tagged template rather than an "Anúncio pago"-tagged one. It
+still gets the ad-specific bold CTA button treatment, because that's
+driven by a separate, unrelated check elsewhere in the prompt builder —
+so the visible symptom is milder than it sounds, but the template lookup
+itself is tagged wrong for this one topic shape. Decision: leave
+`deriveCreativePostType` exactly as it is. Accepted as-is for now.

@@ -2920,14 +2920,25 @@ export async function simulateTestPost(projectId, options = {}, targetDir = proc
   };
 
   if (typeof options.imageGenerator === 'function') {
-    await generateAiImageWithReviewLoop(content, project, projectId, {
-      imageGenerator: options.imageGenerator,
-      imageReviewer: options.imageReviewer,
-      note,
-      channel,
-      now,
-      maxAttempts: options.maxCreativeAttempts,
-    });
+    // Same "record the error on the item, never let it escape uncaught"
+    // contract as every other real-image call site (enrichAdCreativeWithRealImage,
+    // enrichBatchItemsWithRealImages, enrichSegmentTemplateItemsForProspect) —
+    // without this, a thrown error (e.g. no matching creative template) would
+    // bubble out before the writeJson below ever runs, leaving a half-written
+    // test draft on disk and nextTestTopicIndex never advanced.
+    try {
+      await generateAiImageWithReviewLoop(content, project, projectId, {
+        imageGenerator: options.imageGenerator,
+        imageReviewer: options.imageReviewer,
+        note,
+        channel,
+        now,
+        maxAttempts: options.maxCreativeAttempts,
+      });
+      content.imageGenerationError = null;
+    } catch (err) {
+      content.imageGenerationError = err.message;
+    }
   }
 
   content.updatedAt = simulatedAt;
@@ -3141,6 +3152,7 @@ export async function buildApprovalPayload(projectId, contentId, targetDir = pro
   const project = await loadProject(paths);
   const contentPath = await findContentPath(paths.draftsDir, contentId, batchId);
   const content = await readJson(contentPath);
+  // Only reachable for drafts written before the AI reviewer was removed; safe to delete once none remain.
   if (content.creativeReview?.status === 'blocked' || content.contentReview?.status === 'blocked') {
     throw new Error('Revisor de Criativo bloqueou este card. Corrija/regere a imagem antes de preparar aprovação.');
   }
@@ -5829,6 +5841,20 @@ function deriveCreativePostType(topic = {}) {
   return 'offer';
 }
 
+// Mirrors the option labels in content-central-app/src/components/LearningGallery.tsx's
+// postType/shape selects, so the "no template" error below speaks the same
+// vocabulary the operator tags templates with, not raw enum values.
+const CREATIVE_POST_TYPE_LABELS = {
+  offer: 'Oferta',
+  institutional: 'Institucional',
+  special_date: 'Data comemorativa',
+  ad_creative: 'Anúncio pago',
+};
+const CREATIVE_SHAPE_LABELS = {
+  vertical: 'Vertical (Stories/Reels)',
+  feed: 'Feed',
+};
+
 function buildPrimaryAiImageReferences(references, options = {}) {
   const allowedRoles = new Set(['brand_asset', 'product_photo', 'layout_model', 'visual_reference']);
   const isStory = isVerticalStoryChannel(options.channel);
@@ -5901,7 +5927,9 @@ function buildPrimaryAiImageReferences(references, options = {}) {
     && reference.shape === shape
   ));
   if (!matchingLayouts.length) {
-    throw new Error(`Nenhum modelo de criativo cadastrado para "${postType}" / "${shape || 'formato desconhecido'}" neste segmento — cadastre um modelo antes de gerar.`);
+    const postTypeLabel = CREATIVE_POST_TYPE_LABELS[postType] || postType;
+    const shapeLabel = shape ? (CREATIVE_SHAPE_LABELS[shape] || shape) : 'formato desconhecido';
+    throw new Error(`Nenhum modelo de criativo cadastrado para "${postTypeLabel}" / "${shapeLabel}" neste segmento — cadastre um modelo antes de gerar.`);
   }
   // Rotate which single layout reference gets used instead of always the
   // same array-order match — with several matching templates uploaded,
