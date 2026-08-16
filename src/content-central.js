@@ -7426,19 +7426,21 @@ const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no
 // references for AI image generation (role: 'layout_model'), scoped by
 // segment so a pizzaria's generations never see a Casa de Embalagem
 // approved image or vice versa: both are global stores, but partitioned by
-// segment node (see segmentNodePathsFromFields). Capped to the most recent
-// MAX_SEGMENT_LAYOUT_REFERENCES across all applicable nodes combined — a
-// missing file is skipped, not backfilled from the next-oldest candidate.
-// ponytail: fixed recency cap, no per-entry "use as reference" toggle — add
-// one if the automatic cut ever needs finer control.
+// segment node (see segmentNodePathsFromFields). Returns every approved
+// creative-purpose entry across all applicable nodes (newest first),
+// optionally filtered by options.postType/options.shape — a missing file
+// is skipped, not backfilled. Plus at most one randomly selected approved
+// product-purpose entry, unaffected by the postType/shape filter.
 export async function buildSegmentLayoutReferences(project, paths, options = {}) {
   const nodes = await loadSegmentLearningNodes(paths, project);
   const imageEntries = nodes
     .flatMap((node) => node.entries)
     .filter((entry) => entry.bucket === 'approved' && entry.kind === 'image' && entry.imagePath);
-  const creativeEntry = imageEntries
+  const creativeEntries = imageEntries
     .filter((entry) => entry.purpose !== 'product')
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+    .filter((entry) => !options.postType || entry.postType === options.postType)
+    .filter((entry) => !options.shape || entry.shape === options.shape)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const productEntries = imageEntries.filter((entry) => entry.purpose === 'product');
   const random = typeof options.random === 'function' ? options.random : Math.random;
   const productEntry = productEntries.length
@@ -7446,8 +7448,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
     : null;
 
   const references = [];
-  for (const [entry, purpose] of [[creativeEntry, 'creative'], [productEntry, 'product']]) {
-    if (!entry) continue;
+  for (const entry of creativeEntries) {
     const absolutePath = join(paths.root, 'assets', 'learning', entry.imagePath);
     if (!existsSync(absolutePath)) continue;
     const reference = normalizeReferenceMetadata({
@@ -7457,12 +7458,32 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
       mimeType: mimeTypeFromFilename(entry.imagePath),
       role: 'layout_model',
       weight: 'medium',
-      instruction: purpose === 'product' ? SEGMENT_PRODUCT_REFERENCE_INSTRUCTION : SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
+      instruction: SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
       createdAt: entry.createdAt,
     });
     reference.absolutePath = absolutePath;
     reference.previewUrl = `/api/learning-assets/${entry.imagePath.split('/').map(encodeURIComponent).join('/')}`;
+    reference.postType = entry.postType || '';
+    reference.shape = entry.shape || '';
     references.push(reference);
+  }
+  if (productEntry) {
+    const absolutePath = join(paths.root, 'assets', 'learning', productEntry.imagePath);
+    if (existsSync(absolutePath)) {
+      const reference = normalizeReferenceMetadata({
+        id: `segment-layout-${productEntry.id}`,
+        filename: productEntry.imagePath.split('/').pop(),
+        relativePath: productEntry.imagePath,
+        mimeType: mimeTypeFromFilename(productEntry.imagePath),
+        role: 'layout_model',
+        weight: 'medium',
+        instruction: SEGMENT_PRODUCT_REFERENCE_INSTRUCTION,
+        createdAt: productEntry.createdAt,
+      });
+      reference.absolutePath = absolutePath;
+      reference.previewUrl = `/api/learning-assets/${productEntry.imagePath.split('/').map(encodeURIComponent).join('/')}`;
+      references.push(reference);
+    }
   }
   return references;
 }

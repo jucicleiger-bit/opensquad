@@ -740,7 +740,7 @@ test('saveLearningEntry tags a creative-purpose image entry with postType and sh
   });
 });
 
-test('buildSegmentLayoutReferences returns only the single most recent approved image from the project\'s own segment nodes, skips avoid/text entries', async () => {
+test('buildSegmentLayoutReferences returns every approved creative image, newest first, skips avoid/text entries', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);
     await updateProjectBrandInput('pizzaria-layout', {
@@ -759,16 +759,10 @@ test('buildSegmentLayoutReferences returns only the single most recent approved 
       await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath }, dir, new Date());
       imagePaths[name] = analyzed.imagePath;
     }
-    // A non-image approved entry and an "avoid" image entry — both must be
-    // excluded even though they'll be stamped as the most recent below.
     await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'text', text: 'não parecer gerado por IA' }, dir, new Date());
     const avoidAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'evitar.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Evitar isso' });
     await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'avoid', kind: 'image', text: 'Evitar isso', imagePath: avoidAnalyzed.imagePath }, dir, new Date());
 
-    // Stamp deterministic createdAt so recency order is unambiguous: the
-    // avoid image and the text entry are made the two MOST recent overall,
-    // so if the bucket/kind filter were broken, they'd show up in the
-    // result instead of being excluded.
     const paths = getCentralPaths(dir, 'pizzaria-layout');
     const store = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
     const node = store.nodes[groupKey];
@@ -783,8 +777,11 @@ test('buildSegmentLayoutReferences returns only the single most recent approved 
     const project = await loadProjectForTest('pizzaria-layout', dir);
     const references = await buildSegmentLayoutReferences(project, paths);
 
-    assert.equal(references.length, 1, 'MAX_SEGMENT_LAYOUT_REFERENCES caps this at the single most recent valid image');
-    assert.deepEqual(references.map((r) => r.relativePath), [imagePaths.img5]);
+    assert.deepEqual(
+      references.map((r) => r.relativePath),
+      [imagePaths.img5, imagePaths.img4, imagePaths.img3, imagePaths.img2, imagePaths.img1],
+      'every approved creative image comes back, newest first — avoid/text entries excluded'
+    );
     assert.ok(references.every((r) => r.role === 'layout_model'));
     assert.ok(references.every((r) => r.weight === 'medium'));
     assert.equal(
@@ -824,7 +821,7 @@ test('buildSegmentLayoutReferences returns the newest creative reference plus a 
   });
 });
 
-test('buildSegmentLayoutReferences skips a missing-on-disk most recent image instead of crashing or backfilling from the next-oldest candidate', async () => {
+test('buildSegmentLayoutReferences skips a missing-on-disk image and still returns the remaining valid ones', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout-missing', name: 'Pizzaria Layout Missing', handle: '@pizzarialayoutmissing', approvalEmail: 'a@example.com' }, dir);
     await updateProjectBrandInput('pizzaria-layout-missing', {
@@ -853,14 +850,47 @@ test('buildSegmentLayoutReferences skips a missing-on-disk most recent image ins
     }
     await writeFile(paths.segmentLearningsPath, JSON.stringify(store, null, 2));
 
-    // Delete img2's file on disk (the newest, and only, candidate under the
-    // cap of 1) to prove it's skipped rather than backfilled from img1.
+    // Delete img2's file on disk (the newest) — it must be skipped, but
+    // img1 (still on disk) must still come back, not an empty list.
     await rm(join(paths.root, 'assets', 'learning', imagePaths.img2));
 
     const project = await loadProjectForTest('pizzaria-layout-missing', dir);
     const references = await buildSegmentLayoutReferences(project, paths);
 
-    assert.deepEqual(references, []);
+    assert.deepEqual(references.map((r) => r.relativePath), [imagePaths.img1]);
+  });
+});
+
+test('buildSegmentLayoutReferences filters creative images by postType and shape when given', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'template-filter', name: 'Template Filter', handle: '@templatefilter', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('template-filter', {
+      brandName: 'Template Filter', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    const paths = getCentralPaths(dir, 'template-filter');
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const savedPaths = {};
+    const combos = [
+      ['offer-vertical', 'offer', 'vertical'],
+      ['offer-feed', 'offer', 'feed'],
+      ['institutional-vertical', 'institutional', 'vertical'],
+    ];
+    for (const [name, postType, shape] of combos) {
+      const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => name });
+      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: name, imagePath: analyzed.imagePath, purpose: 'creative', postType, shape }, dir);
+      savedPaths[name] = analyzed.imagePath;
+    }
+
+    const project = await loadProjectForTest('template-filter', dir);
+    const offerVertical = await buildSegmentLayoutReferences(project, paths, { postType: 'offer', shape: 'vertical' });
+    assert.deepEqual(offerVertical.map((r) => r.relativePath), [savedPaths['offer-vertical']]);
+
+    const specialDate = await buildSegmentLayoutReferences(project, paths, { postType: 'special_date', shape: 'vertical' });
+    assert.deepEqual(specialDate, []);
+
+    const allUnfiltered = await buildSegmentLayoutReferences(project, paths);
+    assert.equal(allUnfiltered.length, 3, 'no filter passed → every creative entry comes back, matching existing callers that never asked for a filter');
   });
 });
 
