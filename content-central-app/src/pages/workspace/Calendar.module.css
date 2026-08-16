@@ -103,6 +103,11 @@
   background: oklch(from var(--accent) l c h / 16%);
 }
 
+.chipPublicado {
+  border-color: var(--status-published);
+  background: oklch(from var(--status-published) l c h / 18%);
+}
+
 .dot {
   width: 7px;
   height: 7px;

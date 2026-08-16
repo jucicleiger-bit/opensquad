@@ -96,9 +96,10 @@ export function References() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>Painel de referências</h2>
+      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>Imagem e identidade visual</h2>
       <p className="muted" style={{ marginTop: 0 }}>
-        Referência não deve disputar com o Raio-X. Separe ativos oficiais, fotos reais/produtos e inspirações visuais.
+        Este é o lugar que define a aparência dos criativos. O Raio-X fornece o contexto estratégico da empresa; logo,
+        cores, direção visual e referências são controladas aqui.
       </p>
 
       <div className="grid">
@@ -121,8 +122,8 @@ export function References() {
         </Card>
 
         <Card className="field-card" style={{ padding: 16 }}>
-          <h3 style={{ marginTop: 0 }}>Direção visual consolidada</h3>
-          <label htmlFor="visual-style">Resumo visual gerado/aprovado</label>
+          <h3 style={{ marginTop: 0 }}>Direção visual dos criativos</h3>
+          <label htmlFor="visual-style">Direção visual usada nas novas imagens</label>
           <textarea id="visual-style" value={visualStyle} onChange={(e) => setVisualStyle(e.target.value)} />
           <label htmlFor="image-rules">Regras técnicas extras para o ChatGPT</label>
           <textarea
@@ -132,7 +133,7 @@ export function References() {
             onChange={(e) => setImageRules(e.target.value)}
           />
           <Button variant="secondary" className="full-width" style={{ marginTop: 8 }} disabled={rulesBusy} onClick={handleSaveRules}>
-            {rulesBusy ? "Salvando..." : "Salvar direção visual consolidada"}
+            {rulesBusy ? "Salvando..." : "Salvar direção visual"}
           </Button>
           {rulesError ? <div className="pill bad" style={{ marginTop: 10 }}>{rulesError}</div> : null}
           {rulesMessage ? <div className="pill ok" style={{ marginTop: 10 }}>{rulesMessage}</div> : null}

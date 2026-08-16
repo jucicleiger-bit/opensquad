@@ -76,6 +76,7 @@ export function AprendizadoSegmento() {
                 scope="segment"
                 groupKey={node.path}
                 entries={node.entries}
+                splitImagePurposes
                 onEntriesChange={(entries) => setNodes((current) => (current || []).map((n) => (n.path === node.path ? { ...n, entries } : n)))}
               />
             </Card>

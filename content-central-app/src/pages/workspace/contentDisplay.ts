@@ -88,11 +88,12 @@ export function groupSameCreativeItems(items: ContentItem[]): ContentGroup[] {
 export interface StatusMeta {
   label: string;
   dotClass: "dotAguardando" | "dotAprovado" | "dotPublicado" | "dotErro";
+  chipClass?: "chipPublicado";
 }
 
 export function statusMeta(item: ContentItem): StatusMeta {
   if (item.image?.generating) return { label: "Gerando imagem com IA...", dotClass: "dotAguardando" };
-  if (item.publish?.realPublished) return { label: "Publicado", dotClass: "dotPublicado" };
+  if (item.publish?.realPublished) return { label: "Publicado", dotClass: "dotPublicado", chipClass: "chipPublicado" };
   if (item.publish?.error) return { label: "Falha ao publicar", dotClass: "dotErro" };
   if (bucketForItem(item) === "aprovado") return { label: "Aprovado", dotClass: "dotAprovado" };
   return { label: "Aguardando aprovação", dotClass: "dotAguardando" };

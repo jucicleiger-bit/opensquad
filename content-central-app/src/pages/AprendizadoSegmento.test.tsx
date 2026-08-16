@@ -56,9 +56,42 @@ describe("AprendizadoSegmento", () => {
 
     expect(await screen.findByText("Esfiha tem que ser redonda")).toBeInTheDocument();
     expect(screen.getByAltText("Esfiha redonda")).toHaveAttribute("src", "/api/learning-assets/segment/group-alimenticio/esfiha.png");
+    expect(screen.getByText("Criativo")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("Refer\u00eancia de produto")).toHaveLength(2);
+    expect(screen.getAllByLabelText("Refer\u00eancia de estrutura de criativo")).toHaveLength(2);
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
     // URLSearchParams percent-encodes "í", so decode before asserting on the
     // literal value that was actually sent.
     expect(decodeURIComponent(call[0])).toContain("segmentGroup=Alimentício");
+  });
+
+  it("sends purpose=creative when analyzing an uploaded creative-structure reference", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          nodes: [
+            { path: "group:negocios-locais-e-lojas", label: "Negócios locais e lojas", level: "setor", entries: [] },
+          ],
+        },
+      },
+      { body: { imagePath: "segment/group-embalagens/modelo.png", suggestedText: "Layout vertical com preço e CTA." } },
+    ]);
+    renderPage();
+
+    await userEvent.selectOptions(await screen.findByLabelText("Setor"), "Negócios locais e lojas");
+    await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
+
+    const file = new File(["fake-image"], "modelo.png", { type: "image/png" });
+    await userEvent.upload(await screen.findByLabelText("Refer\u00eancia de estrutura de criativo"), file);
+    expect(await screen.findByDisplayValue("Layout vertical com preço e CTA.")).toBeInTheDocument();
+
+    const analyzeCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(analyzeCall[0]).toBe("/api/segment-learnings/analyze-image");
+    expect(JSON.parse(String(analyzeCall[1].body))).toMatchObject({
+      scope: "segment",
+      groupKey: "group:negocios-locais-e-lojas",
+      filename: "modelo.png",
+      purpose: "creative",
+    });
   });
 });

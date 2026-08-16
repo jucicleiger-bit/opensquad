@@ -47,6 +47,7 @@ import {
   regenerateAdCreative,
   generateContentBatch,
   generateContentSchedulePlan,
+  previewContentSchedulePlan,
   generateSpecialDateContent,
   listAdCreatives,
   listCommemorativeDates,
@@ -150,6 +151,26 @@ export async function publishWithGaveteSync(projectId, contentId, targetDir, bat
     });
   }
   return content;
+}
+
+async function syncGavetePublishedContent(projectId, targetDir, content) {
+  const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
+  if (!gaveteDir) return content;
+  try {
+    await pullQueue(gaveteDir);
+    let changed = false;
+    for (const item of content) {
+      if (item.publish?.realPublished) continue;
+      const queueItem = await readQueueItem(gaveteDir, projectId, item.contentId);
+      if (!queueItem?.publish?.realPublished) continue;
+      await applyExternalPublishResult(projectId, item.contentId, targetDir, item.batchId, queueItem.publish);
+      changed = true;
+    }
+    return changed ? listProjectContent(projectId, targetDir) : content;
+  } catch (err) {
+    console.error('[content-central] gaveta calendar sync failed:', err.message);
+    return content;
+  }
 }
 
 const API_SUPPORTED_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story']);
@@ -289,6 +310,7 @@ export async function startContentCentralServer({
   siteAnalyzer = null,
   webResearcher = null,
   learningImageAnalyzer = null,
+  offerDirectionSuggester = null,
   videoAnimator = null,
   prospectScreenshotAnalyzer = null,
   bioImprover = null,
@@ -307,6 +329,7 @@ export async function startContentCentralServer({
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
     learningImageAnalyzer: learningImageAnalyzer || (enableAiImages ? analyzeLearningImageWithCodexAgent : null),
+    offerDirectionSuggester: offerDirectionSuggester || (enableAiImages ? suggestOfferDirectionWithCodexAgent : null),
     videoAnimator: videoAnimator || (enableAiImages ? (payload) => animateImageForReelsWithFfmpeg(payload, targetDir) : null),
     prospectScreenshotAnalyzer: prospectScreenshotAnalyzer || (enableAiImages ? analyzeProspectScreenshotWithHermes : null),
     bioImprover: bioImprover || (enableAiImages ? improveProspectBioWithAi : null),
@@ -506,7 +529,8 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   const projectId = parts[2];
   if (method === 'GET' && parts.length === 4 && parts[3] === 'content') {
-    return sendJson(res, 200, { content: await listProjectContent(projectId, targetDir) });
+    const content = await listProjectContent(projectId, targetDir);
+    return sendJson(res, 200, { content: await syncGavetePublishedContent(projectId, targetDir, content) });
   }
 
   if (method === 'GET' && parts.length >= 5 && parts[3] === 'assets') {
@@ -718,6 +742,33 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, result);
   }
 
+  if (parts.length === 5 && parts[3] === 'offers' && parts[4] === 'suggest-direction') {
+    const body = await readBody(req);
+    const imageContext = await collectOfferDirectionImagePaths(projectId, body, targetDir);
+    const project = (await listCentralProjects(targetDir)).find((item) => item.projectId === projectId) || {};
+    const brandInput = project.brandInput || {};
+    const companyProfile = project.companyProfile || {};
+    try {
+      if (typeof context.offerDirectionSuggester === 'function') {
+        const notes = await context.offerDirectionSuggester({
+          projectId,
+          name: String(body.name || ''),
+          price: String(body.price || ''),
+          items: String(body.items || ''),
+          type: String(body.type || ''),
+          audienceType: String(brandInput.audienceType || companyProfile.audienceType || ''),
+          productsOrServices: String(brandInput.productsOrServices || companyProfile.productsOrServices || ''),
+          segment: String(brandInput.segment || companyProfile.segment || ''),
+          imagePaths: imageContext.imagePaths,
+        });
+        if (notes && String(notes).trim()) return sendJson(res, 200, { notes: normalizeOfferDirectionText(notes), source: 'ai' });
+      }
+      return sendJson(res, 200, { notes: fallbackOfferDirectionText({ ...body, audienceType: brandInput.audienceType || companyProfile.audienceType }), source: 'fallback' });
+    } finally {
+      await Promise.all(imageContext.tempPaths.map((filePath) => rm(filePath, { force: true }).catch(() => {})));
+    }
+  }
+
   if (parts.length === 4 && parts[3] === 'offers-delete') {
     const body = await readBody(req);
     const result = await deleteProjectOffer(projectId, body.offerId, targetDir);
@@ -769,6 +820,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
         contentRules: splitRules(body.contentRules),
         groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
         offersOnly: Boolean(body.offersOnly),
+        approvedPlan: body.approvedPlan,
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       return sendJson(res, 201, { batch, batches: [batch] });
@@ -788,6 +840,25 @@ async function handleRequest(req, res, targetDir, context = {}) {
       batches.push(batch);
     }
     return sendJson(res, 201, { batch: batches[0], batches });
+  }
+
+  // Pre-generation planning step for "Agenda e geração": returns the same
+  // regular slots the generator would create, plus holiday/commercial-date
+  // extras for the selected period. It does not write drafts or call image AI;
+  // the operator reviews this summary before clicking the real generate path.
+  if (parts.length === 4 && parts[3] === 'plan') {
+    const body = await readBody(req);
+    const formats = Array.isArray(body.formats) && body.formats.length
+      ? body.formats.map((format) => ({ ...format, channel: normalizeChannels({ channel: format.channel })[0] }))
+      : [];
+    const plan = await previewContentSchedulePlan(projectId, {
+      days: Number(body.days),
+      startDate: body.startDate,
+      formats,
+      groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
+      offersOnly: Boolean(body.offersOnly),
+    }, targetDir);
+    return sendJson(res, 200, { plan });
   }
 
   // A one-off creative for a national holiday or commercial date (Dia das
@@ -1036,6 +1107,75 @@ function resolveSafeAssetPath(targetDir, projectId, relativePath) {
   return { safeRelative, filePath, projectRoot };
 }
 
+function offerDirectionTempExtension(mimeType) {
+  if (/jpe?g/i.test(mimeType)) return '.jpg';
+  if (/webp/i.test(mimeType)) return '.webp';
+  if (/gif/i.test(mimeType)) return '.gif';
+  return '.png';
+}
+
+async function collectOfferDirectionImagePaths(projectId, body, targetDir) {
+  const imagePaths = [];
+  const tempPaths = [];
+  const dataUrlMatch = /^data:([^;]+);base64,(.+)$/s.exec(String(body?.imageDataUrl || ''));
+  if (dataUrlMatch) {
+    const [, mimeType, base64] = dataUrlMatch;
+    const tempPath = join(tmpdir(), `opensquad-offer-direction-${Date.now()}-${Math.random().toString(36).slice(2)}${offerDirectionTempExtension(mimeType)}`);
+    await writeFile(tempPath, Buffer.from(base64, 'base64'));
+    imagePaths.push(tempPath);
+    tempPaths.push(tempPath);
+  }
+
+  const ids = new Set(Array.isArray(body?.photoReferenceIds) ? body.photoReferenceIds.map(String) : []);
+  if (ids.size) {
+    const project = (await listCentralProjects(targetDir)).find((item) => item.projectId === projectId);
+    const references = [...(project?.offerAssets || []), ...(project?.brand?.references || [])];
+    for (const reference of references) {
+      if (!ids.has(String(reference?.id || ''))) continue;
+      const { filePath } = resolveSafeAssetPath(targetDir, projectId, reference.relativePath || '');
+      if (filePath) imagePaths.push(filePath);
+    }
+  }
+  return { imagePaths, tempPaths };
+}
+
+function normalizeOfferDirectionText(text) {
+  return String(text || '')
+    .replace(/^```(?:text)?/i, '')
+    .replace(/```$/i, '')
+    .trim();
+}
+
+function fallbackOfferDirectionText(body = {}) {
+  const text = `${body.name || ''} ${body.items || ''}`.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const hasSealingCue = /zip ?lock|\bzip\b|lacre|adesiv|fechamento|tampa|rosca|vedac|veda/.test(text);
+  if (/limp|microfibra|pano|esponja|detergente|desinfetante|rodo|vassoura|saco de lixo/.test(text)) {
+    return 'Direcionamento: produto de limpeza. Tom prático e direto. Chamada sugerida: Mais praticidade na limpeza do dia a dia. Promessas básicas permitidas: praticidade, uso recorrente, apoio à rotina de limpeza. Benefícios permitidos: limpeza prática, multiuso, apoio para casa/carro/cozinha/escritório. Não prometer que não risca, antibacteriano ou qualidade superior sem comprovação.';
+  }
+  if (/sacola|\bsaco\b|sacos|saquinho|sacaria/.test(text)) {
+    if (hasSealingCue) {
+      return 'Direcionamento: embalagem para organização, proteção e fechamento no atendimento. Tom comercial e B2B. Chamada sugerida: Fechamento prático para embalar com mais segurança. Promessas básicas permitidas: praticidade, fechamento/vedação quando indicado no cadastro, organização e reposição fácil. Benefícios permitidos: apoio ao balcão/delivery, embalagem mais organizada, fechamento prático. Não prometer vedação hermética, resistência exata, impermeabilidade ou conservação superior sem comprovação.';
+    }
+    return 'Direcionamento: sacolas/sacos para rotina comercial e reposição. Tom direto para operação, balcão e estoque. Chamada sugerida: Sacolas resistentes para acompanhar o ritmo do seu negócio. Promessas básicas permitidas: resistência para uso comercial, reforço quando indicado no título/foto, praticidade e reposição fácil. Benefícios permitidos: apoio ao atendimento, organização do estoque, embalagem prática para o dia a dia. Não prometer carga/peso suportado, material específico, impermeabilidade ou garantia sem cadastro.';
+  }
+  if (/guardanapo|papel toalha|toalha interfolha/.test(text)) {
+    return 'Direcionamento: descartável para atendimento, balcão e delivery. Tom prático e B2B. Chamada sugerida: Mais praticidade para servir com organização. Promessas básicas permitidas: absorção para rotina de atendimento, reposição fácil e apoio ao serviço. Benefícios permitidos: apoio ao balcão/delivery, praticidade para servir, organização da operação. Não prometer folha dupla, maciez premium, resistência molhada ou rendimento exato sem cadastro.';
+  }
+  if (/copo|prato|talher|canudo/.test(text)) {
+    return 'Direcionamento: descartável para servir clientes com praticidade. Tom comercial e direto. Chamada sugerida: Descartáveis para manter seu atendimento sempre pronto. Promessas básicas permitidas: praticidade para servir, reposição fácil e agilidade no atendimento. Benefícios permitidos: apoio a bebidas/refeições, rotina de balcão, delivery e eventos. Não prometer resistência, material, temperatura suportada ou capacidade além do cadastrado.';
+  }
+  if (/marmita|pote|tampa|bandeja/.test(text)) {
+    return 'Direcionamento: embalagem para organizar, montar e entregar pedidos. Tom B2B para operação. Chamada sugerida: Embalagens com fechamento prático para sua rotina. Promessas básicas permitidas: organização, fechamento prático quando houver tampa, apoio ao delivery e reposição fácil. Benefícios permitidos: montagem de pedidos, organização da operação, atendimento mais ágil. Não prometer vedação hermética, conservação superior, material, capacidade ou uso térmico sem cadastro.';
+  }
+  if (/filme|aluminio|papel manteiga|bobina/.test(text)) {
+    return 'Direcionamento: item de apoio para embalar, separar e proteger na rotina da operação. Tom B2B e prático. Chamada sugerida: Mais praticidade para embalar no ritmo do seu negócio. Promessas básicas permitidas: praticidade para embalar, proteção básica no manuseio, organização e reposição fácil. Benefícios permitidos: apoio ao preparo, balcão/delivery e rotina de embalagem. Não prometer conservação superior, resistência, rendimento exato ou uso térmico sem cadastro.';
+  }
+  if (/food|marmita|pote|copo|talher|prato|guardanapo|delivery|embalagem|isopor|aluminio|filme/.test(text)) {
+    return 'Direcionamento: produto para food-service/embalagem. Tom profissional e B2B. Chamada sugerida: Mais praticidade para sua operação. Promessas básicas permitidas: praticidade, economia operacional, reposição fácil, organização da rotina e apoio ao balcão/delivery. Benefícios permitidos: organização do atendimento, reposição fácil, apresentação profissional, apoio ao balcão/delivery. Não prometer certificação, material, capacidade, resistência, conservação superior ou uso térmico não cadastrado.';
+  }
+  return 'Direcionamento: produto/oferta comercial. Tom claro e direto. Criar 1 chamada de valor baseada apenas no nome/detalhes cadastrados. Promessas básicas permitidas: praticidade, economia de tempo e facilidade de reposição quando compatível com o cadastro. Benefícios permitidos: usar somente características escritas neste cadastro. Não prometer garantia, desempenho, material, desconto ou prova não informada.';
+}
+
 async function sendProjectAsset(res, targetDir, projectId, relativePath) {
   const { filePath } = resolveSafeAssetPath(targetDir, projectId, relativePath);
   if (!filePath) return sendJson(res, 400, { error: 'Asset inválido' });
@@ -1191,9 +1331,9 @@ async function sendReactApp(res, subPath) {
 // the same concrete technique vocabulary (texture, uneven lighting, no
 // plastic sheen) to work with, not just an abstract complaint.
 const TARGETED_EDIT_REALISM_LINES = [
-  'Ao aplicar o ajuste, evite aparência de IA: nada de plástico, brilho falso, comida perfeita/simétrica demais, textura lisa demais, letras embaralhadas ou texto duplicado.',
-  'Detalhes que denunciam IA e devem ser evitados: ingredientes distribuídos de forma simétrica/perfeita como render 3D, brilho artificial de "verniz", superfície sem nenhuma imperfeição, saturação de cor exagerada tipo anúncio genérico de banco de imagens, luz de "estúdio perfeito" sem ambiente real.',
-  'Prefira: textura real e levemente irregular (grãos, fibras, cortes desiguais como comida de verdade), iluminação um pouco mais quente/natural, leve profundidade de campo como foto tirada em ambiente real.',
+  'Ao aplicar o ajuste, evite aparência de IA: nada de plástico, brilho falso, simetria perfeita demais, textura lisa demais, letras embaralhadas ou texto duplicado.',
+  'Detalhes que denunciam IA e devem ser evitados: materiais artificiais, brilho de verniz, superfícies sem imperfeições, saturação exagerada, anatomia/geometria incoerente e luz de estúdio genérica sem contexto real.',
+  'Prefira: materiais e texturas realistas, pequenas imperfeições naturais, iluminação coerente com a cena e profundidade de campo plausível.',
 ];
 
 function buildTargetedEditPrompt({ content, note }) {
@@ -1243,7 +1383,7 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     referencePaths.length ? 'Se disponíveis, use as imagens de referência abaixo como base visual real, sem copiar textos, marcas ou preços não autorizados:' : '',
     referencePaths.length ? referencePaths.join('\n') : '',
     referencePaths.length ? 'As fotos de produto (product_photo) são a referência de realismo obrigatória: preserve a mesma qualidade de foto real — iluminação verdadeira de ambiente real (não estúdio genérico), textura e material reais do produto/serviço mostrado, ângulo de câmera de foto tirada por pessoa, pequenas imperfeições naturais. Pode ajustar o que o assunto pedir, mas a FOTOGRAFIA precisa parecer tirada da mesma sessão da referência, não uma composição publicitária genérica gerada do zero.' : '',
-    rescueMode ? 'No modo resgate, as referências permitidas são apenas logo/produto/estilo. Não usar nem copiar modelo de layout, distribuição horizontal, moldura, mockup ou arte quadrada de referência.' : '',
+    rescueMode ? 'No modo resgate, mantenha o modelo de layout como estrutura de zonas e hierarquia. Adapte sua proporção ao canal sem copiar moldura externa, textos, marca ou produto da referência.' : '',
     'Gere um criativo final completo e bonito: layout, produto, título, preço, CTA e logo integrados na própria imagem.',
     'Não haverá overlay automático de texto depois. Tipografia, preço, CTA e logo precisam ficar bonitos, legíveis e naturais dentro da arte.',
     'Use as referências como direção visual/produto/estilo, mas não copie textos, preços, logos ou marcas das referências.',
@@ -1261,16 +1401,16 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     note ? `Observação do usuário: ${note}` : '',
     'Estilo obrigatório: criativo publicitário profissional, coerente com o segmento e a direção visual já definidos no briefing acima (não assumir alimentação/comida a menos que o briefing diga isso), não render 3D genérico e não foto solta artificial.',
     'Importante: se o briefing contiver "Variação criativa de teste" ou "Conceito do teste", siga essa variação como prioridade. Não gere novamente o mesmo layout, mesma foto ou mesma distribuição do criativo anterior.',
-    'A cada teste, mudar claramente pelo menos 3 itens: cena principal, enquadramento, posição do preço/título, elemento de comida em destaque, fundo ou sensação visual.',
+    'A cada teste, mudar claramente pelo menos 3 itens: cena principal, enquadramento, acabamento, elemento visual de destaque, fundo ou sensação visual — sem contrariar modelo estrutural, oferta e marca.',
     'Evitar retângulo branco gigante, moldura simples, box de preço ruim ou qualquer texto ilegível/falso.',
     content.channel === 'instagram_story' || content.channel === 'instagram_reels' || content.channel === 'facebook_story'
       ? 'Obrigatório: a arte precisa nascer como Story vertical nativo 9:16, preenchendo o canvas sem parecer flyer quadrado. Distribuir topo, centro e base; preço compacto sem cobrir o produto protagonista.'
       : '',
     reviewFeedback ? `Tentativa ${attempt} de ${maxAttempts}: refazer porque o Agente Revisor bloqueou a tentativa anterior. Corrigir obrigatoriamente:\n${reviewFeedback}` : '',
-    rescueMode ? 'Regra final do modo resgate: se houver conflito entre referência visual e Story 9:16 real, ignore a referência e preserve o Story 9:16 real.' : '',
-    'Evite aparência de IA: nada de plástico, brilho falso, comida perfeita/simétrica demais, letras embaralhadas, texto falso ou texto duplicado.',
-    'Detalhes que denunciam IA e devem ser evitados: queijo com brilho artificial demais, ingredientes distribuídos de forma simétrica/perfeita como render 3D, pele/crosta sem nenhuma imperfeição, saturação de cor exagerada tipo anúncio genérico de banco de imagens, sombra e luz "estúdio perfeito" sem ambiente real.',
-    'Prefira: iluminação um pouco mais quente/natural, ingredientes espalhados de forma levemente irregular como comida de verdade, fundo/mesa com textura real (madeira, mármore, tecido), leve profundidade de campo como foto tirada com celular ou câmera em ambiente real de pizzaria.',
+    rescueMode ? 'Regra final do modo resgate: preservar Story 9:16 real e adaptar as zonas do modelo estrutural ao canvas; nunca abandonar silenciosamente o modelo.' : '',
+    'Evite aparência de IA: nada de plástico, brilho falso, simetria perfeita demais, letras embaralhadas, texto falso ou texto duplicado.',
+    'Detalhes que denunciam IA e devem ser evitados: materiais artificiais, geometria incoerente, superfícies sem imperfeições, saturação exagerada e luz de estúdio genérica sem contexto real.',
+    'Prefira: iluminação natural coerente com a cena, materiais/texturas plausíveis, pequenas imperfeições e profundidade de campo realista para o segmento do projeto.',
   ].filter(Boolean).join('\n');
 }
 
@@ -1301,7 +1441,7 @@ export function selectOpenAiImageEditReferences(references, capacity = 4) {
   const primary = references.filter((reference) => reference.role !== 'layout_model');
   if (!primary.length) return primary;
   const layout = references.filter((reference) => reference.role === 'layout_model');
-  const layoutSlots = Math.min(layout.length, capacity > 0 ? 1 : 0);
+  const layoutSlots = Math.min(layout.length, Math.max(capacity, 0), 2);
   return [...primary.slice(0, Math.max(capacity - layoutSlots, 0)), ...layout.slice(0, layoutSlots)];
 }
 
@@ -1497,19 +1637,23 @@ export async function generateBrandXrayWithAi({ project }) {
 
   const prompt = [
     'Você é um estrategista de marca e conteúdo para pequenos negócios locais no Brasil.',
-    'Com base SOMENTE nas informações abaixo, escreva um Raio-X da marca em 4 blocos.',
+    'Com base SOMENTE nas informações abaixo, escreva um Raio-X da marca em 4 blocos e sugira como completar campos vazios ou claramente fracos.',
     '',
     `Nome: ${input.brandName || project.name || ''}`,
+    `Setor principal confirmado: ${input.segmentGroup || 'não informado'}`,
+    `Tipo de negócio / nicho confirmado: ${input.segmentCategory || 'não informado'}`,
+    `Especialidade / subnicho confirmado: ${input.segmentSpecialty || 'não informado'}`,
     `Segmento: ${input.segment || 'não informado'}`,
     `O que vende/oferece: ${input.productsOrServices || 'não informado'}`,
     input.description ? `Sobre a empresa: ${input.description}` : '',
     `Região de atendimento: ${input.serviceRegion || 'não informada'}`,
     `Principal diferencial: ${input.mainDifferential || 'não informado'}`,
     `Objetivos das postagens: ${(input.contentGoals || []).join(', ') || 'não informados'}`,
+    `Foco comercial confirmado: ${input.audienceType || 'não informado'} (b2b=empresas/revendedores; b2c=consumidor final; mixed=ambos)`,
     input.audience ? `Público-alvo: ${input.audience}` : '',
     (input.tone || []).length ? `Tom de voz desejado: ${input.tone.join(', ')}` : '',
     input.positioning ? `Posicionamento desejado: ${input.positioning}` : '',
-    input.websiteOrInstagram ? `Site/Instagram: ${input.websiteOrInstagram}` : '',
+    input.websiteOrInstagram ? `Site/Instagram informado apenas como identificação para os criativos: ${input.websiteOrInstagram}` : '',
     input.factualConstraints ? `Fatos que PODEM ser citados (verdadeiros, informados pelo usuário): ${input.factualConstraints}` : '',
     colors.length ? `Cores da identidade visual: ${colors.join(', ')}` : '',
     input.brandColors ? `Cores da marca (descrição do usuário): ${input.brandColors}` : '',
@@ -1517,17 +1661,27 @@ export async function generateBrandXrayWithAi({ project }) {
     'Regras obrigatórias:',
     '- Não invente preço, promoção, endereço, prêmio, número de clientes ou qualquer fato que não foi informado acima.',
     '- Separe claramente, dentro do texto, o que foi informado pelo usuário do que é sugestão sua (ex: "Informado pelo usuário: ..." e "Sugestão da IA: ...").',
+    '- Setor, nicho e subnicho são classificações confirmadas e vinculadas ao aprendizado externo. Não troque, corrija, amplie ou reclassifique esses campos.',
+    '- Você só pode sugerir estes campos editáveis: audience, description, mainDifferential, positioning, tone e segment.',
+    '- NUNCA devolva sugestões para segmentGroup, segmentCategory ou segmentSpecialty. Esses três campos são protegidos.',
+    '- Em fieldSuggestions, sugira somente campos vazios ou fracos. Para segment, uma lista de produtos no lugar de uma descrição de segmento é um valor fraco.',
+    '- Toda sugestão é hipótese para confirmação humana. Não trate variedade, qualidade, rapidez, preço ou atendimento como diferencial sem base nas informações fornecidas.',
+    '- Se não houver base segura para sugerir um campo, omita esse campo do array em vez de inventar.',
+    '- O Site/Instagram acima é apenas informativo: você NÃO acessou o perfil. Não alegue ter visto bio, feed, seguidores ou publicações.',
+    '- Em communication, liste possíveis compradores específicos, decisores e situações de compra inferidos do negócio. Identifique tudo como hipótese para confirmação, não como fato.',
+    '- Respeite o foco comercial: B2B fala de operação, estoque, reposição, atendimento, revenda e rotina da empresa; B2C fala com consumidor final; mixed separa os dois contextos.',
     '- Seja específico para este negócio; não escreva frases genéricas que serviriam para qualquer segmento.',
     '- Escreva em português do Brasil, tom comercial e direto, sem jargão de agência.',
     input.avoid ? `- NUNCA mencione, sugira ou aproxime-se do seguinte, o usuário pediu para evitar explicitamente: ${input.avoid}.` : '',
     '',
     'Responda APENAS com um JSON válido neste formato exato, sem markdown e sem texto fora do JSON:',
-    '{"summary":"...","communication":"...","contentStrategy":"...","visualIdentity":"..."}',
+    '{"summary":"...","communication":"...","contentStrategy":"...","visualIdentity":"...","fieldSuggestions":[{"field":"audience","value":"...","reason":"...","confidence":"medium"}]}',
     '',
     '- summary: resumo da marca em 2 a 4 frases.',
-    '- communication: posicionamento, tom de voz e personalidade recomendados.',
-    '- contentStrategy: temas/pilares de conteúdo recomendados, coerentes com os objetivos escolhidos.',
+    '- communication: compradores possíveis, situações de compra, posicionamento, tom de voz e personalidade recomendados.',
+    '- contentStrategy: temas e direções de conteúdo coerentes com os objetivos escolhidos; diferencie venda com CTA de autoridade/educação/relacionamento/engajamento sem CTA comercial.',
     '- visualIdentity: direção visual recomendada, considerando as cores informadas (se houver) e o segmento.',
+    '- fieldSuggestions: array opcional. field deve ser somente audience, description, mainDifferential, positioning, tone ou segment. value e reason são textos; confidence é low, medium ou high. Para tone, value é uma lista curta separada por vírgulas.',
   ].filter(Boolean).join('\n');
 
   const model = process.env.OPENSQUAD_XAI_TEXT_MODEL || 'grok-4.5';
@@ -1557,6 +1711,7 @@ export async function generateBrandXrayWithAi({ project }) {
       communication: String(blocks.communication || '').trim(),
       contentStrategy: String(blocks.contentStrategy || '').trim(),
       visualIdentity: String(blocks.visualIdentity || '').trim(),
+      fieldSuggestions: Array.isArray(blocks.fieldSuggestions) ? blocks.fieldSuggestions : [],
     };
   } catch {
     return null;
@@ -1593,7 +1748,7 @@ export async function generatePillarSuggestionsWithAi({ project, extraContext = 
     `Principal diferencial: ${input.mainDifferential || 'não informado'}`,
     `Objetivos das postagens: ${(input.contentGoals || []).join(', ') || 'não informados'}`,
     xray ? `Resumo da marca (Raio-X aprovado): ${xray.summary?.text || ''}` : '',
-    xray ? `Comunicação recomendada: ${xray.communication?.text || ''}` : '',
+    xray ? `Compradores e comunicação: ${xray.communication?.text || ''}` : '',
     offers.length ? `Ofertas/assuntos já cadastrados: ${offers.join('; ')}` : 'Nenhuma oferta/assunto cadastrado ainda.',
     extraContext ? `Contexto adicional informado pelo operador: ${extraContext}` : '',
     '',
@@ -2087,7 +2242,7 @@ export function selectImageReferencesForCodex(imageReferences) {
   return [
     ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1),
     ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2),
-    ...imageReferences.filter((reference) => reference.role === 'layout_model').slice(0, 1),
+    ...imageReferences.filter((reference) => reference.role === 'layout_model').slice(0, 2),
   ];
 }
 
@@ -2286,21 +2441,17 @@ async function generateAiImageWithCodexAgent({ content, projectId, targetDir, no
   };
 }
 
-const EXTENDED_BACKGROUND_BLUR_RADIUS = 48;
-
 export async function cropOpenAiImageToChannel(sourceBuffer, targetDimensions) {
   const width = Number(targetDimensions?.width) || 0;
   const height = Number(targetDimensions?.height) || 0;
   if (!width || !height) return sourceBuffer;
   const source = await Jimp.read(sourceBuffer);
-
-  const backdrop = source.clone().cover({ w: width, h: height }).blur(EXTENDED_BACKGROUND_BLUR_RADIUS);
-
-  const foreground = source.clone();
-  foreground.background = 0x00000000;
-  foreground.contain({ w: width, h: height });
-
-  return backdrop.composite(foreground, 0, 0).getBuffer('image/png');
+  // Never letterbox a generated creative with a blurred duplicate. That
+  // makes a square/3:2 card look as if it were inside a Story and masks the
+  // provider's wrong canvas from the reviewer. Fill the requested frame
+  // edge-to-edge; prompt safe-zones keep required content away from crop risk.
+  source.cover({ w: width, h: height });
+  return source.getBuffer('image/png');
 }
 
 async function resolveOpenAiGeneratedImageUrl({ image, projectId, targetDir, targetDimensions }) {
@@ -3069,12 +3220,21 @@ async function normalizeUploadedImageAsset(assetInput) {
 
 export function buildAiImageReviewPrompt({ content, project, note, attachedAsFile = false } = {}) {
   const expected = content?.contentTopic || {};
+  const spec = content?.creativeSpec || {};
+  const comparisonReferences = Array.isArray(content?.image?.references)
+    ? selectImageReferencesForCodex(content.image.references)
+      .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
+    : [];
+  const attachmentManifest = comparisonReferences
+    .map((reference, index) => `Anexo ${index + 2}: ${reference.role} — ${reference.relativePath || reference.filename || reference.id || 'referência'}.`);
   return [
     contentCentralPersonaLine('renata'),
     contentCentralPersonaResponsibilityLine('renata'),
     attachedAsFile
       ? 'Analise visualmente a imagem final anexada a este turno antes de qualquer aprovação/publicação.'
       : `Analise visualmente a imagem final abaixo antes de qualquer aprovação/publicação.\nImagem: ${content?.image?.url || ''}`,
+    attachedAsFile ? 'Anexo 1: criativo final que deve ser revisado.' : '',
+    attachedAsFile && attachmentManifest.length ? attachmentManifest.join('\n') : '',
     '',
     'Dados obrigatórios do card:',
     `Projeto: ${project?.name || ''}`,
@@ -3082,11 +3242,16 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     `Título/oferta autorizada: ${expected.offerName || 'não definido'}`,
     `Preço autorizado: ${expected.price || 'não definido'}`,
     `Itens autorizados: ${expected.items || 'não definidos'}`,
+    `Observações/restrições obrigatórias: ${expected.notes || 'nenhuma'}`,
     `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — post de conteúdo, não deve ter botão/selo de CTA na arte'}`,
+    `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
+    `Força do modelo estrutural: ${spec.layout?.strength || 'livre'}`,
+    spec.layout?.zones?.length ? `Zonas obrigatórias do layout:\n${spec.layout.zones.map((zone) => `- ${zone}`).join('\n')}` : '',
     note ? `Observação do usuário: ${note}` : '',
     '',
     'Bloqueie com status "blocked" se encontrar qualquer um destes problemas:',
     '- texto principal, preço, logo ou CTA cortado nas bordas;',
+    '- quando houver logo oficial cadastrada/anexada, se a arte mostrar placeholder de marca/logo (ex.: “SUA MARCA”, “YOUR LOGO”, “LOGO AQUI”) em vez da logo real;',
     '- preço diferente do preço autorizado;',
     '- oferta extra não pertencente ao assunto atual, como rodízio em card de combo ou combo em card de rodízio;',
     '- qualquer item listado em "Itens autorizados" (ex: um combo com 4 produtos) que não apareça visualmente reconhecível na peça — todos os itens listados precisam estar representados, não só parte deles;',
@@ -3097,14 +3262,25 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     '- barras, faixas ou bordas desfocadas/esticadas nas laterais, topo ou base da imagem (sinal de que a arte não preencheu o quadro inteiro);',
     '- preço em box/moldura grande demais, simples demais, desalinhado ou cobrindo o produto principal;',
     '- se o selo de preço cobrir mais destaque que o produto, esconder parte importante do produto ou ficar dominante demais no centro;',
-    '- se a oferta disser esfiha e imagem parecer pizza, mini pizza genérica, fatia de pizza ou produto ambíguo;',
-    '- se a oferta disser combo e imagem mostrar item único sem leitura clara de combo;',
+    '- se o produto final pertencer a outra categoria, versão incompatível ou quantidade diferente da referência/oferta;',
+    '- se houver layout_model e a ordem de leitura, zonas ou hierarquia principais não forem obedecidas;',
     '',
     'Para Story/Reels, aprove somente se a peça parecer nativa de Story vertical: topo, centro e base usados com hierarquia clara, sem flyer quadrado centralizado.',
-    'Para ofertas de esfiha, aprove somente se o produto for claramente reconhecível como esfiha aberta e coerente com o combo.',
+    'Se a marca aparecer como placeholder, não trate como alerta leve: retorne status "blocked" e inclua o erro para refazer a imagem com a logo oficial.',
+    spec.product?.treatment === 'creative_redraw'
+      ? 'Redesenho criativo é permitido e não deve ser bloqueado por diferenças cosméticas de rótulo; bloqueie apenas se mudar categoria, silhueta reconhecível, cores principais ou quantidade.'
+      : '',
+    spec.product?.treatment === 'exact_asset'
+      ? 'No modo exact_asset, compare rigorosamente embalagem, rótulo, marca, cores e proporções com a foto de produto anexada.'
+      : '',
+    '',
+    'Use códigos objetivos nos problemas encontrados:',
+    'WRONG_ASPECT_RATIO, STORY_CANVAS_MISMATCH, LAYOUT_MISMATCH, PLACEHOLDER_LOGO, LOGO_MISMATCH, WRONG_PRICE, MISSING_INFORMATION, TEXT_UNREADABLE, PRODUCT_MISMATCH, VISUAL_QUALITY_LOW.',
+    'Dê notas inteiras de 0 a 100 para: format, facts, brand, layout, product e visualQuality.',
+    'Nunca retorne status ok se houver qualquer item em errors ou código bloqueante.',
     '',
     'Retorne somente JSON válido neste formato:',
-    '{"status":"ok|warning|blocked","summary":"resumo curto","checks":["..."],"warnings":["..."],"errors":["..."]}',
+    '{"status":"ok|warning|blocked","summary":"resumo curto","codes":["WRONG_PRICE"],"scores":{"format":0,"facts":0,"brand":0,"layout":0,"product":0,"visualQuality":0},"checks":["..."],"warnings":["..."],"errors":["..."]}',
   ].filter(Boolean).join('\n');
 }
 
@@ -3142,7 +3318,11 @@ async function reviewAiImageWithCodexAgent({ content, project, note }) {
   const imagePath = resolveContentImageAbsolutePath(content);
   if (!imagePath) return null;
   const prompt = buildAiImageReviewPrompt({ content, project, note, attachedAsFile: true });
-  const raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath]);
+  const comparisonPaths = selectImageReferencesForCodex(content.image?.references || [])
+    .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
+    .map((reference) => reference.absolutePath)
+    .filter((referencePath) => referencePath && referencePath !== imagePath);
+  const raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath, ...comparisonPaths]);
   if (!raw) {
     return {
       status: 'warning',
@@ -3269,10 +3449,47 @@ async function callCodexAgentText(prompt, timeoutEnvVar, imagePaths = []) {
 // — kept here rather than in content-central.js to keep that file free of
 // codex-shelling code, matching the existing analyzer/reviewer separation in
 // this file (reviewAiImageWithCodexAgent, analyzeProspectScreenshotWithHermes).
-async function analyzeLearningImageWithCodexAgent(imagePath, context) {
-  const prompt = `Descreva em 1-2 frases o que esta imagem ensina sobre "${context}" para gerar artes publicitárias mais realistas: formato real do produto, textura, iluminação, o que evita parecer "gerado por IA". Responda só com a descrição, sem introdução.`;
+async function analyzeLearningImageWithCodexAgent(imagePath, context, purpose = '') {
+  const prompt = purpose === 'creative'
+    ? `Analise esta imagem como REFERÊNCIA DE ESTRUTURA DE CRIATIVO para "${context}". Responda em português, em 4-7 linhas objetivas, somente sobre layout e hierarquia: posição do logo, chamada principal, produto, benefícios, preço, CTA, selos, blocos, contraste e ordem de leitura. Não descreva o produto específico, carne, alimento, textura, marmoreio, gordura, alecrim, sal, iluminação de produto ou cenário visual como aprendizado principal. Responda só com a estrutura, sem introdução.`
+    : `Descreva em 1-2 frases o que esta imagem ensina sobre "${context}" para gerar artes publicitárias mais realistas: formato real do produto, textura, iluminação, o que evita parecer "gerado por IA". Responda só com a descrição, sem introdução.`;
   const raw = await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', [imagePath]);
   return raw || '';
+}
+
+async function suggestOfferDirectionWithCodexAgent({ name, price, items, type, audienceType, productsOrServices, segment, imagePaths = [] }) {
+  const prompt = [
+    'Você é um estrategista de Direct Response para pequenos comércios no Brasil.',
+    'Analise o título, preço, detalhes e, se anexada, a foto real do produto. Gere um direcionamento curto para preencher o campo OBSERVAÇÕES do cadastro antes de salvar a oferta.',
+    '',
+    `Nome/título: ${name || 'não informado'}`,
+    `Preço: ${price || 'não informado'}`,
+    `Detalhes cadastrados: ${items || 'não informado'}`,
+    `Tipo: ${type || 'não informado'}`,
+    `Raio-X público: ${audienceType || 'não informado'}`,
+    `Raio-X segmento: ${segment || 'não informado'}`,
+    `Raio-X produtos/serviços: ${productsOrServices || 'não informado'}`,
+    '',
+    'Regras:',
+    '- Responda em português do Brasil, texto simples, sem markdown e sem introdução.',
+    '- Não invente promessa técnica, certificação, material, capacidade, desempenho ou garantia que não esteja visível/dito.',
+    '- Pode fazer promessas comerciais básicas quando forem sustentadas pelo produto/categoria: praticidade, economia de tempo, economia operacional, reposição fácil, organização da rotina, agilidade no atendimento e apoio ao delivery/balcão.',
+    '- Use promessas reais por família do produto quando forem plausíveis pelo título/foto: limpeza pode falar em limpar/remover gordura quando a categoria indicar; guardanapos/papel toalha podem falar em absorção/servir; copos/pratos/talheres podem falar em servir com praticidade; filmes/alumínio/bobinas podem falar em embalar/proteger/separar; potes/marmitas/tampas podem falar em organização/fechamento; sacolas/sacos podem falar em resistência para rotina comercial e reforço quando indicado.',
+    '- Vedação/fechamento só para itens com zip, lacre, adesivo, tampa ou fechamento cadastrado. Não chame fechamento comum de vedação hermética sem prova.',
+    '- Se a foto ou título indicar categoria provável, use isso como tom/direcionamento, mas marque benefícios como seguros/prováveis.',
+    '- Se o Raio-X público for B2B, priorize linguagem de negócio: operação, reposição, balcão, delivery, estoque, revenda, atacado e rotina da empresa; evite falar como consumidor final/doméstico.',
+    '- Criar 1 chamada principal curta de benefício/vantagem antes do preço.',
+    '- Listar até 3 benefícios permitidos e seguros para o criativo.',
+    '- Incluir uma restrição de segurança: o que NÃO prometer.',
+    '',
+    'Formato obrigatório em 3 a 5 linhas:',
+    'Direcionamento: ...',
+    'Chamada sugerida: ...',
+    'Promessas básicas permitidas: ...',
+    'Benefícios permitidos: ...',
+    'Não prometer: ...',
+  ].join('\n');
+  return await callCodexAgentText(prompt, 'OPENSQUAD_REVIEW_TIMEOUT_MS', imagePaths) || '';
 }
 
 // Same dispatch pattern as generateAiImageForActiveProvider — codex-agent is
@@ -3286,45 +3503,138 @@ async function callAiText(prompt, timeoutEnvVar) {
   return callCodexAgentText(prompt, timeoutEnvVar);
 }
 
-// Real "webResearcher" injected into researchOnlineVisualTrends() — pulls
-// current visual/ad trends for the project's segment using Hermes' own
-// web search & scraping toolset (already enabled by default on this
-// machine), so the image prompt gets real "what's working right now"
-// context instead of a generic guess. Findings are explicitly scoped to
-// visual PATTERNS (color, composition, typography), never a specific
-// competitor's brand/logo/copy, so they stay inspiration rather than
-// something the creative reviewer would need to police as copying.
-async function researchOnlineVisualTrendsWithHermes({ segment, productsOrServices }) {
-  const prompt = buildOnlineVisualResearchPrompt({ segment, productsOrServices });
-  const { stdout } = await execFileAsync('hermes', [
-    'chat',
-    '-q',
-    prompt,
-    '-Q',
-    '-t', 'web',
-    '--provider', process.env.OPENSQUAD_HERMES_PROVIDER || 'openai-codex',
-    '-m', process.env.OPENSQUAD_HERMES_MODEL || 'gpt-5.5',
-    '--ignore-rules',
-    '--source', 'tool',
-    '--max-turns', '8',
-  ], {
-    timeout: Number(process.env.OPENSQUAD_RESEARCH_TIMEOUT_MS || 180000),
-    maxBuffer: 1024 * 1024,
-    env: { ...process.env, PYTHONUTF8: '1' },
-  });
-  return String(stdout || '').trim();
+const ONLINE_RESEARCH_MAX_RESULTS = 6;
+const ONLINE_RESEARCH_MAX_PAGES = 3;
+const ONLINE_RESEARCH_PAGE_CHARS = 1800;
+
+function decodeHtmlAttribute(value) {
+  return String(value || '')
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
 }
 
-function buildOnlineVisualResearchPrompt({ segment, productsOrServices }) {
+function decodeDuckDuckGoResultUrl(rawHref) {
+  const href = decodeHtmlAttribute(rawHref);
+  try {
+    const parsed = new URL(href.startsWith('//') ? `https:${href}` : href);
+    return parsed.searchParams.get('uddg') || parsed.toString();
+  } catch {
+    return href;
+  }
+}
+
+function extractDuckDuckGoResults(html) {
+  const results = [];
+  const seen = new Set();
+  const anchorPattern = /<a[^>]+class=["'][^"']*result__a[^"']*["'][^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+  let match = anchorPattern.exec(html);
+  while (match && results.length < ONLINE_RESEARCH_MAX_RESULTS) {
+    const start = match.index;
+    const end = anchorPattern.lastIndex;
+    const next = html.slice(end).search(/<a[^>]+class=["'][^"']*result__a/i);
+    const block = html.slice(start, next >= 0 ? end + next : Math.min(html.length, end + 2500));
+    const url = decodeDuckDuckGoResultUrl(match[1]);
+    if (!url || seen.has(url)) {
+      match = anchorPattern.exec(html);
+      continue;
+    }
+    seen.add(url);
+    const title = htmlToReadableText(match[2]);
+    const snippetMatch = block.match(/class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/a>/i)
+      || block.match(/class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+    const snippet = snippetMatch ? htmlToReadableText(snippetMatch[1]) : '';
+    results.push({ title, url, snippet });
+    match = anchorPattern.exec(html);
+  }
+  return results;
+}
+
+async function searchDuckDuckGo(query) {
+  const url = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: SITE_FETCH_HEADERS });
+  if (!response.ok) throw new Error(`DuckDuckGo respondeu com status ${response.status}.`);
+  return extractDuckDuckGoResults(await response.text());
+}
+
+async function collectOnlineVisualResearchEvidence({ segment, productsOrServices }) {
+  const base = [segment, productsOrServices].filter(Boolean).join(' ').trim();
+  const queries = [
+    `${base} anúncio Instagram tendências visuais promoção`,
+    `${base} posts promocionais Instagram referências visuais`,
+  ];
+  const found = [];
+  const seen = new Set();
+  for (const query of queries) {
+    try {
+      for (const result of await searchDuckDuckGo(query)) {
+        if (!result.url || seen.has(result.url)) continue;
+        seen.add(result.url);
+        found.push({ query, ...result });
+        if (found.length >= ONLINE_RESEARCH_MAX_RESULTS) break;
+      }
+    } catch (err) {
+      console.error('[content-central] online reference search failed:', err.message);
+    }
+    if (found.length >= ONLINE_RESEARCH_MAX_RESULTS) break;
+  }
+  if (!found.length) throw new Error('A pesquisa online não encontrou resultados legíveis agora. Tente novamente em instantes.');
+
+  let fetchedPages = 0;
+  for (const result of found) {
+    if (fetchedPages >= ONLINE_RESEARCH_MAX_PAGES) break;
+    try {
+      const { html } = await fetchRawHtml(result.url);
+      const text = htmlToReadableText(html).slice(0, ONLINE_RESEARCH_PAGE_CHARS);
+      if (text) {
+        result.pageText = text;
+        fetchedPages += 1;
+      }
+    } catch {
+      // Search snippets are still real evidence; many social/ad-library pages
+      // block anonymous fetches, so a blocked page should not discard the
+      // whole research run.
+    }
+  }
+  return found;
+}
+
+function formatOnlineResearchEvidence(evidence) {
+  return evidence.map((item, index) => [
+    `Fonte ${index + 1}: ${item.title || 'sem título'}`,
+    `URL: ${item.url}`,
+    item.snippet ? `Resumo do buscador: ${item.snippet}` : '',
+    item.pageText ? `Trecho navegado: ${item.pageText}` : '',
+  ].filter(Boolean).join('\n')).join('\n\n');
+}
+
+// Real "webResearcher" injected into researchOnlineVisualTrends() — collects
+// live search results and fetches reachable pages directly from Node, avoiding
+// the Hermes web-tool/Firecrawl dependency that may be disabled on the user's
+// machine. The LLM only summarizes the collected evidence into visual
+// PATTERNS (color, composition, typography), never competitor brand/logo/copy.
+async function researchOnlineVisualTrendsWithHermes({ segment, productsOrServices }) {
+  const evidence = await collectOnlineVisualResearchEvidence({ segment, productsOrServices });
+  const prompt = buildOnlineVisualResearchPrompt({ segment, productsOrServices, evidence });
+  const result = await callAiText(prompt, 'OPENSQUAD_RESEARCH_TIMEOUT_MS');
+  if (!result) throw new Error('A pesquisa online coletou fontes, mas não conseguiu resumir direções visuais agora. Tente novamente em instantes.');
+  return result;
+}
+
+function buildOnlineVisualResearchPrompt({ segment, productsOrServices, evidence = [] }) {
   return [
-    'Pesquise na internet agora (use busca e navegação real, não invente) tendências visuais atuais de anúncios/posts para o segmento abaixo.',
+    'Você vai transformar evidências reais de busca/navegação em direções visuais para uma IA de imagem.',
     '',
     `Segmento: ${segment || 'não informado'}`,
     `Produtos/serviços: ${productsOrServices || 'não informado'}`,
     '',
-    'Procure por anúncios ativos de concorrentes/negócios parecidos (ex: Biblioteca de Anúncios da Meta) e posts de contas de referência do mesmo nicho, olhando o que está sendo usado agora em termos de cor, composição, tipografia e estilo de imagem.',
+    'EVIDÊNCIAS REAIS COLETADAS AGORA:',
+    formatOnlineResearchEvidence(evidence),
     '',
-    'IMPORTANTE: isso é só inspiração de padrão visual, nunca cópia. Não descreva nem cite marca, logo, texto ou preço específico de nenhum concorrente — resuma só o PADRÃO (ex: "fundo escuro com foto do produto centralizada e preço em selo circular colorido").',
+    'IMPORTANTE: use só como inspiração de padrão visual, nunca como cópia. Não descreva nem cite marca, logo, texto ou preço específico de nenhum concorrente — resuma só o PADRÃO (ex: "fundo escuro com foto do produto centralizada e preço em selo circular colorido").',
+    'Se as evidências forem mais sobre ideias de post do que sobre estética, extraia apenas padrões visuais seguros que apareçam nelas. Não diga que não pode pesquisar; a busca já foi feita pelo sistema.',
     '',
     'Responda em texto simples, uma descoberta por linha (sem markdown, sem numeração, sem títulos), entre 3 e 6 linhas, cada uma uma direção visual acionável e específica que a IA de geração de imagem deste projeto deveria seguir.',
   ].join('\n');
@@ -4404,7 +4714,7 @@ details#createProjectDetails>div{overflow:hidden;animation:detailsIn .3s var(--e
     </section>
     <section id="tab-company" class="card tab-panel">
       <div class="section-title"><h2>Empresa / Raio-X</h2><span class="step">coleta rápida</span></div>
-      <div class="notice"><b>Fluxo simples:</b><br><span class="muted">Você informa só o básico. A IA organiza, sugere a comunicação e monta o Raio-X da marca para usar na criação de posts.</span></div>
+      <div class="notice"><b>Fluxo simples:</b><br><span class="muted">Você informa os fatos e objetivos. A IA organiza o contexto, sugere compradores, tom e estratégia de conteúdo. A identidade visual continua na aba Referências e imagem.</span></div>
       <div id="projectReadiness" class="notice muted" style="margin-top:10px">Selecione um projeto para ver o que já está pronto.</div>
       <h3 class="section-heading">1. Informações básicas</h3>
       <div class="grid">
@@ -4443,15 +4753,15 @@ details#createProjectDetails>div{overflow:hidden;animation:detailsIn .3s var(--e
         <button type="button" class="secondary" data-content-goal="show_products">Mostrar produtos</button>
         <button type="button" class="secondary" data-content-goal="education">Educar o público</button>
       </div>
-      <button id="analyzeBrandButton" class="action-primary full-width" style="margin-top:14px" onclick="analyzeBrandXray()">Analisar minha marca</button>
-      <h3 class="section-heading">Raio-X da marca</h3>
+      <button id="analyzeBrandButton" class="action-primary full-width" style="margin-top:14px" onclick="analyzeBrandXray()">Salvar e analisar minha marca</button>
+      <h3 class="section-heading">Estratégia sugerida pelo Raio-X</h3>
       <div id="brandXrayBlocks" class="reference-gallery muted">Preencha as informações, escolha objetivos e clique em “Analisar minha marca”.</div>
-      <div class="button-row" style="margin-top:12px"><button class="action-primary" onclick="approveBrandXray()">Usar este Raio-X</button></div>
+      <div class="button-row" style="margin-top:12px"><button class="action-primary" onclick="approveBrandXray()">Aprovar estratégia da marca</button></div>
       <details class="field-card" style="margin-top:14px"><summary>Configurações avançadas</summary><p class="muted">O briefing antigo continua compatível por baixo para projetos já criados, mas não aparece no fluxo principal.</p></details>
     </section>
     <section id="tab-references" class="card tab-panel">
-      <div class="section-title"><h2>Painel de referências</h2><span class="step">visual</span></div>
-      <p class="muted">Referência não deve disputar com o Raio-X. Separe ativos oficiais, fotos reais/produtos e inspirações visuais. O prompt aplica uma regra automática para cada categoria.</p>
+      <div class="section-title"><h2>Imagem e identidade visual</h2><span class="step">visual</span></div>
+      <p class="muted">Este é o lugar que define a aparência dos criativos. O Raio-X fornece o contexto estratégico; logo, cores, direção e referências são controladas aqui.</p>
       <div class="grid" style="margin-bottom:14px"><div class="notice"><b>Ativos oficiais da marca</b><br><span class="muted">Logo, mascote, cardápio, embalagem e identidade oficial. Preservar exatamente como enviado.</span></div><div class="notice"><b>Fotos reais e produtos</b><br><span class="muted">Pizza, prato, ambiente, equipe ou embalagem real. Preservar aparência real, sem trocar produto.</span></div><div class="notice"><b>Inspirações visuais</b><br><span class="muted">Flyer, layout, fotografia, composição ou paleta. Usar só como inspiração; não copiar marcas, textos ou preços.</span></div></div>
       <div class="grid">
         <div class="field-card">
@@ -4461,10 +4771,10 @@ details#createProjectDetails>div{overflow:hidden;animation:detailsIn .3s var(--e
           <div class="guide-box" style="margin-top:12px"><b>Regra automática:</b><br><span class="muted">Usar exatamente como foi enviado. Não redesenhar, reinterpretar, alterar cores, trocar textos ou criar versão parecida.</span></div>
         </div>
         <div class="field-card">
-          <h3>Direção visual consolidada</h3>
-          <label>Resumo visual gerado/aprovado</label><textarea id="visualStyle" placeholder="Depois de aprovar o briefing, este campo recebe um resumo consolidado. Você pode editar, mas não precisa escrever do zero."></textarea>
+          <h3>Direção visual dos criativos</h3>
+          <label>Direção visual usada nas novas imagens</label><textarea id="visualStyle" placeholder="Descreva composição, fotografia, cores e clima visual desejados."></textarea>
           <details class="field-card" style="margin-top:10px"><summary>Configurações avançadas</summary><label>Regras técnicas extras para o ChatGPT</label><textarea id="imageRules" placeholder="Use só quando necessário. Ex: texto curto, área segura, não inventar preço."></textarea></details>
-          <button class="secondary full-width" style="margin-top:8px" onclick="saveImageRules()">Salvar direção visual consolidada</button>
+          <button class="secondary full-width" style="margin-top:8px" onclick="saveImageRules()">Salvar direção visual</button>
         </div>
       </div>
       <div class="reference-panel">
@@ -4487,7 +4797,7 @@ details#createProjectDetails>div{overflow:hidden;animation:detailsIn .3s var(--e
       <div class="grid">
         <div>
           <label>Nome da oferta/assunto</label><input id="offerName" placeholder="Ex: Combo 3 pizzas">
-          <label>Tipo de publicação</label><select id="offerType"><option value="combo">Combo / promoção</option><option value="rodizio">Rodízio</option><option value="delivery">Delivery</option><option value="offer">Oferta direta</option><option value="product">Produto destaque</option><option value="orientation">Post de orientação</option><option value="desire">Post de desejo</option><option value="urgency">Urgência / hoje tem</option><option value="institutional">Institucional</option><option value="social_proof">Prova social</option></select>
+          <label>Tipo de publicação</label><select id="offerType"><option value="combo">Combo / promoção</option><option value="rodizio">Rodízio</option><option value="delivery">Delivery</option><option value="offer">Oferta direta</option><option value="service">Serviço</option><option value="product">Produto destaque</option><option value="orientation">Post de orientação</option><option value="desire">Post de desejo</option><option value="urgency">Urgência / hoje tem</option><option value="institutional">Institucional</option><option value="social_proof">Prova social</option></select>
           <label>Preço</label><input id="offerPrice" placeholder="Ex: R$99,00">
         </div>
         <div>
@@ -4570,16 +4880,16 @@ document.querySelectorAll('[data-content-goal]').forEach(btn=>{btn.onclick=()=>{
 function selectedContentGoals(){return [...document.querySelectorAll('[data-content-goal].action-primary')].map(btn=>btn.dataset.contentGoal)}
 function fillBrandInput(p={}){const input=p.brandInput||{};$('brandName').value=input.brandName||p.name||'';$('brandSegment').value=input.segment||p.companyProfile?.segment||'';$('brandProductsOrServices').value=input.productsOrServices||p.companyProfile?.productsOrServices||'';$('brandDescription').value=input.description||p.companyProfile?.description||'';$('brandServiceRegion').value=input.serviceRegion||p.companyProfile?.location||'';$('brandMainDifferential').value=input.mainDifferential||p.companyProfile?.differentiators||'';setGoalButtons(input.contentGoals||p.companyProfile?.contentGoals||[]);renderLogoIdentity(p)}
 function renderLogoIdentity(p={}){const box=$('logoColorPreview');if(!box)return;const identity=p.brandIdentity||{};const colors=[...(identity.editedColors||[]),...(identity.extractedColors||[])];box.innerHTML='<b>Cores identificadas na logo</b><br><span class="muted">'+(colors.length?esc(colors.join(', ')):'Envie a logo. A primeira versão preserva a logo e permite editar cores no bloco de Identidade visual do Raio-X.')+'</span>'+(identity.logoPath?'<br><span class="pill">logo enviada</span>':'')}
-function sourceLabel(source){return{ai_suggestion:'sugestão da IA',user_input:'informado pelo usuário',logo_identity:'extraído da logo'}[source]||source}
+function sourceLabel(source){return{ai_analysis:'análise por IA',ai_suggestion:'sugestão da IA',structured_fallback:'pré-análise local',inferred_hypothesis:'hipótese para confirmar',user_input:'informado pela empresa',logo_identity:'extraído da logo'}[source]||source}
 function renderProjectReadiness(p){const box=$('projectReadiness');if(!box)return;const input=p?.brandInput||{};const basicsOk=Boolean(input.brandName&&input.segment&&input.productsOrServices);const logoOk=Boolean(p?.brandIdentity?.logoPath);const goalsOk=Boolean((input.contentGoals||[]).length);const xrayOk=p?.brandXray?.status==='approved';const offersOk=Boolean((p?.contentStrategy?.offers||[]).filter(offer=>offer.active!==false).length);const referencesOk=Boolean((p?.brand?.references||[]).length);const items=[['Informações básicas preenchidas',basicsOk],['Logo enviada',logoOk],['Objetivos do conteúdo escolhidos',goalsOk],[xrayOk?'Raio-X aprovado':'Raio-X ainda não usado',xrayOk],['Ofertas cadastradas',offersOk],['Referências cadastradas',referencesOk]];box.classList.remove('muted');box.innerHTML='<b>Projeto: '+esc(p?.name||'')+'</b><br>'+items.map(([label,ok])=>(ok?'✅':'⚠️')+' '+esc(label)).join('<br>')}
 function autoGrowTextareas(root=document){root.querySelectorAll('textarea[data-xray-block]').forEach(area=>{area.style.height='auto';area.style.height=Math.max(220,area.scrollHeight+2)+'px';area.oninput=()=>{area.style.height='auto';area.style.height=Math.max(220,area.scrollHeight+2)+'px'}})}
-function renderBrandXray(p){const box=$('brandXrayBlocks');if(!box)return;const xray=p?.brandXray||{};const blocks=xray.blocks||{};const ids=['summary','communication','contentStrategy','visualIdentity'];const labels={summary:'Resumo da marca',communication:'Comunicação recomendada',contentStrategy:'Estratégia de conteúdo',visualIdentity:'Identidade visual'};const hasBlocks=Object.keys(blocks).length;box.classList.toggle('muted',!hasBlocks);box.classList.toggle('brand-xray-grid',hasBlocks);box.innerHTML=hasBlocks?'<div class="brand-xray-intro"><b>Revise os 4 blocos do Raio-X.</b><br><span class="muted">Agora o texto aparece maior, em duas colunas, sem cards espremidos. Edite direto no campo se quiser e depois clique em “Usar este Raio-X”.</span></div>':'Preencha as informações, escolha objetivos e clique em “Analisar minha marca”.';ids.forEach(id=>{const block=blocks[id];if(!block)return;const sources=Array.isArray(block.sources)&&block.sources.length?block.sources:[block.source||'ai_suggestion'];const card=document.createElement('div');card.className='reference-card brand-xray-card';card.innerHTML='<div class="reference-body"><div class="reference-name">'+esc(labels[id]||block.label||id)+'</div><div class="reference-meta"><span class="pill">'+esc(block.status||xray.status||'gerado')+'</span>'+sources.map(source=>'<span class="pill">'+esc(sourceLabel(source))+'</span>').join('')+'</div><textarea aria-label="'+esc(labels[id]||block.label||id)+'" data-xray-block="'+esc(id)+'">'+esc(block.text||'')+'</textarea><div class="brand-xray-source-note">Dica: mantenha fatos confirmados separados de sugestões da IA. Não transforme sugestão em promessa.</div></div>';box.appendChild(card)});autoGrowTextareas(box)}
+function renderBrandXray(p){const box=$('brandXrayBlocks');if(!box)return;const xray=p?.brandXray||{};const blocks=xray.blocks||{};const ids=['summary','communication','contentStrategy'];const labels={summary:'Resumo da marca',communication:'Compradores e comunicação',contentStrategy:'Estratégia de conteúdo'};const hasBlocks=ids.some(id=>blocks[id]?.text);box.classList.toggle('muted',!hasBlocks);box.classList.toggle('brand-xray-grid',hasBlocks);const modeNote=xray.analysisMode==='ai'?'Análise estratégica feita pela IA.':'Pré-análise local: confirme as hipóteses antes de aprovar.';box.innerHTML=hasBlocks?'<div class="brand-xray-intro"><b>Revise a estratégia sugerida.</b><br><span class="muted">'+esc(modeNote)+' A identidade visual continua na aba Referências e imagem.</span></div>':'Preencha as informações, escolha objetivos e clique em “Salvar e analisar minha marca”.';ids.forEach(id=>{const block=blocks[id];if(!block)return;const sources=Array.isArray(block.sources)&&block.sources.length?block.sources:[block.source||xray.source||'structured_fallback'];const card=document.createElement('div');card.className='reference-card brand-xray-card';card.innerHTML='<div class="reference-body"><div class="reference-name">'+esc(labels[id]||block.label||id)+'</div><div class="reference-meta"><span class="pill">'+esc(block.status||xray.status||'gerado')+'</span>'+sources.map(source=>'<span class="pill">'+esc(sourceLabel(source))+'</span>').join('')+'</div><textarea aria-label="'+esc(labels[id]||block.label||id)+'" data-xray-block="'+esc(id)+'">'+esc(block.text||'')+'</textarea><div class="brand-xray-source-note">Confirme as hipóteses antes de aprovar. Sugestões não são fatos nem promessas.</div></div>';box.appendChild(card)});autoGrowTextareas(box)}
 async function selectProject(id){selectedProjectId=id;const p=state.projects.find(x=>x.projectId===id);if(!p)return;$('metricSelected').textContent=p.name.split(' ')[0]||p.projectId;$('tokenHandle').value=p.instagram.handle||'';$('visualStyle').value=p.brand?.visualStyle||'';$('imageRules').value=(p.brand?.imageRules||[]).join('\\n');fillBrandInput(p);renderBrandXray(p);renderProjectReadiness(p);$('selected').innerHTML='<b>'+esc(p.name)+'</b><br>Conta: '+esc(p.instagram.handle)+'<br>Modo: '+esc(p.mode)+'<br>Segmento: '+esc(p.brandInput?.segment||p.companyProfile?.segment||'Raio-X não preenchido')+'<br>Raio-X: '+esc(p.brandXray?.status||'empty')+'<br>Token: '+(p.token.configured?esc(p.token.masked)+' · '+p.token.daysRemaining+' dias':'não cadastrado')+'<br><span class="muted">Pasta local: _opensquad/content-central/projects/'+esc(p.projectId)+'</span>';renderReferences(p);renderOffers(p);renderNextTestTopic(p);renderProjects();const activeOfferCount=(p.contentStrategy?.offers||[]).filter(offer=>offer.active!==false).length;const offersWarningBox=$('noOffersWarning');if(offersWarningBox)offersWarningBox.style.display=activeOfferCount?'none':'block';await loadContent()}
 function referenceRoleLabel(role){return{brand_asset:'Ativo oficial/logo',product_photo:'Foto real do produto',layout_model:'Modelo visual que gostei',text_parameter:'Exemplo de texto/oferta',visual_reference:'Inspiração visual'}[role]||'Inspiração visual'}
 function referenceCategoryLabel(category){return{official_asset:'Ativos oficiais da marca',real_product:'Fotos reais e produtos',visual_inspiration:'Inspirações visuais'}[category]||'Inspirações visuais'}
 function referenceAutomaticRule(category){return{official_asset:'Preservar exatamente o ativo enviado. Não redesenhar, reinterpretar, alterar textos, cores ou proporções importantes.',real_product:'Preservar a aparência real. É permitido recortar, ajustar iluminação e integrar à composição, mas não substituir por outro produto.',visual_inspiration:'Utilizar apenas como inspiração visual. Não copiar logos, nomes, textos, preços, produtos ou elementos exclusivos da referência.'}[category]||'Utilizar apenas como inspiração visual. Não copiar informações factuais da referência.'}
 function referenceRoleLabels(ref){const roles=Array.isArray(ref.usageRoles)&&ref.usageRoles.length?ref.usageRoles:[ref.role];return roles.map(referenceRoleLabel).join(', ')}
-function offerTypeLabel(type){return{offer:'Oferta direta',combo:'Combo / promoção',rodizio:'Rodízio',delivery:'Delivery',product:'Produto destaque',orientation:'Post de orientação',desire:'Post de desejo',urgency:'Urgência / hoje tem',institutional:'Institucional',social_proof:'Prova social'}[type]||'Oferta direta'}
+function offerTypeLabel(type){return{offer:'Oferta direta',service:'Serviço',combo:'Combo / promoção',rodizio:'Rodízio',delivery:'Delivery',product:'Produto destaque',orientation:'Post de orientação',desire:'Post de desejo',urgency:'Urgência / hoje tem',institutional:'Institucional',social_proof:'Prova social'}[type]||'Oferta direta'}
 function renderNextTestTopic(p){const el=$('nextTestTopic');if(!el)return;const offers=(p?.contentStrategy?.offers||[]).filter(offer=>offer.active!==false);if(!offers.length){const goals=p?.brandInput?.contentGoals||[];el.innerHTML=goals.length?'<b>Próximo assunto do Teste seguro:</b><br><span class="muted">Nenhuma oferta cadastrada, mas você marcou objetivos de conteúdo — o teste vai gerar um post baseado neles (autoridade, engajamento etc.) até você cadastrar ofertas.</span>':'<b>Próximo assunto do Teste seguro:</b><br><span class="muted">Nenhuma oferta nem objetivo de conteúdo cadastrado. O teste vai usar assuntos genéricos até você cadastrar pelo menos um.</span>';return}const raw=Number(p.contentStrategy?.nextTestTopicIndex||0);const index=Number.isFinite(raw)?((Math.trunc(raw)%offers.length)+offers.length)%offers.length:0;const offer=offers[index];el.innerHTML='<b>Próximo assunto do Teste seguro:</b><br><span class="muted">'+esc(offer.name)+' · '+esc(offerTypeLabel(offer.type))+(offer.price?' · '+esc(offer.price):'')+'. Depois do teste, ele avança para a próxima oferta ativa.</span>'}
 function referenceEditFormHtml(ref){const category=ref.referenceCategory||'visual_inspiration';const weight=ref.weight||'medium';return '<div class="field-card" style="margin-top:10px"><label>Categoria da referência</label><select data-edit-category><option value="official_asset"'+(category==='official_asset'?' selected':'')+'>Ativos oficiais da marca</option><option value="real_product"'+(category==='real_product'?' selected':'')+'>Fotos reais e produtos</option><option value="visual_inspiration"'+(category==='visual_inspiration'?' selected':'')+'>Inspirações visuais</option></select><label>Observação curta</label><input data-edit-instruction value="'+esc(ref.instruction||'')+'"><label class="pill" style="margin:8px 0;width:max-content"><input type="checkbox" data-edit-use'+(ref.useInNextGeneration===false?'':' checked')+'> Usar na próxima geração</label><label>Prioridade</label><select data-edit-weight><option value="low"'+(weight==='low'?' selected':'')+'>Baixo</option><option value="medium"'+(weight==='medium'?' selected':'')+'>Médio</option><option value="high"'+(weight==='high'?' selected':'')+'>Alto</option></select><div class="button-row" style="margin-top:8px"><button class="action-primary" data-save-reference>Salvar</button><button class="secondary" data-cancel-reference>Cancelar</button></div></div>'}
 function renderReferences(p){const refs=p.brand?.references||[];const box=$('referenceGallery');if(!box)return;box.classList.toggle('muted',!refs.length);box.innerHTML=refs.length?'':'Nenhuma referência enviada ainda.';refs.forEach(ref=>{const isImage=String(ref.mimeType||'').startsWith('image/');const isEditing=ref.relativePath===editingReferencePath;const card=document.createElement('div');card.className='reference-card';const actionsHtml=isEditing?'':'<div class="card-actions"><button class="secondary" data-edit-reference>Editar</button><button class="card-delete" data-delete-reference>Apagar referência</button></div>';card.innerHTML='<div class="reference-thumb">'+(isImage?'<img alt="'+esc(ref.filename)+'" src="'+esc(ref.previewUrl)+'">':'<span>'+esc(ref.filename)+'</span>')+'</div><div class="reference-body"><div class="reference-name">'+esc(ref.filename)+'</div><div class="reference-meta"><span class="pill">'+esc(referenceCategoryLabel(ref.referenceCategory))+'</span><span class="pill">'+esc(referenceRoleLabels(ref))+'</span><span class="pill">'+(ref.useInNextGeneration===false?'não usar':'usar próxima')+'</span><span class="pill">prioridade '+esc(ref.weight)+'</span></div><div class="reference-note"><b>Regra automática:</b> '+esc(ref.automaticRule||referenceAutomaticRule(ref.referenceCategory))+'<br><b>Obs:</b> '+esc(ref.instruction||'Sem observação específica.')+'</div>'+(isEditing?referenceEditFormHtml(ref):'')+actionsHtml+'</div>';if(isEditing){card.querySelector('[data-save-reference]').onclick=(event)=>{event.stopPropagation();saveReferenceEdit(ref.relativePath,card)};card.querySelector('[data-cancel-reference]').onclick=(event)=>{event.stopPropagation();cancelEditReference()}}else{card.querySelector('[data-edit-reference]').onclick=(event)=>{event.stopPropagation();editReference(ref.relativePath)};card.querySelector('[data-delete-reference]').onclick=(event)=>{event.stopPropagation();deleteReference(ref.relativePath)}}box.appendChild(card)})}
@@ -4593,7 +4903,7 @@ async function saveBrandInput(){if(!selectedProjectId)return toast('Selecione um
 async function saveCompanyProfile(){return saveBrandInput()}
 function xrayEdits(){const edits={};document.querySelectorAll('[data-xray-block]').forEach(input=>{edits[input.dataset.xrayBlock]=input.value});return edits}
 async function analyzeBrandXray(){if(!selectedProjectId)return toast('Selecione um projeto',true);setButtonBusy('analyzeBrandButton',true,'Analisando...');try{await saveBrandInput();await api('/api/projects/'+selectedProjectId+'/brand-xray/analyze',{method:'POST',body:JSON.stringify({})});toast('Raio-X da marca gerado');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}finally{setButtonBusy('analyzeBrandButton',false)}}
-async function approveBrandXray(){if(!selectedProjectId)return toast('Selecione um projeto',true);try{await api('/api/projects/'+selectedProjectId+'/brand-xray/approve',{method:'POST',body:JSON.stringify({edits:xrayEdits()})});toast('Raio-X aprovado e pronto para gerar conteúdos');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
+async function approveBrandXray(){if(!selectedProjectId)return toast('Selecione um projeto',true);try{await api('/api/projects/'+selectedProjectId+'/brand-xray/approve',{method:'POST',body:JSON.stringify({edits:xrayEdits()})});toast('Estratégia da marca aprovada');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
 async function saveToken(){if(!selectedProjectId)return toast('Selecione um projeto',true);try{const res=await api('/api/projects/'+selectedProjectId+'/token',{method:'POST',body:JSON.stringify({token:$('token').value,handle:$('tokenHandle').value})});$('token').value='';toast('Token validado e salvo: '+(res.project.token.daysRemaining??'?')+' dias restantes');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
 function fileToDataUrl(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(file)})}
 function selectedReferenceUsageRoles(){const roles=selectedCheckboxValues('referenceUsageRoles');return roles.length?roles:['visual_reference']}
@@ -4603,7 +4913,7 @@ async function uploadLogo(){const file=$('logoFile').files[0];if(!file)return to
 async function uploadBrandLogo(){const file=$('brandLogoFile').files[0];if(!file)return toast('Escolha um arquivo de logo',true);try{if(!selectedProjectId)return toast('Selecione um projeto',true);const dataUrl=await fileToDataUrl(file);await api('/api/projects/'+selectedProjectId+'/assets',{method:'POST',body:JSON.stringify({kind:'logo',filename:file.name,dataUrl,role:'brand_asset',usageRoles:['brand_asset'],referenceCategory:'official_asset',useInNextGeneration:true,instruction:'Logo oficial da marca. Preservar exatamente como enviado.'})});$('brandLogoFile').value='';toast('Logo enviado');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
 async function uploadReferences(){const files=[...$('referenceFile').files];if(!files.length)return toast('Escolha pelo menos uma referência',true);try{for(const file of files)await uploadAsset('reference',file);$('referenceFile').value='';$('referenceInstruction').value='';toast(files.length+' referência(s) enviada(s)');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
 async function deleteReference(relativePath){if(!selectedProjectId)return toast('Selecione um projeto',true);if(!confirm('Apagar esta referência do projeto?'))return;try{await api('/api/projects/'+selectedProjectId+'/references-delete',{method:'POST',body:JSON.stringify({relativePath})});if(editingReferencePath===relativePath)editingReferencePath=null;toast('Referência apagada');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
-async function saveImageRules(){if(!selectedProjectId)return toast('Selecione um projeto',true);try{await api('/api/projects/'+selectedProjectId+'/image-rules',{method:'POST',body:JSON.stringify({visualStyle:$('visualStyle').value,imageRules:$('imageRules').value})});toast('Regras de imagem salvas');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
+async function saveImageRules(){if(!selectedProjectId)return toast('Selecione um projeto',true);try{await api('/api/projects/'+selectedProjectId+'/image-rules',{method:'POST',body:JSON.stringify({visualStyle:$('visualStyle').value,imageRules:$('imageRules').value})});toast('Direção visual salva');await load();await selectProject(selectedProjectId)}catch(e){toast(e.message,true)}}
 function setOfferFormEditMode(active){const btn=$('offerSaveButton');if(btn)btn.textContent=active?'Salvar edição':'Salvar oferta/assunto';const cancelBtn=$('offerCancelEditButton');if(cancelBtn)cancelBtn.style.display=active?'inline-flex':'none'}
 function editOffer(offerId){const p=currentProject();if(!p)return;const offer=(p.contentStrategy?.offers||[]).find(o=>o.id===offerId);if(!offer)return;editingOfferId=offerId;$('offerName').value=offer.name||'';$('offerType').value=offer.type||'offer';$('offerPrice').value=offer.price||'';$('offerItems').value=offer.items||'';$('offerCta').value=offer.cta||'';$('offerAutoCta').checked=!!offer.autoGenerateCta;$('offerNotes').value=offer.notes||'';setOfferFormEditMode(true);switchTab('offers');$('offerName').scrollIntoView({behavior:'smooth',block:'center'})}
 function cancelEditOffer(){editingOfferId=null;$('offerName').value='';$('offerType').value='offer';$('offerPrice').value='';$('offerItems').value='';$('offerCta').value='';$('offerAutoCta').checked=false;$('offerNotes').value='';setOfferFormEditMode(false)}

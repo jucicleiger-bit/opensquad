@@ -55,9 +55,9 @@ describe("References", () => {
     ]);
     renderReferences();
 
-    const visualStyleField = await screen.findByLabelText("Resumo visual gerado/aprovado");
+    const visualStyleField = await screen.findByLabelText("Direção visual usada nas novas imagens");
     await userEvent.type(visualStyleField, "Tons quentes, tipografia bold");
-    await userEvent.click(screen.getByRole("button", { name: "Salvar direção visual consolidada" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar direção visual" }));
 
     expect(await screen.findByText("Direção visual salva.")).toBeInTheDocument();
   });

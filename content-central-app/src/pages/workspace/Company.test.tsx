@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -46,7 +46,7 @@ const FILLED_BLOCKS = {
 };
 
 describe("Company", () => {
-  it("saves the B2B/B2C commercial focus through the real brand-input endpoint, defaulting to unset", async () => {
+  it("saves and analyzes the B2B/B2C commercial focus in one action, defaulting to unset", async () => {
     stubFetchSequence([
       { body: projectState() },
       { body: { project: {} } },
@@ -58,16 +58,17 @@ describe("Company", () => {
     const audienceTypeSelect = screen.getByLabelText("Foco comercial (opcional)") as HTMLSelectElement;
     expect(audienceTypeSelect.value).toBe("");
 
-    await userEvent.type(screen.getByLabelText("Setor principal"), "Engenharia");
-    await userEvent.type(screen.getByLabelText("Tipo de negócio / nicho"), "Controle tecnológico / concreto / solos / asfalto");
-    await userEvent.type(screen.getByLabelText("Segmento detalhado"), "Atacado de embalagens");
-    await userEvent.type(screen.getByLabelText("Especialidade/subsegmento"), "controle tecnológico de concreto");
-    await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "embalagens e descartáveis para revenda");
+    fireEvent.change(screen.getByLabelText("Setor principal"), { target: { value: "Engenharia" } });
+    fireEvent.change(screen.getByLabelText("Tipo de negócio / nicho"), { target: { value: "Controle tecnológico / concreto / solos / asfalto" } });
+    fireEvent.change(screen.getByLabelText("Segmento detalhado"), { target: { value: "Atacado de embalagens" } });
+    fireEvent.change(screen.getByLabelText("Especialidade/subsegmento"), { target: { value: "controle tecnológico de concreto" } });
+    fireEvent.change(screen.getByLabelText("O que a empresa vende/oferece"), { target: { value: "embalagens e descartáveis para revenda" } });
     await userEvent.selectOptions(audienceTypeSelect, "b2b");
-    await userEvent.click(screen.getByRole("button", { name: "Salvar informações" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
 
-    expect(await screen.findByText("Informações salvas.")).toBeInTheDocument();
+    expect(await screen.findByText("Raio-X da marca gerado.")).toBeInTheDocument();
     const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(saveCall[0]).toContain("/brand-xray/analyze");
     expect(JSON.parse(saveCall[1].body as string).audienceType).toBe("b2b");
     expect(JSON.parse(saveCall[1].body as string).segmentGroup).toBe("Engenharia");
     expect(JSON.parse(saveCall[1].body as string).segmentCategory).toBe("Controle tecnológico / concreto / solos / asfalto");
@@ -83,34 +84,25 @@ describe("Company", () => {
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
-    await userEvent.type(screen.getByLabelText("Setor principal"), "Engenharia");
-    await userEvent.type(screen.getByLabelText("Tipo de negócio / nicho"), "Geotecnia especial");
-    await userEvent.type(screen.getByLabelText("Segmento detalhado"), "Engenharia geotécnica");
-    await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "sondagem, fundações e laudos técnicos");
-    await userEvent.click(screen.getByRole("button", { name: "Salvar informações" }));
+    fireEvent.change(screen.getByLabelText("Setor principal"), { target: { value: "Engenharia" } });
+    fireEvent.change(screen.getByLabelText("Tipo de negócio / nicho"), { target: { value: "Geotecnia especial" } });
+    fireEvent.change(screen.getByLabelText("Segmento detalhado"), { target: { value: "Engenharia geotécnica" } });
+    fireEvent.change(screen.getByLabelText("O que a empresa vende/oferece"), { target: { value: "sondagem, fundações e laudos técnicos" } });
+    await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
 
-    expect(await screen.findByText("Informações salvas.")).toBeInTheDocument();
+    expect(await screen.findByText("Raio-X da marca gerado.")).toBeInTheDocument();
     const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
     expect(JSON.parse(saveCall[1].body as string).segmentGroup).toBe("Engenharia");
     expect(JSON.parse(saveCall[1].body as string).segmentCategory).toBe("Geotecnia especial");
   });
 
-  it("sends pasted technical material to be summarized into the project learning base", async () => {
-    stubFetchSequence([
-      { body: projectState() },
-      { body: { project: {}, technicalBase: { summary: "Resumo técnico: usar CBR e granulometria sem misturar concreto." } } },
-      { body: projectState({ technicalBase: { summary: "Resumo técnico: usar CBR e granulometria sem misturar concreto." } }) },
-    ]);
+  it("keeps the external segment learning out of the Raio-X screen", async () => {
+    stubFetchSequence([{ body: projectState() }]);
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
-    await userEvent.type(screen.getByLabelText("Texto técnico para aprendizado"), "CBR, granulometria e limite de liquidez para solo.");
-    await userEvent.click(screen.getByRole("button", { name: "Analisar e salvar resumo prático" }));
-
-    expect(await screen.findByText("Base técnica resumida e salva para este segmento.")).toBeInTheDocument();
-    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
-    expect(saveCall[0]).toContain("/technical-base/analyze");
-    expect(JSON.parse(saveCall[1].body as string).sourceText).toContain("CBR");
+    expect(screen.queryByLabelText("Texto técnico para aprendizado")).not.toBeInTheDocument();
+    expect(screen.getByText(/O Raio-X usa essa classificação como informação confirmada e não a altera/)).toBeInTheDocument();
   });
 
   it("blocks analysis until the required fields are filled", async () => {
@@ -118,7 +110,7 @@ describe("Company", () => {
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
-    await userEvent.click(screen.getByRole("button", { name: "Analisar minha marca" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
 
     expect(await screen.findByText("Preencha nome, segmento e o que a empresa vende/oferece.")).toBeInTheDocument();
   });
@@ -127,19 +119,20 @@ describe("Company", () => {
     stubFetchSequence([
       { body: projectState() },
       { body: { project: {}, xray: { status: "generated", blocks: FILLED_BLOCKS } } },
-      { body: projectState({ brandXray: { status: "generated", blocks: FILLED_BLOCKS, generatedAt: "2026-07-23T12:00:00Z" } }) },
+      { body: projectState({ brandXray: { status: "generated", analysisMode: "ai", blocks: FILLED_BLOCKS, generatedAt: "2026-07-23T12:00:00Z" } }) },
     ]);
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
     await userEvent.type(screen.getByLabelText("Segmento detalhado"), "Pizzaria");
     await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "Rodízio e delivery de pizzas");
-    await userEvent.click(screen.getByRole("button", { name: "Analisar minha marca" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
 
     expect(await screen.findByText("Raio-X da marca gerado.")).toBeInTheDocument();
     expect(await screen.findByLabelText("Resumo da marca")).toHaveValue("Boss Pizzaria é uma pizzaria de bairro.");
-    expect(screen.getByLabelText("Identidade visual")).toHaveValue("Vermelho e amarelo, tipografia bold.");
-    expect(screen.getByRole("button", { name: "Usar este Raio-X" })).toBeInTheDocument();
+    expect(screen.getByText("Análise estratégica feita pela IA.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Identidade visual")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aprovar estratégia da marca" })).toBeInTheDocument();
   });
 
   it("approves the Raio-X with edited block text through the real endpoint", async () => {
@@ -153,10 +146,112 @@ describe("Company", () => {
     const summaryField = await screen.findByLabelText("Resumo da marca");
     await userEvent.clear(summaryField);
     await userEvent.type(summaryField, "Resumo editado pelo operador.");
-    await userEvent.click(screen.getByRole("button", { name: "Usar este Raio-X" }));
+    await userEvent.click(screen.getByRole("button", { name: "Aprovar estratégia da marca" }));
 
-    expect(await screen.findByText("Raio-X aprovado e pronto para gerar conteúdos.")).toBeInTheDocument();
+    expect(await screen.findByText("Estratégia da marca aprovada.")).toBeInTheDocument();
     expect(screen.getByText("approved")).toBeInTheDocument();
+  });
+
+  it("lets the operator edit and save only safe AI field suggestions in one batch", async () => {
+    const brandInput = {
+      brandName: "Boss Pizzaria",
+      segmentGroup: "Alimentício",
+      segmentCategory: "Pizzaria",
+      segmentSpecialty: "Rodízio e delivery",
+      segment: "Pizzaria com rodízio",
+      productsOrServices: "Rodízio e delivery de pizzas",
+      audience: "",
+      tone: [],
+    };
+    const brandXray = {
+      status: "generated",
+      analysisMode: "ai",
+      blocks: FILLED_BLOCKS,
+      generatedAt: "2026-07-23T12:00:00Z",
+      fieldSuggestions: [
+        {
+          field: "audience",
+          label: "Público-alvo sugerido",
+          value: "Famílias e grupos de amigos da região",
+          reason: "Inferido a partir do negócio e da região.",
+          source: "ai_analysis",
+          confidence: "medium",
+          requiresConfirmation: true,
+        },
+        {
+          field: "segmentCategory",
+          label: "Categoria proibida",
+          value: "Tentativa proibida",
+          reason: "Este item simula uma resposta insegura do servidor.",
+        },
+      ],
+    };
+    stubFetchSequence([
+      { body: projectState({ brandInput, brandXray }) },
+      { body: { project: {}, xray: { status: "generated", blocks: FILLED_BLOCKS } } },
+      {
+        body: projectState({
+          brandInput: { ...brandInput, audience: "Famílias, casais e grupos de amigos da região" },
+          brandXray: { ...brandXray, generatedAt: "2026-07-23T12:01:00Z", fieldSuggestions: [] },
+        }),
+      },
+    ]);
+    renderCompany();
+
+    const suggestion = await screen.findByLabelText("Público-alvo sugerido");
+    expect(screen.queryByText("Tentativa proibida")).not.toBeInTheDocument();
+    fireEvent.change(suggestion, { target: { value: "Famílias, casais e grupos de amigos da região" } });
+    await userEvent.click(screen.getByRole("button", { name: "Usar sugestão de Público-alvo sugerido" }));
+
+    expect(screen.getByLabelText("Público-alvo")).toHaveValue("Famílias, casais e grupos de amigos da região");
+    expect(screen.getByRole("button", { name: "Aprovar estratégia da marca" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Salvar sugestões escolhidas e atualizar o Raio-X (1)" }));
+
+    expect(await screen.findByText("Sugestões salvas e Raio-X atualizado.")).toBeInTheDocument();
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const saved = JSON.parse(saveCall[1].body as string);
+    expect(saved.audience).toBe("Famílias, casais e grupos de amigos da região");
+    expect(saved.segmentGroup).toBe("Alimentício");
+    expect(saved.segmentCategory).toBe("Pizzaria");
+    expect(saved.segmentSpecialty).toBe("Rodízio e delivery");
+  });
+
+  it("restores the previous form value when a selected suggestion is ignored", async () => {
+    stubFetchSequence([
+      {
+        body: projectState({
+          brandInput: {
+            brandName: "Boss Pizzaria",
+            segment: "Pizzaria",
+            productsOrServices: "Rodízio e delivery de pizzas",
+            audience: "",
+          },
+          brandXray: {
+            status: "generated",
+            blocks: FILLED_BLOCKS,
+            generatedAt: "2026-07-23T12:00:00Z",
+            fieldSuggestions: [
+              {
+                field: "audience",
+                label: "Público-alvo sugerido",
+                value: "Famílias da região",
+                reason: "Hipótese para confirmação.",
+              },
+            ],
+          },
+        }),
+      },
+    ]);
+    renderCompany();
+
+    await screen.findByLabelText("Público-alvo sugerido");
+    await userEvent.click(screen.getByRole("button", { name: "Usar sugestão de Público-alvo sugerido" }));
+    expect(screen.getByLabelText("Público-alvo")).toHaveValue("Famílias da região");
+    await userEvent.click(screen.getByRole("button", { name: "Ignorar sugestão de Público-alvo sugerido" }));
+
+    expect(screen.getByLabelText("Público-alvo")).toHaveValue("");
+    expect(screen.queryByLabelText("Público-alvo sugerido")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Salvar sugestões escolhidas/ })).not.toBeInTheDocument();
   });
 
   it("imports company info and offer candidates from a real site analysis", async () => {
@@ -179,6 +274,7 @@ describe("Company", () => {
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.click(screen.getByText("Preencher automaticamente por site ou texto"));
     await userEvent.type(screen.getByLabelText("URL do site ou cardápio"), "https://bosspizzaria.example.com");
     await userEvent.click(screen.getByRole("button", { name: "Analisar site" }));
 
@@ -207,6 +303,7 @@ describe("Company", () => {
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.click(screen.getByText("Preencher automaticamente por site ou texto"));
     await userEvent.type(screen.getByLabelText("URL do site ou cardápio"), "https://bosspizzaria.example.com");
     await userEvent.click(screen.getByRole("button", { name: "Analisar site" }));
 
@@ -230,6 +327,7 @@ describe("Company", () => {
     renderCompany();
 
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.click(screen.getByText("Preencher automaticamente por site ou texto"));
     await userEvent.click(screen.getByRole("button", { name: "Colar texto" }));
     await userEvent.type(
       screen.getByLabelText("Texto do site/cardápio"),

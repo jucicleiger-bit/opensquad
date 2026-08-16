@@ -26,7 +26,7 @@ export interface BrandInput {
   mainDifferential?: string;
   contentGoals?: string[];
   audience?: string;
-  audienceType?: "" | "b2b" | "b2c";
+  audienceType?: "" | "b2b" | "b2c" | "mixed";
   tone?: string[];
   avoid?: string;
   positioning?: string;
@@ -43,6 +43,7 @@ export interface TechnicalBase {
 }
 
 export const BRAND_XRAY_BLOCK_IDS = ["summary", "communication", "contentStrategy", "visualIdentity"] as const;
+export const BRAND_XRAY_STRATEGIC_BLOCK_IDS = ["summary", "communication", "contentStrategy"] as const;
 export type BrandXrayBlockId = (typeof BRAND_XRAY_BLOCK_IDS)[number];
 
 export interface BrandXrayBlock {
@@ -50,12 +51,28 @@ export interface BrandXrayBlock {
   label: string;
   text: string;
   status?: string;
+  source?: string;
   sources?: string[];
+}
+
+export type BrandXraySuggestionField = "audience" | "description" | "mainDifferential" | "positioning" | "tone" | "segment";
+
+export interface BrandXrayFieldSuggestion {
+  field: BrandXraySuggestionField;
+  label: string;
+  value: string;
+  reason: string;
+  source?: "ai_analysis" | "inferred_hypothesis" | "structured_fallback" | string;
+  confidence?: "low" | "medium" | "high" | string;
+  requiresConfirmation?: boolean;
 }
 
 export interface BrandXray {
   status?: "empty" | "generated" | "approved" | "needs_review" | string;
+  source?: string;
+  analysisMode?: "ai" | "fallback" | string;
   blocks: Partial<Record<BrandXrayBlockId, BrandXrayBlock>>;
+  fieldSuggestions?: BrandXrayFieldSuggestion[];
   generatedAt?: string | null;
   approvedAt?: string | null;
 }
@@ -74,6 +91,8 @@ export interface ProjectOffer {
   groupId?: string | null;
   daysOfWeek?: string[];
   photoReferenceIds?: string[];
+  productTreatment?: "creative_redraw" | "exact_asset" | "";
+  layoutStrength?: "strict" | "balanced" | "free" | "";
 }
 
 export const WEEKDAY_LABELS: Record<string, string> = {
@@ -90,6 +109,7 @@ export const WEEKDAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 export const AUDIENCE_TYPE_LABELS: Record<string, string> = {
   b2b: "B2B — vende para empresas/revendedores",
   b2c: "B2C — vende direto ao consumidor final",
+  mixed: "B2B e B2C — atende empresas e consumidor final",
 };
 
 export interface OfferGroup {
@@ -165,6 +185,7 @@ export interface SegmentLearningEntry {
   kind: "text" | "image";
   text: string;
   imagePath?: string;
+  purpose?: "product" | "creative";
   // The project the image was actually uploaded to — segment/offer-type
   // learning stores are global (shared across projects), but the file
   // itself lives under this project's own assets directory. Only set for
@@ -475,6 +496,9 @@ export interface GenerateContentInput {
   // (autoridade/engajamento/etc.) entirely, so this batch is 100% offers
   // from the selected group(s) instead of the usual interleaved mix.
   offersOnly?: boolean;
+  // Optional reviewed/edited planning preview. When present, the backend
+  // applies per-card subject/orientation edits to the generated drafts.
+  approvedPlan?: PlannedContentSchedule;
 }
 
 export function generateContent(
@@ -482,6 +506,55 @@ export function generateContent(
   input: GenerateContentInput,
 ): Promise<{ batch: { items: unknown[] } }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/generate`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface PlannedContentSlot {
+  id: string;
+  dayNumber: number;
+  date: string;
+  scheduledTime: string;
+  channel: string;
+  channelLabel: string;
+  slotNumber: number;
+  kind: string;
+  source: string;
+  label: string;
+  offerId?: string | null;
+  offerName?: string;
+  price?: string;
+  goalKey?: string;
+  specialDateLabel?: string;
+  reason?: string;
+  extra?: boolean;
+}
+
+export interface PlannedContentDay {
+  dayNumber: number;
+  date: string;
+  regular: PlannedContentSlot[];
+  extras: PlannedContentSlot[];
+}
+
+export interface PlannedContentSchedule {
+  projectId: string;
+  projectName: string;
+  startDate: string;
+  days: number;
+  regularCount: number;
+  extraCount: number;
+  summary: string;
+  dayPlans: PlannedContentDay[];
+  rules: { groupIds: string[]; offersOnly: boolean; usesBrandXray: boolean; extraDatesDoNotConsumeDailyQuota: boolean };
+}
+
+export function previewContentPlan(
+  projectId: string,
+  input: GenerateContentInput,
+): Promise<{ plan: PlannedContentSchedule }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/plan`, {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -744,7 +817,7 @@ export function researchOnline(projectId: string): Promise<OnlineResearchResult>
 }
 
 export function analyzeLearningImage(
-  input: { scope: "segment" | "offerType"; groupKey: string; dataUrl: string; filename: string },
+  input: { scope: "segment" | "offerType"; groupKey: string; dataUrl: string; filename: string; purpose?: "product" | "creative" },
 ): Promise<{ imagePath: string; suggestedText: string }> {
   return api(`/api/segment-learnings/analyze-image`, {
     method: "POST",
@@ -753,7 +826,7 @@ export function analyzeLearningImage(
 }
 
 export function saveLearningEntry(
-  input: { scope: "segment" | "offerType"; groupKey: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; text: string; imagePath?: string },
+  input: { scope: "segment" | "offerType"; groupKey: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; text: string; imagePath?: string; purpose?: "product" | "creative" },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
   return api(`/api/segment-learnings/entries`, {
     method: "POST",
@@ -831,10 +904,22 @@ export interface SaveOfferInput {
   daysOfWeek?: string[];
   active?: boolean;
   photoReferenceIds?: string[];
+  productTreatment?: "creative_redraw" | "exact_asset" | "";
+  layoutStrength?: "strict" | "balanced" | "free" | "";
 }
 
 export function saveOffer(projectId: string, input: SaveOfferInput): Promise<{ project: ProjectSummary; offer: ProjectOffer }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/offers`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function suggestOfferDirection(
+  projectId: string,
+  input: Pick<SaveOfferInput, "name" | "price" | "items" | "type" | "photoReferenceIds"> & { imageDataUrl?: string },
+): Promise<{ notes: string; source?: string }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offers/suggest-direction`, {
     method: "POST",
     body: JSON.stringify(input),
   });
@@ -1019,7 +1104,7 @@ export const CONTENT_GOAL_LABELS: Record<string, string> = {
 
 export const BRAND_XRAY_BLOCK_LABELS: Record<BrandXrayBlockId, string> = {
   summary: "Resumo da marca",
-  communication: "Comunicação recomendada",
+  communication: "Compradores e comunicação",
   contentStrategy: "Estratégia de conteúdo",
   visualIdentity: "Identidade visual",
 };
@@ -1046,6 +1131,7 @@ export const SEGMENT_TREE = [
 
 export const OFFER_TYPE_LABELS: Record<string, string> = {
   offer: "Oferta direta",
+  service: "Serviço",
   combo: "Combo / promoção",
   rodizio: "Rodízio",
   delivery: "Delivery",

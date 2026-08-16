@@ -3,17 +3,17 @@ import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import {
   AUDIENCE_TYPE_LABELS,
-  BRAND_XRAY_BLOCK_IDS,
+  BRAND_XRAY_STRATEGIC_BLOCK_IDS,
   BRAND_XRAY_BLOCK_LABELS,
   CONTENT_GOAL_LABELS,
   analyzeBrandXray,
   analyzeSite,
-  analyzeTechnicalBase,
   approveBrandXray,
-  saveBrandInput,
   saveOffer,
   SEGMENT_TREE,
   type BrandXrayBlockId,
+  type BrandXrayFieldSuggestion,
+  type BrandXraySuggestionField,
   type SiteOfferCandidate,
 } from "@/api/client";
 import { Button } from "@/components/Button";
@@ -23,6 +23,32 @@ const REQUIRED_MESSAGE = "Preencha nome, segmento e o que a empresa vende/oferec
 
 const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
 const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
+
+const XRAY_SOURCE_LABELS: Record<string, string> = {
+  ai_analysis: "análise por IA",
+  structured_fallback: "pré-análise local",
+  inferred_hypothesis: "hipótese para confirmar",
+  user_input: "informado pela empresa",
+};
+
+const XRAY_SUGGESTION_FIELDS = new Set<BrandXraySuggestionField>([
+  "audience",
+  "description",
+  "mainDifferential",
+  "positioning",
+  "tone",
+  "segment",
+]);
+
+const XRAY_CONFIDENCE_LABELS: Record<string, string> = {
+  high: "confiança alta",
+  medium: "confiança média",
+  low: "confiança baixa",
+};
+
+function isSafeFieldSuggestion(suggestion: BrandXrayFieldSuggestion) {
+  return XRAY_SUGGESTION_FIELDS.has(suggestion.field);
+}
 
 export function Company() {
   const { project, refreshProject } = useOutletContext<WorkspaceContext>();
@@ -38,7 +64,7 @@ export function Company() {
     mainDifferential: project.brandInput?.mainDifferential || "",
     contentGoals: project.brandInput?.contentGoals || ([] as string[]),
     audience: project.brandInput?.audience || "",
-    audienceType: (project.brandInput?.audienceType || "") as "" | "b2b" | "b2c",
+    audienceType: (project.brandInput?.audienceType || "") as "" | "b2b" | "b2c" | "mixed",
     tone: project.brandInput?.tone || ([] as string[]),
     avoid: project.brandInput?.avoid || "",
     positioning: project.brandInput?.positioning || "",
@@ -47,13 +73,15 @@ export function Company() {
     websiteOrInstagram: project.brandInput?.websiteOrInstagram || "",
   }));
   const [blockEdits, setBlockEdits] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
+  const [suggestionEdits, setSuggestionEdits] = useState<Record<string, string>>({});
+  const [suggestionOriginalValues, setSuggestionOriginalValues] = useState<Record<string, string>>({});
+  const [selectedSuggestionFields, setSelectedSuggestionFields] = useState<Set<BrandXraySuggestionField>>(new Set());
+  const [ignoredSuggestionFields, setIgnoredSuggestionFields] = useState<Set<BrandXraySuggestionField>>(new Set());
   const [analyzing, setAnalyzing] = useState(false);
+  const [savingSuggestions, setSavingSuggestions] = useState(false);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [technicalText, setTechnicalText] = useState(project.technicalBase?.sourceText || "");
-  const [technicalBusy, setTechnicalBusy] = useState(false);
 
   const [importMode, setImportMode] = useState<"url" | "text">("url");
   const [siteUrl, setSiteUrl] = useState("");
@@ -66,12 +94,23 @@ export function Company() {
 
   useEffect(() => {
     const next: Record<string, string> = {};
-    BRAND_XRAY_BLOCK_IDS.forEach((id) => {
+    BRAND_XRAY_STRATEGIC_BLOCK_IDS.forEach((id) => {
       next[id] = project.brandXray?.blocks?.[id]?.text || "";
     });
     setBlockEdits(next);
+    const nextSuggestions: Record<string, string> = {};
+    (project.brandXray?.fieldSuggestions || []).filter(isSafeFieldSuggestion).forEach((suggestion) => {
+      nextSuggestions[suggestion.field] = suggestion.value;
+    });
+    setSuggestionEdits(nextSuggestions);
+    setSuggestionOriginalValues({});
+    setSelectedSuggestionFields(new Set());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.projectId, project.brandXray?.generatedAt]);
+
+  useEffect(() => {
+    setIgnoredSuggestionFields(new Set());
+  }, [project.projectId]);
 
   function toggleGoal(id: string) {
     setForm((f) => ({
@@ -160,24 +199,9 @@ export function Company() {
     }
   }
 
-  async function handleSave() {
-    if (!validateRequired()) return;
-    setSaving(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await saveBrandInput(project.projectId, form);
-      await refreshProject();
-      setMessage("Informações salvas.");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
   async function handleAnalyze() {
     if (!validateRequired()) return;
+    setIgnoredSuggestionFields(new Set());
     setAnalyzing(true);
     setError(null);
     setMessage(null);
@@ -193,13 +217,17 @@ export function Company() {
   }
 
   async function handleApprove() {
+    if (selectedSuggestionFields.size > 0) {
+      setError("Salve as sugestões escolhidas antes de aprovar a estratégia.");
+      return;
+    }
     setApproving(true);
     setError(null);
     setMessage(null);
     try {
       await approveBrandXray(project.projectId, blockEdits as Partial<Record<BrandXrayBlockId, string>>);
       await refreshProject();
-      setMessage("Raio-X aprovado e pronto para gerar conteúdos.");
+      setMessage("Estratégia da marca aprovada.");
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -207,39 +235,110 @@ export function Company() {
     }
   }
 
-  async function handleAnalyzeTechnicalBase() {
-    if (!technicalText.trim()) {
-      setError("Cole um texto técnico antes de resumir.");
+  function assignSuggestionToForm(field: BrandXraySuggestionField, value: string) {
+    setForm((current) => {
+      switch (field) {
+        case "audience":
+          return { ...current, audience: value };
+        case "description":
+          return { ...current, description: value };
+        case "mainDifferential":
+          return { ...current, mainDifferential: value };
+        case "positioning":
+          return { ...current, positioning: value };
+        case "tone":
+          return {
+            ...current,
+            tone: value
+              .split(",")
+              .map((item) => item.trim())
+              .filter(Boolean),
+          };
+        case "segment":
+          return { ...current, segment: value };
+      }
+    });
+  }
+
+  function handleUseSuggestion(field: BrandXraySuggestionField) {
+    const value = (suggestionEdits[field] || "").trim();
+    if (!value) {
+      setError("A sugestão precisa ter um texto antes de ser usada.");
       return;
     }
-    setTechnicalBusy(true);
+    if (!selectedSuggestionFields.has(field)) {
+      const originalValue = field === "tone" ? form.tone.join(", ") : form[field];
+      setSuggestionOriginalValues((current) => ({ ...current, [field]: originalValue }));
+    }
+    assignSuggestionToForm(field, value);
+    setSelectedSuggestionFields((current) => new Set(current).add(field));
+    setIgnoredSuggestionFields((current) => {
+      const next = new Set(current);
+      next.delete(field);
+      return next;
+    });
+    setError(null);
+    setMessage(null);
+  }
+
+  function handleSuggestionEdit(field: BrandXraySuggestionField, value: string) {
+    setSuggestionEdits((current) => ({ ...current, [field]: value }));
+    if (selectedSuggestionFields.has(field)) assignSuggestionToForm(field, value);
+  }
+
+  function handleIgnoreSuggestion(field: BrandXraySuggestionField) {
+    if (selectedSuggestionFields.has(field) && Object.prototype.hasOwnProperty.call(suggestionOriginalValues, field)) {
+      assignSuggestionToForm(field, suggestionOriginalValues[field]);
+    }
+    setIgnoredSuggestionFields((current) => new Set(current).add(field));
+    setSelectedSuggestionFields((current) => {
+      const next = new Set(current);
+      next.delete(field);
+      return next;
+    });
+    setSuggestionOriginalValues((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+    setError(null);
+  }
+
+  async function handleSaveSuggestions() {
+    if (selectedSuggestionFields.size === 0 || !validateRequired()) return;
+    setSavingSuggestions(true);
     setError(null);
     setMessage(null);
     try {
-      await analyzeTechnicalBase(project.projectId, technicalText);
+      await analyzeBrandXray(project.projectId, form);
       await refreshProject();
-      setMessage("Base técnica resumida e salva para este segmento.");
+      setMessage("Sugestões salvas e Raio-X atualizado.");
     } catch (err) {
       setError((err as Error).message);
     } finally {
-      setTechnicalBusy(false);
+      setSavingSuggestions(false);
     }
   }
 
-  const hasBlocks = Object.keys(project.brandXray?.blocks || {}).length > 0;
+  const hasBlocks = BRAND_XRAY_STRATEGIC_BLOCK_IDS.some((id) => Boolean(project.brandXray?.blocks?.[id]?.text));
   const categoryOptions = SEGMENT_TREE.find((item) => item.group === form.segmentGroup)?.categories || ALL_SEGMENT_CATEGORY_OPTIONS;
+  const visibleSuggestions = (project.brandXray?.fieldSuggestions || [])
+    .filter(isSafeFieldSuggestion)
+    .filter((suggestion) => !ignoredSuggestionFields.has(suggestion.field));
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Empresa / Raio-X</h2>
+      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>Empresa / Raio-X</h2>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 20, maxWidth: 760 }}>
+        Cadastre os fatos da empresa, escolha os objetivos e gere a leitura estratégica da marca. A direção visual fica na aba Imagem.
+      </p>
 
-      <Card style={{ padding: 20, marginBottom: 20 }}>
-        <b>Importar do site</b>
-        <p className="muted" style={{ marginTop: 4 }}>
-          Informe o site ou cardápio digital da empresa — a IA lê e preenche os campos abaixo. Quando der pra acessar a URL
-          principal, o sistema também segue automaticamente pra páginas internas relevantes (Sobre, Cardápio, Serviços). Se
-          encontrar uma lista de produtos/preços, também sugere ofertas prontas para revisar.
-        </p>
+      <details className="field-card" style={{ padding: 16, marginBottom: 20 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 750 }}>Preencher automaticamente por site ou texto</summary>
+        <div style={{ marginTop: 12 }}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Recurso opcional para o primeiro cadastro. Você revisa tudo antes de analisar a marca.
+          </p>
 
         <div className="button-row" style={{ marginTop: 10, marginBottom: 4 }}>
           <Button type="button" variant={importMode === "url" ? "primary" : "secondary"} onClick={() => setImportMode("url")}>
@@ -307,9 +406,11 @@ export function Company() {
             </Button>
           </div>
         ) : null}
-      </Card>
+        </div>
+      </details>
 
       <Card style={{ padding: 20 }}>
+        <h3 style={{ marginTop: 0 }}>Informações da empresa</h3>
         <label htmlFor="brand-name">Nome da empresa</label>
         <input id="brand-name" value={form.brandName} onChange={(e) => setForm({ ...form, brandName: e.target.value })} />
 
@@ -399,7 +500,7 @@ export function Company() {
             <select
               id="brand-audience-type"
               value={form.audienceType}
-              onChange={(e) => setForm({ ...form, audienceType: e.target.value as "" | "b2b" | "b2c" })}
+              onChange={(e) => setForm({ ...form, audienceType: e.target.value as "" | "b2b" | "b2c" | "mixed" })}
             >
               <option value="">Não definido</option>
               {Object.entries(AUDIENCE_TYPE_LABELS).map(([value, label]) => (
@@ -419,8 +520,25 @@ export function Company() {
           </div>
         </div>
 
-        <div className="row">
-          <div>
+        <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+          Setor, nicho e especialidade ligam este projeto ao aprendizado externo por segmento. O Raio-X usa essa
+          classificação como informação confirmada e não a altera.
+        </p>
+
+        <label htmlFor="brand-website">Instagram ou site</label>
+        <input
+          id="brand-website"
+          placeholder="@usuario ou https://..."
+          value={form.websiteOrInstagram}
+          onChange={(e) => setForm({ ...form, websiteOrInstagram: e.target.value })}
+        />
+        <p className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+          Informação usada para identificar a marca nos criativos. O Raio-X não acessa nem analisa o perfil automaticamente.
+        </p>
+
+        <details style={{ marginTop: 16 }}>
+          <summary style={{ cursor: "pointer", fontWeight: 700 }}>Orientações avançadas (opcional)</summary>
+          <div style={{ marginTop: 12 }}>
             <label htmlFor="brand-tone">Tom de voz (separado por vírgula)</label>
             <input
               id="brand-tone"
@@ -437,54 +555,36 @@ export function Company() {
               }
             />
           </div>
-        </div>
 
-        <label htmlFor="brand-positioning">Posicionamento desejado</label>
-        <input
-          id="brand-positioning"
-          placeholder="ex: opção premium do bairro, sem concorrer por preço"
-          value={form.positioning}
-          onChange={(e) => setForm({ ...form, positioning: e.target.value })}
-        />
+          <label htmlFor="brand-positioning">Posicionamento desejado</label>
+          <input
+            id="brand-positioning"
+            placeholder="ex: opção premium do bairro, sem concorrer por preço"
+            value={form.positioning}
+            onChange={(e) => setForm({ ...form, positioning: e.target.value })}
+          />
 
-        <label htmlFor="brand-avoid">O que a IA nunca deve mencionar/sugerir</label>
-        <textarea
-          id="brand-avoid"
-          placeholder="ex: não citar concorrentes, não usar humor, não falar de entrega própria"
-          value={form.avoid}
-          onChange={(e) => setForm({ ...form, avoid: e.target.value })}
-        />
+          <label htmlFor="brand-avoid">O que a IA nunca deve mencionar/sugerir</label>
+          <textarea
+            id="brand-avoid"
+            placeholder="ex: não citar concorrentes, não usar humor, não falar de entrega própria"
+            value={form.avoid}
+            onChange={(e) => setForm({ ...form, avoid: e.target.value })}
+          />
 
-        <div className="row">
-          <div>
-            <label htmlFor="brand-colors-desc">Cores da marca (descrição)</label>
-            <input
-              id="brand-colors-desc"
-              placeholder="ex: vermelho e preto"
-              value={form.brandColors}
-              onChange={(e) => setForm({ ...form, brandColors: e.target.value })}
-            />
-          </div>
-          <div>
-            <label htmlFor="brand-website">Site/Instagram</label>
-            <input
-              id="brand-website"
-              placeholder="@usuario ou https://..."
-              value={form.websiteOrInstagram}
-              onChange={(e) => setForm({ ...form, websiteOrInstagram: e.target.value })}
-            />
-          </div>
-        </div>
+          <label htmlFor="brand-facts">Fatos que podem ser citados (preços, prêmios, tempo de mercado etc.)</label>
+          <textarea
+            id="brand-facts"
+            placeholder="ex: fundada em 2015, entrega em até 40 minutos, prêmio Melhor Pizzaria 2025"
+            value={form.factualConstraints}
+            onChange={(e) => setForm({ ...form, factualConstraints: e.target.value })}
+          />
+        </details>
 
-        <label htmlFor="brand-facts">Fatos que podem ser citados (preços, prêmios, tempo de mercado etc.)</label>
-        <textarea
-          id="brand-facts"
-          placeholder="ex: fundada em 2015, entrega em até 40 minutos, prêmio Melhor Pizzaria 2025"
-          value={form.factualConstraints}
-          onChange={(e) => setForm({ ...form, factualConstraints: e.target.value })}
-        />
-
-        <label>Objetivos do conteúdo</label>
+        <h3 style={{ margin: "24px 0 4px" }}>O que a marca quer publicar</h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          Esses objetivos entram no planejamento junto das ofertas e assuntos cadastrados.
+        </p>
         <div className="button-row">
           {Object.entries(CONTENT_GOAL_LABELS).map(([id, label]) => (
             <Button
@@ -498,55 +598,106 @@ export function Company() {
           ))}
         </div>
 
-        <div className="button-row" style={{ marginTop: 16 }}>
-          <Button variant="secondary" disabled={saving} onClick={handleSave}>
-            {saving ? "Salvando..." : "Salvar informações"}
-          </Button>
-          <Button disabled={analyzing} onClick={handleAnalyze}>
-            {analyzing ? "Analisando..." : "Analisar minha marca"}
-          </Button>
-        </div>
+        <Button className="full-width" style={{ marginTop: 18 }} disabled={analyzing} onClick={handleAnalyze}>
+          {analyzing ? "Salvando e analisando..." : "Salvar e analisar minha marca"}
+        </Button>
         {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
         {message ? <div className="pill ok" style={{ marginTop: 12 }}>{message}</div> : null}
-      </Card>
-
-      <Card style={{ padding: 20, marginTop: 20 }}>
-        <b>Base técnica do segmento</b>
-        <p className="muted" style={{ marginTop: 4 }}>
-          Cole normas, modelos de laudo, lista de ensaios ou explicações do setor. A IA transforma em um resumo prático curto para não precisar reaprender tudo a cada arte.
-        </p>
-        <textarea
-          aria-label="Texto técnico para aprendizado"
-          placeholder="Ex: CBR/ISC para pavimentação; limite de liquidez e plasticidade para caracterização de solos; não misturar ensaio de solo com ensaio de concreto..."
-          value={technicalText}
-          onChange={(e) => setTechnicalText(e.target.value)}
-          style={{ minHeight: 150 }}
-        />
-        <Button className="full-width" style={{ marginTop: 10 }} disabled={technicalBusy} onClick={handleAnalyzeTechnicalBase}>
-          {technicalBusy ? "Resumindo..." : "Analisar e salvar resumo prático"}
-        </Button>
-        {project.technicalBase?.summary ? (
-          <div className="field-card" style={{ marginTop: 14 }}>
-            <b>Resumo prático salvo</b>
-            <p style={{ whiteSpace: "pre-wrap", marginBottom: 0 }}>{project.technicalBase.summary}</p>
-          </div>
-        ) : null}
       </Card>
 
       {hasBlocks ? (
         <Card style={{ padding: 20, marginTop: 20 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-            <b>Raio-X da marca</b>
+            <div>
+              <b>Estratégia sugerida pelo Raio-X</b>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                Revise as hipóteses abaixo. A identidade visual continua sendo definida na aba Imagem.
+              </p>
+            </div>
             <span className="pill">{project.brandXray?.status}</span>
           </div>
+          <div className={`pill ${project.brandXray?.analysisMode === "ai" ? "ok" : ""}`} style={{ marginBottom: 14 }}>
+            {project.brandXray?.analysisMode === "ai"
+              ? "Análise estratégica feita pela IA."
+              : "Pré-análise local: a IA não respondeu nesta execução. Confirme as hipóteses antes de aprovar."}
+          </div>
+          {visibleSuggestions.length > 0 ? (
+            <section aria-labelledby="xray-suggestions-title" style={{ marginBottom: 22, paddingBottom: 18, borderBottom: "1px solid var(--line)" }}>
+              <h3 id="xray-suggestions-title" style={{ margin: "0 0 4px" }}>Campos que a IA sugere completar</h3>
+              <p className="muted" style={{ margin: "0 0 14px", fontSize: 13 }}>
+                São hipóteses, não fatos. Edite o texto, escolha apenas o que fizer sentido e salve antes de aprovar o Raio-X.
+              </p>
+              <div style={{ display: "grid", gap: 0 }}>
+                {visibleSuggestions.map((suggestion, index) => {
+                  const isSelected = selectedSuggestionFields.has(suggestion.field);
+                  return (
+                    <div
+                      key={suggestion.field}
+                      style={{ padding: "14px 0", borderTop: index === 0 ? "none" : "1px solid var(--line)" }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12, marginBottom: 8 }}>
+                        <label htmlFor={`xray-suggestion-${suggestion.field}`} style={{ margin: 0 }}>{suggestion.label}</label>
+                        <div className="button-row" style={{ margin: 0 }}>
+                          <span className="pill">{XRAY_SOURCE_LABELS[suggestion.source || ""] || "sugestão da análise"}</span>
+                          <span className="pill">{XRAY_CONFIDENCE_LABELS[suggestion.confidence || ""] || "confirmar"}</span>
+                        </div>
+                      </div>
+                      <textarea
+                        id={`xray-suggestion-${suggestion.field}`}
+                        value={suggestionEdits[suggestion.field] || ""}
+                        onChange={(event) => handleSuggestionEdit(suggestion.field, event.target.value)}
+                        style={{ minHeight: 92 }}
+                      />
+                      <p className="muted" style={{ margin: "6px 0 10px", fontSize: 12 }}>
+                        Motivo da sugestão: {suggestion.reason}
+                      </p>
+                      <div className="button-row" style={{ margin: 0 }}>
+                        <Button
+                          type="button"
+                          variant={isSelected ? "primary" : "secondary"}
+                          onClick={() => handleUseSuggestion(suggestion.field)}
+                        >
+                          {isSelected ? `Selecionada: ${suggestion.label}` : `Usar sugestão de ${suggestion.label}`}
+                        </Button>
+                        <Button type="button" variant="ghost" onClick={() => handleIgnoreSuggestion(suggestion.field)}>
+                          Ignorar sugestão de {suggestion.label}
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {selectedSuggestionFields.size > 0 ? (
+                <Button
+                  type="button"
+                  className="full-width"
+                  style={{ marginTop: 12 }}
+                  disabled={savingSuggestions}
+                  onClick={handleSaveSuggestions}
+                >
+                  {savingSuggestions
+                    ? "Salvando e atualizando..."
+                    : `Salvar sugestões escolhidas e atualizar o Raio-X (${selectedSuggestionFields.size})`}
+                </Button>
+              ) : null}
+            </section>
+          ) : null}
           <div style={{ display: "grid", gap: 14 }}>
-            {BRAND_XRAY_BLOCK_IDS.map((id) => {
+            {BRAND_XRAY_STRATEGIC_BLOCK_IDS.map((id) => {
               const block = project.brandXray?.blocks?.[id];
+              const sources = block?.sources?.length ? block.sources : block?.source ? [block.source] : [];
               return (
                 <div key={id} className="field-card">
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
                     <b>{BRAND_XRAY_BLOCK_LABELS[id]}</b>
-                    <span className="pill">{block?.status || "gerado"}</span>
+                    <div className="button-row" style={{ margin: 0 }}>
+                      <span className="pill">{block?.status || "gerado"}</span>
+                      {sources.map((source) => (
+                        <span className="pill" key={source}>
+                          {XRAY_SOURCE_LABELS[source] || source}
+                        </span>
+                      ))}
+                    </div>
                   </div>
                   <textarea
                     aria-label={BRAND_XRAY_BLOCK_LABELS[id]}
@@ -558,9 +709,19 @@ export function Company() {
               );
             })}
           </div>
-          <Button className="full-width" style={{ marginTop: 14 }} disabled={approving} onClick={handleApprove}>
-            {approving ? "Aprovando..." : "Usar este Raio-X"}
+          <Button
+            className="full-width"
+            style={{ marginTop: 14 }}
+            disabled={approving || selectedSuggestionFields.size > 0}
+            onClick={handleApprove}
+          >
+            {approving ? "Aprovando..." : "Aprovar estratégia da marca"}
           </Button>
+          {selectedSuggestionFields.size > 0 ? (
+            <p className="muted" style={{ margin: "8px 0 0", fontSize: 12, textAlign: "center" }}>
+              Salve as sugestões escolhidas para atualizar a análise antes da aprovação.
+            </p>
+          ) : null}
         </Card>
       ) : null}
     </div>

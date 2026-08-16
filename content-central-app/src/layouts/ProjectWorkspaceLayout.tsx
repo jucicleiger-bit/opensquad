@@ -17,7 +17,7 @@ import styles from "./ProjectWorkspaceLayout.module.css";
 const SECTIONS = [
   { to: "visao-geral", label: "Visão geral", group: null as string | null },
   { to: "empresa", label: "Empresa / Raio-X", hideForCatalog: true, group: "Configuração" },
-  { to: "referencias", label: "Referências e imagem", group: "Configuração" },
+  { to: "referencias", label: "Imagem e referências", group: "Configuração" },
   { to: "ofertas", label: "Ofertas e assuntos", catalogLabel: "Produtos", group: "Configuração" },
   { to: "pilares", label: "Pilares", hideForCatalog: true, group: "Configuração" },
   { to: "gerar", label: "Agenda e geração", group: "Conteúdo" },

@@ -22,6 +22,7 @@ const CHANNEL_LABELS = {
 
 export const OFFER_TYPES = new Set([
   'offer',
+  'service',
   'combo',
   'rodizio',
   'delivery',
@@ -42,6 +43,7 @@ const DEFAULT_PILLAR_COLOR = '#7C7C7C';
 // pillars fully opt-in (no pillar configured => no effect anywhere).
 const OFFER_TYPE_TO_PILLAR_ROLE = {
   offer: 'convida',
+  service: 'convida',
   combo: 'convida',
   rodizio: 'convida',
   delivery: 'convida',
@@ -56,13 +58,23 @@ const OFFER_TYPE_TO_PILLAR_ROLE = {
 const GOAL_TYPE_TO_PILLAR_ROLE = {
   authority: 'ensina',
   education: 'ensina',
-  relationship: 'prova',
+  // Relationship content builds familiarity; it must not inherit the
+  // evidence requirement of a real proof/testimonial pillar.
+  relationship: 'posiciona',
   social_proof: 'prova',
   engagement: 'posiciona',
   brand_awareness: 'posiciona',
   show_products: 'convida',
   events: 'convida',
 };
+
+// Goals keep their own semantic key (authority, relationship, engagement,
+// etc.) even when their rendering type is shared (institutional,
+// orientation, social_proof). Pillar resolution must use that semantic key,
+// otherwise authority/education/engagement never reach the intended pillar.
+function goalPillarRole(topic = {}) {
+  return GOAL_TYPE_TO_PILLAR_ROLE[topic.goalKey] || GOAL_TYPE_TO_PILLAR_ROLE[topic.type];
+}
 
 const REFERENCE_ROLES = ['layout_model', 'product_photo', 'brand_asset', 'text_parameter', 'visual_reference'];
 
@@ -83,10 +95,30 @@ const BRAND_BRIEFING_BLOCKS = [
 
 const BRAND_XRAY_BLOCKS = [
   ['summary', 'Resumo da marca'],
-  ['communication', 'Comunicação recomendada'],
+  ['communication', 'Compradores e comunicação'],
   ['contentStrategy', 'Estratégia de conteúdo'],
   ['visualIdentity', 'Identidade visual'],
 ];
+
+const BRAND_XRAY_STRATEGIC_BLOCKS = BRAND_XRAY_BLOCKS.filter(([id]) => id !== 'visualIdentity');
+
+const BRAND_XRAY_SUGGESTION_FIELDS = new Set([
+  'audience',
+  'description',
+  'mainDifferential',
+  'positioning',
+  'tone',
+  'segment',
+]);
+
+const BRAND_XRAY_SUGGESTION_LABELS = {
+  audience: 'Público-alvo sugerido',
+  description: 'Descrição sugerida',
+  mainDifferential: 'Possível diferencial',
+  positioning: 'Posicionamento recomendado',
+  tone: 'Tom de voz recomendado',
+  segment: 'Segmento detalhado sugerido',
+};
 
 const CONTENT_GOAL_LABELS = {
   sell_products: 'Vender produtos',
@@ -108,6 +140,7 @@ const CONTENT_GOAL_OPTIONS = new Set(Object.keys(CONTENT_GOAL_LABELS));
 const AUDIENCE_TYPE_LABELS = {
   b2b: 'B2B — vende para empresas/revendedores (atacado, distribuição, fornecimento)',
   b2c: 'B2C — vende direto para o consumidor final',
+  mixed: 'B2B e B2C — atende empresas/revendedores e também o consumidor final',
 };
 
 function normalizeAudienceType(value) {
@@ -613,24 +646,41 @@ export async function analyzeProjectBrandXray(projectId, input = {}, targetDir =
 // credentials, network error, bad JSON) silently keeps the template blocks,
 // so the Raio-X flow always produces a usable result.
 async function mergeAiBrandXray(templateXray, project, brandAnalyzer) {
-  let aiBlocks;
+  let aiResult;
   try {
-    aiBlocks = await brandAnalyzer({ project });
+    aiResult = await brandAnalyzer({ project });
   } catch {
     return templateXray;
   }
-  if (!aiBlocks || typeof aiBlocks !== 'object') return templateXray;
+  if (!aiResult || typeof aiResult !== 'object') return templateXray;
   const blocks = { ...templateXray.blocks };
   for (const [id, label] of BRAND_XRAY_BLOCKS) {
-    const text = cleanText(aiBlocks[id]);
+    const text = cleanText(aiResult[id]);
     if (!text) continue;
     blocks[id] = normalizeBrandXrayBlock(id, {
       label,
       text,
-      sources: [...new Set([...(templateXray.blocks[id]?.sources || []), 'ai_suggestion'])],
+      source: 'ai_analysis',
+      sources: [...new Set([...(templateXray.blocks[id]?.sources || []), 'ai_analysis'])],
     });
   }
-  return normalizeBrandXray({ ...templateXray, blocks, source: 'ai_analysis' });
+  const input = normalizeBrandInput(project.brandInput || {});
+  const suggestionsByField = new Map(
+    normalizeBrandFieldSuggestions(templateXray.fieldSuggestions)
+      .map((suggestion) => [suggestion.field, suggestion]),
+  );
+  for (const rawSuggestion of Array.isArray(aiResult.fieldSuggestions) ? aiResult.fieldSuggestions : []) {
+    const suggestion = normalizeBrandFieldSuggestion(rawSuggestion, { source: 'ai_analysis' });
+    if (!suggestion || !shouldSuggestBrandField(input, suggestion.field)) continue;
+    suggestionsByField.set(suggestion.field, suggestion);
+  }
+  return normalizeBrandXray({
+    ...templateXray,
+    blocks,
+    fieldSuggestions: [...suggestionsByField.values()],
+    source: 'ai_analysis',
+    analysisMode: 'ai',
+  });
 }
 
 export async function approveProjectBrandXray(projectId, input = {}, targetDir = process.cwd(), now = new Date()) {
@@ -654,14 +704,17 @@ export async function approveProjectBrandXray(projectId, input = {}, targetDir =
   project.brandXray = normalizeBrandXray({
     ...source,
     status: 'approved',
-    source: 'ai_suggestion',
+    source: source.source || 'structured_fallback',
     blocks,
+    fieldSuggestions: [],
     generatedAt: source.generatedAt || now.toISOString(),
     approvedAt: now.toISOString(),
   });
+  // Brand strategy approval must not overwrite the visual direction owned
+  // by the Image/References workspace. Existing visualStyle and image rules
+  // stay exactly as the operator saved them there.
   project.brand = {
     ...(project.brand || {}),
-    visualStyle: buildConsolidatedXrayVisualDirection(project, project.brandXray),
     imageRules: normalizeRuleList(project.brand?.imageRules || []),
   };
   project.updatedAt = now.toISOString();
@@ -790,10 +843,9 @@ export async function saveProjectOfferGroup(projectId, groupInput, targetDir = p
   });
 }
 
-// Deleting a group never touches the offers that reference it (same
-// precedent as deleteProjectPillar) — an offer with a stale groupId just
-// stops matching any groupIds filter at generation time until reassigned,
-// it never disappears or loses its other data.
+// Offers in a removed group are deliberately retained as historical data,
+// but no longer qualify for a future generation. This prevents a deleted
+// campaign/group from silently leaking old products back into the rotation.
 export async function deleteProjectOfferGroup(projectId, groupId, targetDir = process.cwd()) {
   const id = String(groupId || '').trim();
   if (!id) throw new Error('Grupo de ofertas inválido');
@@ -1041,6 +1093,19 @@ export async function updateCatalogSettings(projectId, input = {}, targetDir = p
 // its own findings invisible on exactly those posts, with no error anywhere.
 const MAX_ONLINE_RESEARCH_RULES = 6;
 const ONLINE_RESEARCH_TAG_PREFIX = '[Pesquisa online]';
+const ONLINE_RESEARCH_FAILURE_PATTERNS = [
+  /FIRECRAWL_API_KEY/i,
+  /FIRECRAWL_API_URL/i,
+  /web tools are not configured/i,
+  /ferramentas web .*sem configura/i,
+  /não consegui pesquisar\/?navegar em tempo real/i,
+  /não posso cumprir .*busca e navegação real/i,
+];
+
+function containsOnlineResearchFailure(value) {
+  const text = Array.isArray(value) ? value.join('\n') : String(value || '');
+  return ONLINE_RESEARCH_FAILURE_PATTERNS.some((pattern) => pattern.test(text));
+}
 
 // Feeds real, current visual/ad trends for this project's segment into the
 // image prompt — the "search online for references" capability — without
@@ -1065,6 +1130,9 @@ export async function researchOnlineVisualTrends(projectId, options = {}, target
   }
 
   const findings = await options.webResearcher({ project, segment, productsOrServices });
+  if (containsOnlineResearchFailure(findings)) {
+    throw new Error('A pesquisa online não conseguiu navegar de verdade neste ambiente. Nenhuma regra foi alterada; configure a busca web ou tente novamente mais tarde.');
+  }
   const cleanFindings = normalizeRuleList(findings).slice(0, MAX_ONLINE_RESEARCH_RULES);
   if (!cleanFindings.length) {
     // Resolved without throwing but with nothing usable — same silent-failure
@@ -1155,6 +1223,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
     topicCount
   );
+  const selectedOfferRotator = createSelectedOfferRotator(project, options);
   const batchId = `${startDate}-${String(days).padStart(2, '0')}d-${channel}`;
   const batchDir = join(paths.draftsDir, batchId);
   const imageDir = join(batchDir, 'images');
@@ -1176,8 +1245,10 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     const scheduledDate = addDays(startDate, index);
     const dimensions = imageDimensionsForChannel(channel);
     const aspectRatio = imageAspectRatioForChannel(channel);
-    const contentTopic = await buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) }, targetDir);
     const contentId = `${project.projectId}-${scheduledDate}-${channel}`;
+    const baseTopic = await buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) }, targetDir);
+    const queuedOffer = baseTopic.source === 'offer' ? await nextSelectedOffer(selectedOfferRotator, weekdayFromDate(scheduledDate), targetDir) : null;
+    const contentTopic = withProductRotationSeed({ ...baseTopic, ...(queuedOffer || {}), channel }, contentId);
     const filePath = join(batchDir, `day-${String(dayNumber).padStart(2, '0')}.json`);
     const imageFileName = `day-${String(dayNumber).padStart(2, '0')}.svg`;
     const imageLocalPath = `content/drafts/${batchId}/images/${imageFileName}`;
@@ -1240,6 +1311,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     ...(project.contentStrategy || {}),
     nextScheduleTopicIndex: normalizeTopicIndex(topicOffset + days, topicCount),
   };
+  saveSelectedOfferRotator(project, selectedOfferRotator);
   await writeJson(paths.projectPath, project);
   return batch;
   });
@@ -1425,7 +1497,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
   // Built once, outside the per-channel loop below, and reused for every
   // channel — same topic/message across formats is what makes sharing one
   // creative across a shape group correct in the first place.
-  const contentTopic = await buildSpecialDateContentTopic({ date, label, project, offer, targetDir });
+  const baseContentTopic = await buildSpecialDateContentTopic({ date, label, project, offer, targetDir });
   const createdAt = new Date().toISOString();
 
   const items = [];
@@ -1433,6 +1505,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
     const dimensions = imageDimensionsForChannel(channel);
     const aspectRatio = imageAspectRatioForChannel(channel);
     const contentId = `${project.projectId}-${date}-${slugify(label)}-${channel}`;
+    const contentTopic = withProductRotationSeed(baseContentTopic, contentId);
     const imageFileName = `day-01-${channel}.svg`;
     const filePath = join(batchDir, `day-01-${channel}.json`);
     const imageLocalPath = `content/drafts/${batchId}/images/${imageFileName}`;
@@ -1867,8 +1940,6 @@ export async function generateAdCreative(projectId, options = {}, targetDir = pr
   const channel = options.channel === 'instagram_story' ? 'instagram_story' : 'instagram_feed';
   const dimensions = imageDimensionsForChannel(channel);
   const aspectRatio = imageAspectRatioForChannel(channel);
-  const contentTopic = await buildAdCreativeContentTopic({ project, offer, objective, note, noteMode, targetDir });
-
   const adCreativeId = `${project.projectId}-anuncio-${Date.now()}`;
   const imageDir = join(paths.adCreativesDir, 'images');
   await mkdir(paths.adCreativesDir, { recursive: true });
@@ -1878,6 +1949,10 @@ export async function generateAdCreative(projectId, options = {}, targetDir = pr
   const imageFileName = `${adCreativeId}.svg`;
   const imageLocalPath = `content/ad-creatives/images/${imageFileName}`;
   const createdAt = new Date().toISOString();
+  const contentTopic = withProductRotationSeed(
+    await buildAdCreativeContentTopic({ project, offer, objective, note, noteMode, targetDir }),
+    adCreativeId
+  );
 
   const adCreative = {
     schemaVersion: 1,
@@ -2159,6 +2234,62 @@ export function enqueueAdCreativeImageGeneration(projectId, adCreative, options 
     });
 }
 
+function cleanApprovedPlanText(value, maxLength = 300) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, maxLength);
+}
+
+function subjectFromApprovedPlanLabel(label) {
+  const text = cleanApprovedPlanText(label);
+  const parts = text.split(/\s+—\s+/);
+  return parts.length > 1 ? parts.slice(1).join(' — ').trim() : text;
+}
+
+function buildApprovedPlanOverrideMap(approvedPlan) {
+  const map = new Map();
+  for (const day of approvedPlan?.dayPlans || []) {
+    for (const slot of day?.regular || []) {
+      const id = cleanApprovedPlanText(slot?.id, 120);
+      const label = cleanApprovedPlanText(slot?.label, 220);
+      const reason = cleanApprovedPlanText(slot?.reason, 500);
+      if (!id || (!label && !reason)) continue;
+      map.set(id, { id, label, reason });
+    }
+  }
+  return map;
+}
+
+function applyApprovedPlanOverrideToTopic(topic, override) {
+  if (!override) return topic;
+  const label = cleanApprovedPlanText(override.label, 220);
+  const reason = cleanApprovedPlanText(override.reason, 500);
+  if (!label && !reason) return topic;
+
+  const subject = subjectFromApprovedPlanLabel(label);
+  const objective = [label ? `Plano aprovado pelo operador: ${label}.` : '', reason ? `Orientação do operador: ${reason}` : '']
+    .filter(Boolean)
+    .join(' ');
+  const next = {
+    ...topic,
+    planEdited: true,
+    planLabel: label,
+    planReason: reason,
+    objective: objective || topic.objective,
+  };
+  if (label) next.label = label;
+  if (subject && topic.source === 'offer') next.offerName = subject;
+  return next;
+}
+
+function contentRulesWithApprovedPlan(contentRules, override) {
+  if (!override) return contentRules;
+  const label = cleanApprovedPlanText(override.label, 220);
+  const reason = cleanApprovedPlanText(override.reason, 500);
+  const planRules = [];
+  if (label) planRules.push(`Plano aprovado pelo operador: ${label}.`);
+  if (reason) planRules.push(`Orientação do operador para este card: ${reason}`);
+  return planRules.length ? [...contentRules, ...planRules] : contentRules;
+}
+
 export async function generateContentSchedulePlan(projectId, options = {}, targetDir = process.cwd()) {
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
@@ -2172,6 +2303,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
+  const approvedPlanOverrides = buildApprovedPlanOverrideMap(options.approvedPlan);
   const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
   if (options.offersOnly && !topicCount) {
     throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
@@ -2180,6 +2312,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
     topicCount
   );
+  const selectedOfferRotator = createSelectedOfferRotator(project, options);
   const batchId = `${startDate}-${String(days).padStart(2, '0')}d-plano-formatos`;
   const batchDir = join(paths.draftsDir, batchId);
   const imageDir = join(batchDir, 'images');
@@ -2222,22 +2355,31 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     }
     let topic;
     if (pillarSequence.length) {
-      const pillar = pillarSequence[pillarCursor % pillarSequence.length];
-      pillarCursor += 1;
       const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
-      const matching = pool.filter((candidate) => resolveTopicPillar(candidate, activePillars)?.id === pillar.id);
-      const bucket = matching.length ? matching : pool;
-      const raw = bucket[topicCursor % bucket.length];
+      const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
+      pillarCursor = selected.nextPillarCursor;
       topicCursor += 1;
       topic = {
-        ...raw,
+        ...selected.topic,
         channel: channel || '',
         sequence: topicCursor,
-        pillar: pillarSnapshotFrom(pillar),
+        ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
       };
     } else {
       topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
       topicCursor += 1;
+    }
+    if (topic.source === 'offer') {
+      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir);
+      if (queuedOffer) {
+        const queuedPillar = resolveTopicPillar(queuedOffer, activePillars);
+        topic = {
+          ...topic,
+          ...queuedOffer,
+          channel: channel || topic.channel,
+          ...(queuedPillar ? { pillar: pillarSnapshotFrom(queuedPillar) } : { pillar: undefined }),
+        };
+      }
     }
     if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
     return topic;
@@ -2256,12 +2398,19 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const aspectRatio = imageAspectRatioForChannel(format.channel);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
         const creativeGroupKey = shapeGroup ? `${batchId}::${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
-        const contentTopic = { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel };
+        const planSlotId = `${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
+        const approvedPlanOverride = approvedPlanOverrides.get(planSlotId);
+        const baseContentTopic = applyApprovedPlanOverrideToTopic(
+          { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel },
+          approvedPlanOverride
+        );
         const contentId = `${project.projectId}-${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
+        const contentTopic = withProductRotationSeed(baseContentTopic, contentId);
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const filePath = join(batchDir, `${fileName}.json`);
         const imageLocalPath = `content/drafts/${batchId}/images/${fileName}.svg`;
         const ruleLabel = `${format.label}: ${format.postsPerDay}x por dia, a cada ${format.everyDays} dia(s), intervalo ${format.intervalMinutes} min.`;
+        const itemContentRules = contentRulesWithApprovedPlan(contentRules, approvedPlanOverride);
         const item = {
           schemaVersion: 1,
           contentId,
@@ -2281,7 +2430,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           title: `Dia ${dayNumber} · ${format.label} ${slotNumber}/${format.postsPerDay} — ${project.name}`,
           image: {
             localPath: imageLocalPath,
-            prompt: buildImagePrompt(project, globalRules.rules, [...contentRules, ruleLabel], dayNumber, { channel: format.channel, formatLabel: format.label, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
+            prompt: buildImagePrompt(project, globalRules.rules, [...itemContentRules, ruleLabel], dayNumber, { channel: format.channel, formatLabel: format.label, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
             references: await buildImageReferencePayload(project, paths),
             aspectRatio,
             dimensions,
@@ -2298,7 +2447,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           generationContext: {
             globalRules: globalRules.rules.map((rule) => rule.text),
             projectRules: [...project.rules.project],
-            contentRules: [...contentRules, ruleLabel],
+            contentRules: [...itemContentRules, ruleLabel],
           },
           approval: {
             required: project.mode !== 'automatic',
@@ -2333,9 +2482,197 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     nextScheduleTopicIndex: normalizeTopicIndex(topicCursor, topicCount),
     nextPillarSequenceIndex: normalizeTopicIndex(pillarCursor, pillarSequence.length || 1),
   };
+  saveSelectedOfferRotator(project, selectedOfferRotator);
   await writeJson(paths.projectPath, project);
   return batch;
   });
+}
+
+function planKindForTopic(topic) {
+  if (topic?.source === 'offer') return 'Venda';
+  if (topic?.source === 'goal') return topic.label || 'Objetivo do Raio-X';
+  if (topic?.source === 'special_date') return 'Data comemorativa';
+  return topic?.label || 'Assunto';
+}
+
+function planReasonForTopic(topic, options = {}) {
+  if (topic?.source === 'offer') {
+    if (options.offersOnly) return 'Oferta do grupo selecionado; objetivos de conteúdo ficaram fora por regra do lote.';
+    if (Array.isArray(options.groupIds) && options.groupIds.length) return 'Oferta do grupo selecionado, intercalada com objetivos do Raio-X quando permitido.';
+    return 'Oferta/assunto cadastrado no projeto.';
+  }
+  if (topic?.source === 'goal') return `Objetivo selecionado no Raio-X/conteúdo: ${topic.label || topic.goalKey}.`;
+  if (topic?.source === 'special_date') return 'Data comemorativa entra como extra e não desconta da quantidade diária pedida.';
+  return 'Assunto escolhido pela rotação segura do projeto.';
+}
+
+function planSlotFromTopic({ topic, channel, format, scheduledDate, scheduledTime, dayNumber, slotNumber, options }) {
+  const kind = planKindForTopic(topic);
+  const name = topic.offerName || topic.specialDateLabel || topic.label || topic.objective || 'Assunto';
+  const label = topic.source === 'special_date' && topic.label ? topic.label : `${kind} — ${name}`;
+  return {
+    id: `${scheduledDate}-${channel}-${String(slotNumber).padStart(2, '0')}`,
+    dayNumber,
+    date: scheduledDate,
+    scheduledTime,
+    channel,
+    channelLabel: format?.label || CHANNEL_LABELS[channel] || channel,
+    slotNumber,
+    kind,
+    source: topic.source || 'default',
+    label,
+    offerId: topic.offerId || null,
+    offerName: topic.offerName || '',
+    price: topic.price || '',
+    goalKey: topic.goalKey || '',
+    specialDateLabel: topic.specialDateLabel || '',
+    topic,
+    reason: planReasonForTopic(topic, options),
+    extra: topic.source === 'special_date',
+  };
+}
+
+function buildPlanSummary(plan) {
+  const parts = [`${plan.regularCount} posts normais`];
+  if (plan.extraCount) parts.push(`${plan.extraCount} extras de data comemorativa`);
+  else parts.push('sem extras de data comemorativa no período');
+  const mode = plan.rules.offersOnly
+    ? 'gerando apenas o(s) grupo(s) selecionado(s)'
+    : 'misturando ofertas permitidas com objetivos do Raio-X quando houver';
+  return `${parts.join(' + ')} em ${plan.days} dia(s), ${mode}. Extras não descontam da meta diária.`;
+}
+
+export async function previewContentSchedulePlan(projectId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  const project = await loadProject(paths);
+  const days = Number(options.days || project.contentSettings.defaultDaysToGenerate || 7);
+  if (!Number.isInteger(days) || days < 1 || days > 60) {
+    throw new Error('Days must be an integer between 1 and 60');
+  }
+
+  const startDate = options.startDate || formatDate(new Date());
+  const formats = normalizeScheduleFormats(options.formats || []);
+  const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
+  if (options.offersOnly && !topicCount) {
+    throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
+  }
+  const topicOffset = normalizeTopicIndex(
+    options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
+    topicCount
+  );
+  const selectedOfferRotator = createSelectedOfferRotator(project, options);
+  const activePillars = normalizeProjectPillars(project.contentStrategy?.pillars || [])
+    .filter((pillar) => pillar.active !== false);
+  const pillarSequence = activePillars.length ? buildPillarRotationSequence(activePillars) : [];
+  let pillarCursor = normalizeTopicIndex(project.contentStrategy?.nextPillarSequenceIndex, pillarSequence.length || 1);
+  let topicCursor = topicOffset;
+  const topicByCreativeGroupKey = new Map();
+
+  async function nextContentTopic(channel, creativeGroupKey, weekday) {
+    if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) return topicByCreativeGroupKey.get(creativeGroupKey);
+    let topic;
+    if (pillarSequence.length) {
+      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
+      pillarCursor = selected.nextPillarCursor;
+      topicCursor += 1;
+      topic = {
+        ...selected.topic,
+        channel: channel || '',
+        sequence: topicCursor,
+        ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
+      };
+    } else {
+      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      topicCursor += 1;
+    }
+    if (topic.source === 'offer') {
+      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir);
+      if (queuedOffer) {
+        const queuedPillar = resolveTopicPillar(queuedOffer, activePillars);
+        topic = {
+          ...topic,
+          ...queuedOffer,
+          channel: channel || topic.channel,
+          ...(queuedPillar ? { pillar: pillarSnapshotFrom(queuedPillar) } : { pillar: undefined }),
+        };
+      }
+    }
+    if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
+    return topic;
+  }
+
+  const dayPlans = [];
+  for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
+    const dayNumber = dayIndex + 1;
+    const scheduledDate = addDays(startDate, dayIndex);
+    const weekday = weekdayFromDate(scheduledDate);
+    const dayPlan = { dayNumber, date: scheduledDate, regular: [], extras: [] };
+    for (const format of formats) {
+      if (dayIndex % format.everyDays !== 0) continue;
+      for (let slotIndex = 0; slotIndex < format.postsPerDay; slotIndex += 1) {
+        const slotNumber = slotIndex + 1;
+        const scheduledTime = addMinutesToTime(format.startTime, slotIndex * format.intervalMinutes);
+        const shapeGroup = creativeShapeGroupForChannel(format.channel);
+        const creativeGroupKey = shapeGroup ? `${startDate}-${String(days).padStart(2, '0')}d-preview::${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
+        const topic = { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel };
+        dayPlan.regular.push(planSlotFromTopic({ topic, channel: format.channel, format, scheduledDate, scheduledTime, dayNumber, slotNumber, options }));
+      }
+    }
+    dayPlans.push(dayPlan);
+  }
+
+  const dateToDayPlan = new Map(dayPlans.map((day) => [day.date, day]));
+  const specialDates = listCommemorativeDates(startDate, addDays(startDate, days - 1));
+  for (const specialDate of specialDates) {
+    const dayPlan = dateToDayPlan.get(specialDate.date);
+    if (!dayPlan) continue;
+    const seenChannels = new Set();
+    for (const format of formats) {
+      if (seenChannels.has(format.channel)) continue;
+      seenChannels.add(format.channel);
+      const topic = {
+        id: `special-date-${specialDate.date}-${slugify(specialDate.label)}`,
+        type: 'institutional',
+        label: `Extra — ${specialDate.label}`,
+        source: 'special_date',
+        specialDateLabel: specialDate.label,
+        specialDateKind: specialDate.kind,
+        objective: `Post extra de ${specialDate.label}, sem descontar da agenda normal.`,
+        price: '',
+        items: '',
+        cta: '',
+      };
+      dayPlan.extras.push(planSlotFromTopic({
+        topic,
+        channel: format.channel,
+        format,
+        scheduledDate: specialDate.date,
+        scheduledTime: format.startTime,
+        dayNumber: dayPlan.dayNumber,
+        slotNumber: dayPlan.extras.length + 1,
+        options,
+      }));
+    }
+  }
+
+  const plan = {
+    projectId: project.projectId,
+    projectName: project.name,
+    startDate,
+    days,
+    formats,
+    regularCount: dayPlans.reduce((sum, day) => sum + day.regular.length, 0),
+    extraCount: dayPlans.reduce((sum, day) => sum + day.extras.length, 0),
+    rules: {
+      groupIds: Array.isArray(options.groupIds) ? options.groupIds : [],
+      offersOnly: Boolean(options.offersOnly),
+      usesBrandXray: project.brandXray?.status === 'approved',
+      extraDatesDoNotConsumeDailyQuota: true,
+    },
+    dayPlans,
+  };
+  return { ...plan, summary: buildPlanSummary(plan) };
 }
 
 // Same checks buildContentReview does for a photo/price safety net, scoped
@@ -2406,8 +2743,8 @@ export async function generateCatalogSchedulePlan(projectId, options = {}, targe
       const scheduledTime = addMinutesToTime(startTime, slotIndex * intervalMinutes);
       const product = activeProducts[productCursor % activeProducts.length];
       productCursor += 1;
-      const contentTopic = { ...(await offerToContentTopic(product, targetDir)), channel };
       const contentId = `${project.projectId}-${scheduledDate}-${channel}-${String(slotNumber).padStart(2, '0')}`;
+      const contentTopic = withProductRotationSeed({ ...(await offerToContentTopic(product, targetDir)), channel }, contentId);
       const fileName = `day-${String(dayNumber).padStart(2, '0')}-${channel}-${String(slotNumber).padStart(2, '0')}`;
       const filePath = join(batchDir, `${fileName}.json`);
       const imageLocalPath = `content/drafts/${batchId}/images/${fileName}.svg`;
@@ -2639,10 +2976,17 @@ async function applyContentRegeneration(content, project, projectId, options, pa
     // update. Refresh both from the project's current live state first, so
     // "regenerar" always reflects what's actually cadastrado right now.
     if (content.contentTopic?.source === 'offer' && content.contentTopic.offerId) {
+      const previousTopic = content.contentTopic;
       const currentOffer = (project.contentStrategy?.offers || []).find(
         (offer) => offer.id === content.contentTopic.offerId
       );
-      if (currentOffer) content.contentTopic = await offerToContentTopic(currentOffer, targetDir);
+      if (currentOffer) {
+        content.contentTopic = {
+          ...(await offerToContentTopic(currentOffer, targetDir)),
+          sequence: previousTopic.sequence,
+          productRotationSeed: previousTopic.productRotationSeed || content.contentId,
+        };
+      }
     }
     if (paths) content.image.references = await buildImageReferencePayload(project, paths);
     if (project.projectType === 'catalog') {
@@ -3463,6 +3807,7 @@ function normalizeSegmentLearningEntry(input = {}) {
     kind,
     text: cleanText(input.text),
     imagePath: kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
+    purpose: kind === 'image' ? (input.purpose === 'product' ? 'product' : 'creative') : undefined,
     source: input.source === 'auto' ? 'auto' : 'manual',
     // Retained on the entry shape only so a legacy entry written before
     // this project moved image-learning storage to a global (non-per-
@@ -3728,12 +4073,27 @@ function learningStoreNodesKey(scope) {
   return scope === 'segment' ? 'nodes' : 'types';
 }
 
+function normalizeLearningImagePurpose(purpose) {
+  return purpose === 'creative' || purpose === 'product' ? purpose : '';
+}
+
+function learningImageAnalysisContext(baseContext, purpose) {
+  if (purpose === 'creative') {
+    return `${baseContext}; referência de estrutura de criativo. Analise somente layout, hierarquia visual, blocos de texto, posição de logo, chamada, produto, benefícios, preço e CTA. Ignore aparência física, ingredientes, alimento específico, cena, iluminação e detalhes visuais que não sejam estrutura.`;
+  }
+  if (purpose === 'product') {
+    return `${baseContext}; referência de produto. Analise aparência física real do produto, textura, material, proporção, embalagem, aplicação prática e o que evita parecer gerado por IA. Não transformar isso em regra de layout.`;
+  }
+  return baseContext;
+}
+
 // Saves the uploaded reference image and returns the AI's suggested
 // description WITHOUT touching either learning store — the operator confirms
 // (possibly edits) the text in the UI first, then saveLearningEntry below
 // does the actual write. Keeps "upload+analyze" and "persist" independently
 // retriable instead of one all-or-nothing call.
 export async function analyzeLearningImage(input, targetDir = process.cwd(), now = new Date(), options = {}) {
+  void now;
   const paths = getCentralPaths(targetDir);
   const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
   const groupSlug = slugify(input?.groupKey || '');
@@ -3751,7 +4111,8 @@ export async function analyzeLearningImage(input, targetDir = process.cwd(), now
   const context = scope === 'segment'
     ? `segmento "${input.groupKey}"`
     : `tipo de oferta "${input.groupKey}"`;
-  const suggestedText = await analyzer(destination, context);
+  const purpose = normalizeLearningImagePurpose(input?.purpose);
+  const suggestedText = await analyzer(destination, learningImageAnalysisContext(context, purpose), purpose);
 
   return { imagePath: relativePath, suggestedText: cleanText(suggestedText || '') };
 }
@@ -3768,6 +4129,7 @@ async function defaultLearningImageAnalyzer() {
 // words ("combo", "delivery"), so slugifying is the right normalization
 // there (mirrors OFFER_TYPES-style handling elsewhere in this file).
 export async function saveLearningEntry(input, targetDir = process.cwd(), now = new Date()) {
+  void now;
   const paths = getCentralPaths(targetDir);
   return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
     const scope = input?.scope === 'offerType' ? 'offerType' : 'segment';
@@ -3780,6 +4142,7 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
       kind: input.kind,
       text: input.text,
       imagePath: input.imagePath,
+      purpose: input.purpose,
       source: 'manual',
     });
     node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
@@ -3921,7 +4284,7 @@ export async function loadProjectForTest(projectId, targetDir = process.cwd()) {
   return loadProject(getCentralPaths(targetDir, projectId));
 }
 
-async function toProjectSummary(project, paths) {
+async function toProjectSummary(project) {
   return {
     projectId: project.projectId,
     name: project.name,
@@ -4075,9 +4438,11 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
   const approvedBriefingLines = formatApprovedBrandBriefingLines(project.brandBriefing);
   const segmentLearnings = normalizeSegmentLearnings(project.segmentLearnings);
   const technicalBaseLines = formatTechnicalBaseLines(project.technicalBase, segmentLearnings);
-  const consolidatedVisualDirection = approvedXrayLines.length
-    ? buildConsolidatedXrayVisualDirection(project, project.brandXray)
-    : buildConsolidatedVisualDirection(project, project.brandBriefing);
+  const savedVisualDirection = cleanText(project.brand?.visualStyle || '');
+  const consolidatedVisualDirection = savedVisualDirection
+    || (approvedXrayLines.length
+      ? buildConsolidatedXrayVisualDirection(project, project.brandXray)
+      : buildConsolidatedVisualDirection(project, project.brandBriefing));
   const requiredGlobalRules = globalRules
     .map((rule) => (typeof rule === 'string' ? rule : rule?.text || ''))
     .filter(Boolean);
@@ -4110,7 +4475,7 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
     ]),
     section('INFORMAÇÕES FACTUAIS OBRIGATÓRIAS', [
       `Nome: ${project.name}.`,
-      `Instagram: ${project.instagram.handle || 'não definido'}.`,
+      `Instagram: ${projectCreativeInstagramHandle(project) || 'não definido'}.`,
       `Modo de operação: ${project.mode}.`,
       ...companyFactLines,
       ...(project.rules?.project || []).map((rule) => `Regra do projeto: ${rule}`),
@@ -4304,6 +4669,33 @@ function pillarSnapshotFrom(pillar) {
   };
 }
 
+// Walks the weighted pillar sequence until it finds a pillar that actually
+// has a compatible topic. Empty pillar buckets are skipped; they must never
+// relabel an arbitrary offer/goal and accidentally change its CTA policy.
+// When none of the configured pillars can represent the available pool, the
+// content still proceeds without pillar metadata and keeps its type-based
+// behavior (backward-compatible and safer than inventing an association).
+function selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor) {
+  if (!pool.length) return { topic: {}, pillar: null, nextPillarCursor: pillarCursor };
+  for (let offset = 0; offset < pillarSequence.length; offset += 1) {
+    const sequenceIndex = pillarCursor + offset;
+    const pillar = pillarSequence[sequenceIndex % pillarSequence.length];
+    const matching = pool.filter((candidate) => resolveTopicPillar(candidate, activePillars)?.id === pillar.id);
+    if (!matching.length) continue;
+    return {
+      topic: matching[topicCursor % matching.length],
+      pillar,
+      nextPillarCursor: sequenceIndex + 1,
+    };
+  }
+  const topic = pool[topicCursor % pool.length];
+  return {
+    topic,
+    pillar: resolveTopicPillar(topic, activePillars),
+    nextPillarCursor: pillarCursor + pillarSequence.length,
+  };
+}
+
 // Combines active offers with the user's selected content objectives
 // (project.brandInput.contentGoals) into one rotating pool, so scheduled
 // content mixes sales/offer posts with authority/engagement/relationship/
@@ -4333,8 +4725,7 @@ function pillarSnapshotFrom(pillar) {
 async function buildTopicPool(project, options = {}, targetDir) {
   const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
   const offerTopics = await Promise.all(
-    normalizeProjectOffers(project.contentStrategy?.offers || [])
-      .filter((offer) => offer.active)
+    activeProjectOffers(project)
       .filter((offer) => !groupIds || groupIds.has(offer.groupId))
       .filter((offer) => !options.weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(options.weekday))
       .map((offer) => offerToContentTopic(offer, targetDir))
@@ -4354,6 +4745,59 @@ async function buildTopicPool(project, options = {}, targetDir) {
     ? Array.from({ length: SALES_INTENT_BOOST }, () => offerTopics).flat()
     : offerTopics;
   return interleaveTopics(boostedOfferTopics, goalTopics);
+}
+
+// A group is a publishing queue as well as an organizer. Keeping its cursor
+// separately means a generation for "Produtos de venda" can be interleaved
+// with authority/relationship topics without losing its place when another
+// group (or the unfiltered project) is generated in between.
+function activeProjectOffers(project) {
+  const existingGroupIds = new Set(normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []).map((group) => group.id));
+  return normalizeProjectOffers(project.contentStrategy?.offers || [])
+    .filter((offer) => offer.active)
+    .filter((offer) => !offer.groupId || existingGroupIds.has(offer.groupId));
+}
+
+function selectedOfferGroupKey(groupIds) {
+  if (!Array.isArray(groupIds) || !groupIds.length) return '';
+  return [...new Set(groupIds.map((id) => String(id || '').trim()).filter(Boolean))].sort().join('|');
+}
+
+function createSelectedOfferRotator(project, options = {}) {
+  const key = selectedOfferGroupKey(options.groupIds);
+  if (!key) return null;
+  const groupIds = new Set(key.split('|'));
+  const offers = activeProjectOffers(project).filter((offer) => groupIds.has(offer.groupId));
+  if (!offers.length) return null;
+  const cursors = project.contentStrategy?.nextOfferIndexByGroup || {};
+  return {
+    key,
+    offers,
+    cursor: normalizeTopicIndex(cursors[key], offers.length),
+  };
+}
+
+async function nextSelectedOffer(rotator, weekday, targetDir) {
+  if (!rotator) return null;
+  for (let index = 0; index < rotator.offers.length; index += 1) {
+    const offer = rotator.offers[rotator.cursor % rotator.offers.length];
+    rotator.cursor = normalizeTopicIndex(rotator.cursor + 1, rotator.offers.length);
+    if (!weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday)) {
+      return offerToContentTopic(offer, targetDir);
+    }
+  }
+  return null;
+}
+
+function saveSelectedOfferRotator(project, rotator) {
+  if (!rotator) return;
+  project.contentStrategy = {
+    ...(project.contentStrategy || {}),
+    nextOfferIndexByGroup: {
+      ...(project.contentStrategy?.nextOfferIndexByGroup || {}),
+      [rotator.key]: rotator.cursor,
+    },
+  };
 }
 
 async function buildContentTopic(project, index, context = {}, targetDir) {
@@ -4424,11 +4868,13 @@ async function offerToContentTopic(offer, targetDir) {
     source: 'offer',
     offerId: offer.id,
     offerName: offer.name,
-    price: offer.price,
+    price: normalizeCreativePrice(offer.price),
     items: offer.items,
     cta: offer.cta,
     autoGenerateCta: offer.autoGenerateCta,
     notes: offer.notes,
+    productTreatment: offer.productTreatment,
+    layoutStrength: offer.layoutStrength,
     objective: await offerObjective(offer, targetDir),
     pillarId: offer.pillarId || null,
     photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
@@ -4456,6 +4902,7 @@ function legacyOfferObjective(offer) {
   if (offer.type === 'rodizio') return `Criar chamada para rodízio de ${offer.name}, destacando itens inclusos, preço e convite para aproveitar.`;
   if (offer.type === 'delivery') return `Criar chamada para delivery usando ${offer.name}, preço/benefício e pedido rápido.`;
   if (offer.type === 'orientation') return `Criar post de orientação usando ${offer.name} como assunto, sem parecer só promoção.`;
+  if (offer.type === 'service') return `Apresentar o serviço ${offer.name}, explicando benefício, processo e próxima ação sem inventar produto físico, resultado ou garantia.`;
   return `Criar post de ${offerTypeLabel(offer.type)} para ${offer.name}.`;
 }
 
@@ -4465,11 +4912,19 @@ function legacyOfferObjective(offer) {
 // override exists (see legacyOfferObjective, which keeps the original
 // exact wording so behavior is unchanged for untouched types).
 function defaultOfferObjectiveTemplate(type) {
-  if (type === 'combo') return `Criar oferta de combo, com preço e CTA de delivery claros.`;
-  if (type === 'rodizio') return `Criar chamada para rodízio, destacando itens inclusos, preço e convite para aproveitar.`;
-  if (type === 'delivery') return `Criar chamada para delivery, preço/benefício e pedido rápido.`;
-  if (type === 'orientation') return `Criar post de orientação, sem parecer só promoção.`;
-  return `Criar post de ${offerTypeLabel(type)}.`;
+  return {
+    offer: 'Oferta direta: deixar benefício principal, preço/condição se cadastrados e CTA claros. Evitar promessa falsa, exagero e desconto inventado.',
+    service: 'Serviço: explicar o que é feito, para quem serve, benefício prático e próxima ação. Não inventar produto físico, prazo, resultado, garantia ou prova.',
+    combo: 'Combo/promoção: mostrar todos os itens do combo, preço/condição se cadastrados, economia percebida e CTA de pedido. Não misturar com outras ofertas nem inventar desconto.',
+    rodizio: 'Rodízio: vender experiência presencial, variedade e preço se cadastrado. Não tratar como delivery nem inventar itens, horários ou condições.',
+    delivery: 'Delivery: facilitar pedido rápido, produto/benefício principal, área de entrega se informada e CTA para pedir. Não prometer prazo não cadastrado.',
+    product: 'Produto destaque: fazer o produto/serviço ser protagonista, com benefício prático e contexto de uso. Preço só se estiver cadastrado.',
+    orientation: 'Orientação: ensinar algo útil do segmento, com linguagem simples e CTA leve. Não parecer promoção disfarçada nem inventar dado técnico.',
+    desire: 'Desejo: criar vontade pelo resultado/experiência do produto ou serviço, com visual aspiracional honesto. Não prometer transformação garantida.',
+    urgency: 'Urgência: usar motivo real de hoje/agora quando cadastrado, CTA direto e tom moderado. Não criar escassez falsa.',
+    institutional: 'Institucional: apresentar autoridade, bastidores, diferenciais e confiança da marca. Não inventar prêmios, números, clientes ou certificações.',
+    social_proof: 'Prova social: mostrar confiança, experiência ou resultado real informado. Não inventar depoimento, avaliação, número ou antes/depois.',
+  }[type] || `Criar post de ${offerTypeLabel(type)}.`;
 }
 
 // offer-type-learnings.json is global (root-level, not per-project) — every
@@ -4584,12 +5039,19 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       allOffers: project.contentStrategy?.offers || [],
     }
   );
+  content.creativeSpec = buildCreativeSpec(
+    content,
+    project,
+    options.channel || content.channel,
+    baseReferences
+  );
   content.creativePreflight = buildCreativePreflight(content.contentTopic || {}, options.channel || content.channel, rawReferences, baseReferences);
   const basePrompt = options.promptFraming === 'ad_creative'
     ? appendAdCreativeFraming(buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences))
     : buildChatGptFinalCardPrompt(content, project, originalPrompt, options.channel, baseReferences);
   const baseContentReview = { ...(content.contentReview || {}) };
   const reviewAttempts = [];
+  const generationManifest = [];
   let reviewFeedback = '';
   let finalReview = null;
   let allowedAttempts = maxAttempts;
@@ -4603,17 +5065,21 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
         ? appendCreativeReviewCorrections(basePrompt, reviewAttempts)
         : basePrompt;
 
+    const previousReview = reviewAttempts[reviewAttempts.length - 1];
+    const targetedReviewRepair = attempt > 1 && !rescueMode && shouldUseTargetedReviewRepair(previousReview);
     const generatedImage = await options.imageGenerator({
       content,
       projectId,
-      note: options.note,
+      note: targetedReviewRepair
+        ? `Corrigir somente os problemas apontados pelo revisor:\n${reviewFeedback}`
+        : options.note,
       channel: options.channel,
       // Only the very first attempt of an operator-requested correction is a
       // real edit of the existing image — a rescue pass is fixing a
       // structural problem (wrong canvas/aspect ratio) that editing the same
       // broken image can't fix, and a review-retry (attempt > 1) is already
       // the AI's own correction loop, not the operator's original request.
-      targetedEdit: Boolean(options.targetedEdit) && attempt === 1 && !rescueMode,
+      targetedEdit: (Boolean(options.targetedEdit) && attempt === 1 && !rescueMode) || targetedReviewRepair,
       attempt,
       maxAttempts: allowedAttempts,
       rescueMode,
@@ -4647,6 +5113,19 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       previewFit: 'cover',
     };
 
+    generationManifest.push({
+      attempt,
+      rescueMode,
+      provider: generatedImage.provider || '',
+      prompt: content.image.prompt,
+      references: content.image.references.map((reference) => ({
+        id: reference.id || '',
+        role: reference.role || '',
+        relativePath: reference.relativePath || '',
+      })),
+      resultUrl: generatedImage.url,
+    });
+
     if (typeof options.imageReviewer !== 'function' || content.image?.generatedSource !== 'ai') break;
 
     finalReview = normalizeCreativeReview(await options.imageReviewer({
@@ -4657,9 +5136,10 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       channel: options.channel,
       attempt,
       maxAttempts,
-    }), options.now);
+    }), options.now, content);
     finalReview.attempt = attempt;
     reviewAttempts.push(finalReview);
+    generationManifest[generationManifest.length - 1].review = finalReview;
     reviewFeedback = formatCreativeReviewFeedback(finalReview);
 
     if (
@@ -4682,6 +5162,7 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
     content.creativeReview = finalReview;
     content.contentReview = mergeCreativeReview(baseContentReview, finalReview);
   }
+  content.creativeGenerationManifest = generationManifest;
 }
 
 // Returns up to `count` items starting at a seed-derived offset, wrapping
@@ -4701,21 +5182,24 @@ function pickRotatingReferenceList(candidates, seed, count) {
 // "gastronômico... apetitoso" (appetizing), which pushed the model toward
 // generating food imagery for a non-food business. Gate the food-specific
 // language behind an actual segment check instead.
-const FOOD_SEGMENT_KEYWORDS = [
-  'pizza', 'esfiha', 'comida', 'restaurante', 'lanchonete', 'hamburgueria',
-  'hamburguer', 'padaria', 'confeitaria', 'gastronomia', 'alimenticia',
-  'alimentacao', 'cafeteria', 'sorveteria', 'churrascaria', 'pizzaria',
-  'delivery de comida', 'food truck', 'doceria', 'buffet',
+const FOOD_SERVICE_SEGMENT_KEYWORDS = [
+  'pizzaria', 'restaurante', 'lanchonete', 'hamburgueria', 'padaria',
+  'confeitaria', 'cafeteria', 'sorveteria', 'churrascaria', 'doceria',
+  'buffet', 'food truck', 'delivery de comida', 'cozinha', 'marmitaria',
+];
+
+const NON_FOOD_SUPPLIER_KEYWORDS = [
+  'embalagem', 'descartavel', 'utilidade', 'higiene', 'limpeza',
+  'distribuidora', 'atacado', 'varejo', 'fornecedor',
 ];
 
 function isFoodBusiness(project = {}) {
-  const text = normalizeComparableText([
+  const segmentText = normalizeComparableText([
     project?.brandInput?.segment,
-    project?.brandInput?.productsOrServices,
     project?.companyProfile?.segment,
-    project?.companyProfile?.productsOrServices,
   ].filter(Boolean).join(' '));
-  return FOOD_SEGMENT_KEYWORDS.some((keyword) => text.includes(keyword));
+  if (NON_FOOD_SUPPLIER_KEYWORDS.some((keyword) => segmentText.includes(keyword))) return false;
+  return FOOD_SERVICE_SEGMENT_KEYWORDS.some((keyword) => segmentText.includes(keyword));
 }
 
 // Whether this project has ever had a real product/work photo uploaded
@@ -4735,20 +5219,100 @@ function buildVisualStyleLine(project) {
     : 'Visual comercial premium e profissional, coerente com o segmento real da empresa (não gastronômico, a menos que a empresa seja de alimentação), com alto contraste e leitura rápida em celular.';
 }
 
-// summarizeBrandForCreative() caps itself at 3 sentences pulled from the
-// summary/communication/visualIdentity blocks in order, so a verbose summary
-// block alone can exhaust that budget and silently drop the approved logo
-// colors from the creative prompt. Surface them as their own line instead of
-// relying on that budget.
+// Logo colors are factual visual inputs, so surface them independently from
+// the short strategic summary assembled below.
 function buildBrandColorLine(project = {}) {
   const identity = normalizeBrandIdentity(project.brandIdentity || {});
   const colors = [...identity.editedColors, ...identity.extractedColors].filter(Boolean);
   return colors.length ? `Cores da marca a respeitar: ${colors.join(', ')}.` : '';
 }
 
+function normalizeProductTreatment(value, hasProductReference = false) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['exact_asset', 'exact', 'preserve_exact', 'foto_exata'].includes(normalized)) return 'exact_asset';
+  if (['creative_redraw', 'redraw', 'reinterpret', 'recriar'].includes(normalized)) return 'creative_redraw';
+  return hasProductReference ? 'creative_redraw' : 'none';
+}
+
+function normalizeLayoutStrength(value, hasLayoutReference = false) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['strict', 'balanced', 'free'].includes(normalized)) return normalized;
+  return hasLayoutReference ? 'strict' : 'free';
+}
+
+function creativeLayoutZones(channel) {
+  if (isVerticalStoryChannel(channel)) {
+    return [
+      'Topo (0-18%): logo e título dentro da área segura.',
+      'Centro (18-68%): produto/benefício como protagonista.',
+      'Base média (68-86%): preço e benefícios curtos, sem cobrir o produto.',
+      'Rodapé (86-100%): CTA/fechamento dentro da área segura.',
+    ];
+  }
+  return [
+    'Topo (0-22%): logo e título dentro da área segura.',
+    'Centro (22-72%): produto/benefício como protagonista.',
+    'Base (72-100%): preço, benefícios e CTA com leitura clara.',
+  ];
+}
+
+export function buildCreativeSpec(content = {}, project = {}, channel, selectedReferences = []) {
+  const topic = content.contentTopic || {};
+  const targetChannel = channel || content.channel || DEFAULT_CHANNEL;
+  const productReferences = selectedReferences.filter((reference) => reference.role === 'product_photo');
+  const layoutReference = selectedReferences.find((reference) => reference.role === 'layout_model');
+  const cta = chooseCreativeCta(topic, targetChannel);
+  const productTreatment = normalizeProductTreatment(topic.productTreatment, productReferences.length > 0);
+  const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference));
+  return {
+    schemaVersion: 1,
+    project: {
+      id: project.projectId || content.projectId || '',
+      name: project.name || '',
+    },
+    channel: {
+      id: targetChannel,
+      label: content.formatLabel || CHANNEL_LABELS[targetChannel] || targetChannel,
+      aspectRatio: isVerticalStoryChannel(targetChannel) ? '9:16' : '4:5',
+      dimensions: content.image?.dimensions || null,
+    },
+    offer: {
+      source: topic.source || '',
+      type: topic.type || '',
+      name: String(topic.offerName || '').trim(),
+      price: normalizeCreativePrice(topic.price),
+      items: cleanPromptText(topic.items),
+      notes: cleanPromptText(topic.notes),
+      cta,
+      isSales: isSalesTopic(topic),
+    },
+    product: {
+      treatment: productTreatment,
+      referenceIds: productReferences.map((reference) => reference.id).filter(Boolean),
+      preserve: productTreatment === 'exact_asset'
+        ? ['silhueta', 'cores', 'rótulo', 'marca', 'proporções']
+        : productTreatment === 'creative_redraw'
+          ? ['categoria', 'silhueta reconhecível', 'cores principais', 'quantidade']
+          : [],
+    },
+    layout: {
+      strength: layoutStrength,
+      referenceId: layoutReference?.id || '',
+      referencePath: layoutReference?.relativePath || '',
+      zones: creativeLayoutZones(targetChannel),
+    },
+    references: selectedReferences.map((reference) => ({
+      id: reference.id || '',
+      role: reference.role || '',
+      relativePath: reference.relativePath || '',
+    })),
+  };
+}
+
 function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, selectedReferences = []) {
   const topic = content.contentTopic || {};
   const targetChannel = channel || content.channel;
+  const creativeSpec = content.creativeSpec || buildCreativeSpec(content, project, targetChannel, selectedReferences);
   // Goal-driven topics (autoridade/engajamento/educação etc.) don't have an
   // offer name to use as headline — forcing the literal company name as the
   // title on every single post reads as repetitive/robotic (the name is
@@ -4783,7 +5347,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     || project.name;
   const exactTitle = isFreeTitleTopic ? '' : normalizeCreativeTitle(topic.offerName || project.name);
   const exactPrice = normalizeCreativePrice(topic.price);
-  const exactCta = chooseCreativeCta(topic);
+  const exactCta = creativeSpec.offer.cta;
   const objective = buildCreativeObjective(topic, project);
   const isVerticalStory = isVerticalStoryChannel(targetChannel);
   const useSalesHookTitle = creativeShapeGroupForChannel(targetChannel) === 'feed' && !isFreeTitleTopic && isSalesTopic(topic);
@@ -4803,7 +5367,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // this treatment, since we can't be sure it's the right SKU.
   const hasLinkedProductPhoto = Boolean(topic.photoReferenceIds?.length)
     && productReferences.some((reference) => topic.photoReferenceIds.includes(reference.id));
-  const productFocus = detectCreativeProductFocus(topic, hasLinkedProductPhoto);
+  const productFocus = detectCreativeProductFocus(topic, hasLinkedProductPhoto, creativeSpec.product.treatment);
   const quantityRules = buildCreativeQuantityRules(topic, productFocus, exactTitle);
   const visualSummary = summarizeBrandForCreative(project);
   // Which single layout/visual reference to use is already rotated upstream
@@ -4839,7 +5403,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
           : useSalesHookTitle
             ? `Título: criar um título-gancho curto sobre "${exactTitle}", sem inventar benefício, prazo ou desconto.`
             : `Título exato: ${exactTitle}`,
-      topic.items ? `Subtítulo permitido: ${cleanPromptText(topic.items)}` : '',
+      topic.items ? `Subtítulo/benefícios obrigatórios: ${cleanPromptText(topic.items)}` : '',
+      topic.notes ? `Observações e restrições obrigatórias da oferta: ${cleanPromptText(topic.notes)}` : '',
       exactPrice ? `Preço exato: ${exactPrice}` : 'Preço: não inserir preço, pois não há preço cadastrado para este criativo.',
       realUrgency ? `Urgência real cadastrada: ${realUrgency}` : '',
       exactCta
@@ -4848,6 +5413,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
           : `CTA exato: ${exactCta}`)
         : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte; é um post de conteúdo, não uma oferta.',
       topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
+      projectCreativeInstagramHandle(project)
+        ? `Identificação da marca: ${projectCreativeInstagramHandle(project)} — manter exatamente este @ nos criativos.`
+        : '',
       [
         isFreeTitleTopic || useSalesHookTitle ? 'Não alterar preço' : 'Não alterar título, preço',
         exactCta ? ' ou CTA' : '',
@@ -4860,15 +5428,18 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     section('ATIVOS OFICIAIS', logoReferences.length ? [
       'Utilizar a logo oficial anexada.',
       'Preservar desenho, nome, cores e proporções; não redesenhar nem criar outra versão.',
+      'Cores oficiais da marca têm prioridade absoluta.',
       'Posicionar a logo em área natural, legível, sem corte, tamanho pequeno (~8% da largura), não dominante.',
       ...logoReferences.map((reference) => `Logo: ${reference.relativePath}`),
     ] : ['Não há logo oficial anexada; não inventar logotipo.']),
     section('PRODUTOS OU FOTOS REAIS', productReferences.length ? [
       'Utilizar as fotos reais selecionadas para esta geração.',
-      'Preservar a aparência real do produto; pode recortar, ajustar luz, sombra e contraste para integrar ao layout.',
-      isFoodBusiness(project)
-        ? 'Não substituir por outro produto e não deformar ingredientes, bordas, queijo ou formato.'
-        : 'Não substituir por outro produto/serviço e não deformar sua aparência, proporções ou identidade real.',
+      creativeSpec.product.treatment === 'exact_asset'
+        ? 'Modo FOTO EXATA: preservar embalagem, rótulo, marca, cores, textos e proporções; pode apenas recortar e ajustar luz/sombra para integrar ao layout.'
+        : 'Modo REDESENHO CRIATIVO: pode redesenhar, reiluminar e valorizar o produto para melhorar a peça, mas deve preservar categoria, silhueta reconhecível, cores principais e quantidade da oferta.',
+      creativeSpec.product.treatment === 'creative_redraw'
+        ? 'O redesenho não precisa reproduzir cada letra do rótulo, mas não pode transformar o item em outro produto, outra versão ou outra quantidade.'
+        : 'Não substituir por outro produto/serviço nem deformar sua identidade real.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
       ...productReferences.map((reference) => `Foto selecionada: ${reference.relativePath}`),
@@ -4895,14 +5466,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       isFoodBusiness(project)
         ? 'Comida: atenção real ao arroz/prato — grãos soltos, textura, brilho natural; evitar simetria/brilho de IA; luz quente e natural.'
         : 'Evitar visual infantil, plástico, artificial, genérico de IA, sobrecarregado ou com enfeites de template sem função.',
-      // visualSummary above is pulled straight from the approved Raio-X
-      // text, which can itself describe a business/dashboard visual style
-      // as the brand's standing identity (confirmed on a real client: the
-      // approved visualIdentity block literally says "priorizar mockups de
-      // site/landing, quadros de diagnóstico"). That's correct for the
-      // brand's regular content but reads as a sales pitch on a
-      // commemorative post — override it here instead of trying to strip
-      // it out of the approved block text itself.
+      // A saved direction can describe the brand's regular commercial style;
+      // special dates need an explicit noncommercial override.
       isSpecialDateFreeTitle
         ? 'Esta peça é uma celebração de data comemorativa, não o conteúdo comercial padrão da marca — mesmo que a direção acima descreva um estilo de dashboard, gráfico, mockup de tela/software ou "quadro de diagnóstico" como identidade visual da marca, NÃO usar nada disso aqui. Priorize uma composição mais humana, calorosa e simples, mantendo as cores e a logo da marca, mas sem parecer peça de vendas ou apresentação de negócio.'
         : '',
@@ -4929,7 +5494,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     section('REFERÊNCIA PRINCIPAL', layoutReference ? [
       `Layout principal: ${layoutReference.relativePath}`,
       layoutReference.instruction ? `Direção do usuário: ${cleanPromptText(layoutReference.instruction)}` : '',
-      'Usar apenas como inspiração para composição, hierarquia, enquadramento, distribuição dos elementos e tratamento do preço.',
+      `Força estrutural: ${creativeSpec.layout.strength.toUpperCase()}. O modelo é obrigatório para composição, hierarquia, enquadramento, distribuição dos elementos e tratamento do preço.`,
+      ...creativeSpec.layout.zones,
+      'Não copiar cores, paleta ou identidade visual da referência.',
       'Não copiar logo, nome, texto, preço, produto ou identidade da empresa presente na referência.',
       isVerticalStoryChannel(targetChannel)
         ? 'Adaptar obrigatoriamente para 9:16 Vertical; a referência não pode forçar arte quadrada.'
@@ -4937,10 +5504,12 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
     section('LIBERDADE CRIATIVA', [
-      'A IA pode definir enquadramento, fundo, iluminação, tipografia, posição dos produtos, formato do selo de preço e elementos decorativos relacionados ao segmento.',
+      layoutReference && creativeSpec.layout.strength === 'strict'
+        ? 'Pode variar fundo, luz, tipografia e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
+        : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
       variation.length
         ? `Variação desejada: ${variation.join(' ')}`
-        : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe do prato.',
+        : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe visual sem contrariar a estrutura obrigatória.',
     ]),
     section('RESTRIÇÕES FINAIS', [
       isVerticalStory ? 'Não criar composição com aparência de flyer quadrado centralizado.' : '',
@@ -4966,7 +5535,12 @@ function normalizeCreativePrice(value) {
   const price = String(value || '').trim();
   if (!price) return '';
   if (/R\$/i.test(price)) return price.replace(/\s+/g, ' ');
-  if (/^\d+[,.]\d{2}$/.test(price) || /^\d+$/.test(price)) return `R$ ${price.replace('.', ',')}`;
+  const decimalMatch = price.match(/^(\d{1,3}(?:\.\d{3})*|\d+)([,.](\d{1,2}))?$/);
+  if (decimalMatch) {
+    const integer = decimalMatch[1];
+    const decimals = String(decimalMatch[3] || '').padEnd(2, '0').slice(0, 2);
+    return `R$ ${integer},${decimals}`;
+  }
   return price;
 }
 
@@ -4978,8 +5552,15 @@ function normalizeCreativePrice(value) {
 // pillar like "ensina"/"prova"/"posiciona") is not actually asking for an
 // order, so it shouldn't carry a hard sales CTA at all.
 function isSalesTopic(topic = {}) {
+  const salesType = ['combo', 'delivery', 'offer', 'service', 'product', 'rodizio', 'urgency'].includes(topic.type);
+  // Pillars control tone and visual treatment, not whether a registered
+  // commercial offer stops being an offer. A real product/price assigned to
+  // "prova" or "posiciona" must keep its CTA; only genuinely non-sales
+  // topics (orientation, institutional, relationship etc.) are gated by the
+  // pillar role.
+  if (salesType) return true;
   if (topic.pillar) return topic.pillar.role === 'convida';
-  return ['combo', 'delivery', 'offer', 'product', 'rodizio', 'urgency'].includes(topic.type);
+  return false;
 }
 
 // chooseCreativeCta always honors an explicit topic.cta, sales or not — that
@@ -5019,14 +5600,46 @@ function buildCreativeObjective(topic = {}, project = {}) {
   return `Criar uma peça comercial clara e profissional para ${project.name}.`;
 }
 
-// Product-photo selection is otherwise a naive "first 2 uploaded" slice —
-// with multiple product lines (e.g. pizza + esfiha) sharing one reference
-// gallery, that silently keeps handing the AI photos of the wrong product
-// for offers about the other one. Reuses the same "esfiha" vs "pizza"
-// keyword detection as detectCreativeProductFocus so a reference tagged/
-// named for the current offer's product wins the slice(0, 2) cut instead of
-// whichever photo happened to be uploaded first.
+// Product-photo selection is otherwise a naive "first 2 uploaded" slice.
+// For multi-product offers, both the composition and the photo pool use the
+// same persisted seed, so a selected "pizza doce" can prefer a matching photo
+// over a generic pizza shot uploaded earlier.
+function withProductRotationSeed(topic = {}, seed) {
+  return {
+    ...topic,
+    productRotationSeed: topic.productRotationSeed || String(seed || ''),
+  };
+}
+
+function parseOfferItems(items) {
+  const input = String(items || '').trim();
+  // Ingredient/flavor lists ("Salgadas: carne, queijo...") describe one
+  // product, not several hero candidates. A conjunction alone is likewise
+  // too ambiguous ("salgadas e doces"), so only split it after a real list
+  // delimiter has established a multi-item offer.
+  if (!input || input.includes(':') || !/[;,]/.test(input)) return input ? [input] : [];
+  const parts = input
+    .split(/\s*[,;]\s*/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const last = parts.pop() || '';
+  return [...parts, ...last.split(/\s+(?:e|&)\s+/i).map((item) => item.trim()).filter(Boolean)];
+}
+
+function multiProductFocus(topic = {}) {
+  const items = parseOfferItems(topic.items);
+  if (items.length < 2) return null;
+  const seed = topic.productRotationSeed || [topic.offerId, topic.sequence].filter(Boolean).join(':');
+  const item = items[hashString(seed) % items.length];
+  const referenceTerms = normalizeComparableText(item)
+    .split(' ')
+    .filter((term) => term.length > 2 && !['com', 'para', 'das', 'dos'].includes(term));
+  return { item, referenceTerms };
+}
+
 function detectReferenceTopicFocus(topic = {}) {
+  const multiProduct = multiProductFocus(topic);
+  if (multiProduct) return multiProduct;
   const text = normalizeComparableText([topic?.offerName, topic?.items, topic?.label, topic?.objective].filter(Boolean).join(' '));
   if (text.includes('esfiha')) return 'esfiha';
   if (text.includes('pizza')) return 'pizza';
@@ -5035,16 +5648,33 @@ function detectReferenceTopicFocus(topic = {}) {
 
 function prioritizeReferencesByTopic(refs, focus) {
   if (!focus) return refs;
-  const matchesFocus = (reference) => normalizeComparableText(
-    [reference.filename, reference.instruction].filter(Boolean).join(' ')
-  ).includes(focus);
-  const matching = refs.filter(matchesFocus);
+  const terms = typeof focus === 'string' ? [focus] : focus.referenceTerms;
+  if (!terms?.length) return refs;
+  const focusScore = (reference) => {
+    const text = normalizeComparableText([reference.filename, reference.instruction].filter(Boolean).join(' '));
+    return terms.filter((term) => text.includes(term)).length;
+  };
+  const matching = refs
+    .map((reference, index) => ({ reference, index, score: focusScore(reference) }))
+    .filter((entry) => entry.score)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((entry) => entry.reference);
   if (!matching.length) return refs;
-  const rest = refs.filter((reference) => !matchesFocus(reference));
+  const rest = refs.filter((reference) => !focusScore(reference));
   return [...matching, ...rest];
 }
 
-function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false) {
+function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, productTreatment = 'creative_redraw') {
+  const multiProduct = multiProductFocus(topic);
+  if (multiProduct) {
+    const item = multiProduct.item;
+    return {
+      heroLine: `1. ${item} real em destaque como produto principal.`,
+      assetLines: [`O produto principal deve ser visualmente reconhecível como ${item}.`],
+      visualLines: [`O foco visual desta peça é ${item}.`],
+      restrictionLines: [`Não trocar ${item} por outro produto listado na oferta.`],
+    };
+  }
   const text = normalizeComparableText([
     topic.offerName,
     topic.items,
@@ -5081,17 +5711,23 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false) {
   // shoe or appliance reseller with many distinct real SKUs) — names the
   // exact product instead of leaving the AI to invent/guess a generic one.
   if (hasLinkedProductPhoto && topic.offerName) {
+    const exactAsset = productTreatment === 'exact_asset';
     return {
       heroLine: `1. ${topic.offerName} real (foto anexada) em destaque como produto principal.`,
-      assetLines: [
+      assetLines: exactAsset ? [
         `O produto principal é exatamente o item real da foto anexada: ${topic.offerName}. Não trocar por outro modelo, cor ou versão.`,
         'Preservar fielmente formato, cor, textos, logotipos, botões e proporções reais do produto fotografado.',
+      ] : [
+        `O produto principal é ${topic.offerName}, baseado na foto anexada. Pode redesenhar para melhorar a apresentação comercial.`,
+        'Preservar categoria, silhueta reconhecível, cores principais e quantidade; não precisa copiar perfeitamente cada letra do rótulo.',
       ],
       visualLines: [
-        `O foco visual desta peça é o produto real fotografado (${topic.offerName}), não uma reinterpretação genérica.`,
+        exactAsset
+          ? `O foco visual desta peça é o produto real fotografado (${topic.offerName}), não uma reinterpretação genérica.`
+          : `O foco visual desta peça é uma reinterpretação comercial melhorada e claramente reconhecível de ${topic.offerName}.`,
       ],
       restrictionLines: [
-        'Não substituir o produto por outro modelo, cor ou versão diferente da foto anexada. Não inventar um produto genérico no lugar da foto real.',
+        'Não substituir o produto por outra categoria, versão incompatível ou quantidade diferente da oferta.',
       ],
     };
   }
@@ -5188,7 +5824,6 @@ function summarizeBrandForCreative(project = {}) {
   const candidates = [
     xrayBlocks.summary?.text,
     xrayBlocks.communication?.text,
-    xrayBlocks.visualIdentity?.text,
     project.brand?.visualStyle,
     project.companyProfile?.segment ? `Marca do segmento ${project.companyProfile.segment}.` : '',
   ].map(cleanPromptText).filter(Boolean);
@@ -5352,12 +5987,12 @@ function appendCreativeRescueCorrections(basePrompt, reviews, channel) {
     basePrompt,
     section(`MODO RESGATE DE ${channelName.toUpperCase()}`, [
       `As tentativas anteriores falharam por formato/canvas. Agora refazer do zero como ${channelName} vertical real 9:16, não como adaptação da arte anterior.`,
-      'Ignorar completamente modelos de layout que possam induzir arte horizontal, quadrada, feed, moldura, mockup ou canvas com área central vertical.',
+      'Manter o modelo de layout anexado como estrutura de hierarquia e zonas. Se a proporção da referência for diferente, adaptar as mesmas zonas ao canvas 9:16 sem copiar sua moldura externa.',
       'Criar uma única arte final vertical 1080x1920 preenchendo todo o canvas de Instagram Stories/Reels.',
       'Não colocar um flyer quadrado dentro do Story. Não usar canvas horizontal. Não usar moldura externa. Não deixar espaço lateral sobrando.',
       'Composição segura obrigatória: logo no topo dentro da margem, título curto dentro da margem, produto ocupando o centro/baixo sem cortar informações importantes, preço em selo compacto, CTA curto no rodapé dentro da margem.',
       'Se algum texto ficaria cortado, reduzir texto ou reposicionar; nunca cortar letras, preço, logo ou CTA.',
-      'Priorizar formato correto acima de seguir referência de layout. Usar referências restantes apenas para produto/logo/estilo, não para copiar composição.',
+      'Priorizar o formato correto sem abandonar a hierarquia do modelo: preservar ordem de leitura, protagonismo, posição relativa de título, produto, preço e CTA.',
       ...reviews.flatMap((review) => [
         `Tentativa ${review.attempt || '?'} bloqueada: ${review.summary || 'corrigir formato.'}`,
         ...(review.errors || []).map((error) => `Erro: ${error}`),
@@ -5387,39 +6022,75 @@ function appendAdCreativeFraming(basePrompt) {
 function shouldEnterStoryRescueMode(review, channel) {
   if (!isVerticalStoryChannel(channel)) return false;
   if (review?.status !== 'blocked') return false;
-  const text = formatCreativeReviewFeedback(review).toLowerCase();
-  return [
-    'formato',
-    'canvas',
-    'horizontal',
-    'quadrado',
-    '1:1',
-    '9:16',
-    'vertical',
-    'story',
-    'stories',
-    'reels',
-  ].some((term) => text.includes(term));
+  const codes = new Set(normalizeCreativeReviewCodes(review));
+  return codes.has('WRONG_ASPECT_RATIO') || codes.has('STORY_CANVAS_MISMATCH');
 }
 
 function buildRescueImageReferences(references) {
-  const allowedRoles = new Set(['brand_asset', 'product_photo', 'visual_reference']);
+  const allowedRoles = new Set(['brand_asset', 'product_photo', 'layout_model', 'visual_reference']);
   const selected = [];
   for (const reference of references) {
     const usageRoles = normalizeReferenceUsageRoles(reference.usageRoles, reference.role);
-    if (reference.role === 'layout_model' || usageRoles.includes('layout_model') || usageRoles.includes('text_parameter')) continue;
+    if (usageRoles.includes('text_parameter')) continue;
     if (!allowedRoles.has(reference.role)) continue;
     selected.push(reference);
   }
   const brandAssets = selected.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
   const productPhotos = selected.filter((reference) => reference.role === 'product_photo').slice(0, 2);
-  const visualReferences = selected.filter((reference) => reference.role === 'visual_reference').slice(0, Math.max(0, 2 - productPhotos.length));
-  return uniqueReferences([...brandAssets, ...productPhotos, ...visualReferences]);
+  const layoutReferences = selected.filter((reference) => reference.role === 'layout_model').slice(0, 1);
+  const visualReferences = selected.filter((reference) => reference.role === 'visual_reference').slice(0, layoutReferences.length ? 0 : 1);
+  return uniqueReferences([...brandAssets, ...productPhotos, ...layoutReferences, ...visualReferences]);
+}
+
+const CREATIVE_REVIEW_CODES = new Set([
+  'WRONG_ASPECT_RATIO',
+  'STORY_CANVAS_MISMATCH',
+  'LAYOUT_MISMATCH',
+  'PLACEHOLDER_LOGO',
+  'LOGO_MISMATCH',
+  'WRONG_PRICE',
+  'MISSING_INFORMATION',
+  'TEXT_UNREADABLE',
+  'PRODUCT_MISMATCH',
+  'VISUAL_QUALITY_LOW',
+]);
+
+function normalizeCreativeReviewCodes(review = {}) {
+  const explicit = (Array.isArray(review.codes) ? review.codes : [])
+    .map((code) => String(code || '').trim().toUpperCase())
+    .filter((code) => CREATIVE_REVIEW_CODES.has(code));
+  const issueLines = [
+    ...(Array.isArray(review.errors) ? review.errors : []),
+    ...(Array.isArray(review.warnings) ? review.warnings : []),
+  ].filter(Boolean).map(normalizeComparableText);
+  const issueText = issueLines.join(' ');
+  const placeholderIssueText = issueLines
+    .filter((line) => !/(?:sem|nenhum|nao ha|ausencia de)\s+(?:qualquer\s+)?placeholder/.test(line))
+    .join(' ');
+  const inferred = [];
+  if (/formato|proporcao|aspect ratio|canvas horizontal|quadrad|1 1|9 16/.test(issueText)) inferred.push('WRONG_ASPECT_RATIO');
+  if (/card 1 1|flyer quadrad|massa visual.*centro|story.*canvas/.test(issueText)) inferred.push('STORY_CANVAS_MISMATCH');
+  if (/layout|hierarquia|modelo de estrutura|distribuicao/.test(issueText)) inferred.push('LAYOUT_MISMATCH');
+  if (/sua marca|your logo|logo aqui|placeholder.*(?:marca|logo)|(?:marca|logo).*placeholder/.test(placeholderIssueText)) inferred.push('PLACEHOLDER_LOGO');
+  if (/preco.*(?:diferente|incorreto|errado)|valor.*(?:diferente|incorreto|errado)/.test(issueText)) inferred.push('WRONG_PRICE');
+  if (/informacao.*falt|item.*falt|beneficio.*falt|nao aparece/.test(issueText)) inferred.push('MISSING_INFORMATION');
+  if (/ilegivel|embaralhad|texto.*cortad|letra.*cortad/.test(issueText)) inferred.push('TEXT_UNREADABLE');
+  if (/produto.*(?:errado|diferente|ambiguo)|nao parece|outra categoria/.test(issueText)) inferred.push('PRODUCT_MISMATCH');
+  if (/qualidade.*baixa|amador|artefato|aparencia de ia/.test(issueText)) inferred.push('VISUAL_QUALITY_LOW');
+  return [...new Set([...explicit, ...inferred])];
+}
+
+function shouldUseTargetedReviewRepair(review = {}) {
+  const codes = normalizeCreativeReviewCodes(review);
+  if (!codes.length) return false;
+  const targetedCodes = new Set(['PLACEHOLDER_LOGO', 'LOGO_MISMATCH', 'WRONG_PRICE', 'TEXT_UNREADABLE']);
+  return codes.every((code) => targetedCodes.has(code));
 }
 
 function formatCreativeReviewFeedback(review) {
   return [
     review?.summary,
+    ...(review?.codes || []).map((code) => `Código: ${code}`),
     ...(review?.errors || []),
     ...(review?.warnings || []),
   ].filter(Boolean).join('\n');
@@ -5449,10 +6120,65 @@ function mergeCreativeReview(contentReview = {}, creativeReview = {}) {
   };
 }
 
-function normalizeCreativeReview(review, now = new Date()) {
-  const errors = normalizeRuleList(review?.errors || []);
+function contentHasOfficialLogoReference(content = {}) {
+  return Array.isArray(content.image?.references)
+    && content.image.references.some((reference) => reference.role === 'brand_asset');
+}
+
+function reviewMentionsPlaceholderLogo(review = {}) {
+  if (normalizeCreativeReviewCodes(review).includes('PLACEHOLDER_LOGO')) return true;
+  // Only issue fields may create a blocking defect. Positive checks must not
+  // be reinterpreted as errors merely because they mention a placeholder.
+  const text = [
+    ...(Array.isArray(review?.warnings) ? review.warnings : []),
+    ...(Array.isArray(review?.errors) ? review.errors : []),
+  ].filter(Boolean)
+    .map(normalizeComparableText)
+    .filter((line) => !/(?:sem|nenhum|nao ha|ausencia de)\s+(?:qualquer\s+)?placeholder/.test(line))
+    .join(' ');
+  return text.includes('sua marca')
+    || /placeholder.*(marca|logo)|(?:marca|logo).*placeholder/.test(text)
+    || /substituir.*identidade final/.test(text);
+}
+
+function normalizeCreativeReview(review, now = new Date(), content = {}) {
+  const placeholderLogoError = contentHasOfficialLogoReference(content) && reviewMentionsPlaceholderLogo(review)
+    ? 'Logo oficial cadastrada não foi aplicada; a arte mostrou placeholder de marca (ex.: “SUA MARCA”).'
+    : '';
+  let errors = normalizeRuleList([...(review?.errors || []), placeholderLogoError].filter(Boolean));
   const warnings = normalizeRuleList(review?.warnings || []);
   const checks = normalizeRuleList(review?.checks || []);
+  let codes = normalizeCreativeReviewCodes({ ...review, errors, warnings });
+  const rawScores = review?.scores && typeof review.scores === 'object' ? review.scores : {};
+  const scores = Object.fromEntries(Object.entries(rawScores)
+    .map(([key, value]) => [key, Math.max(0, Math.min(100, Number(value)))])
+    .filter(([, value]) => Number.isFinite(value)));
+  const hasLayoutReference = Boolean(content.creativeSpec?.layout?.referenceId || content.creativeSpec?.layout?.referencePath);
+  const hasProductReference = Boolean(content.creativeSpec?.product?.referenceIds?.length)
+    || Boolean(content.image?.references?.some((reference) => reference.role === 'product_photo'));
+  const thresholds = {
+    format: 90,
+    facts: 90,
+    visualQuality: 80,
+    ...(contentHasOfficialLogoReference(content) ? { brand: 85 } : {}),
+    ...(hasLayoutReference ? { layout: 80 } : {}),
+    ...(hasProductReference ? { product: 75 } : {}),
+  };
+  const scoreErrors = Object.entries(thresholds)
+    .filter(([key, minimum]) => Number.isFinite(scores[key]) && scores[key] < minimum)
+    .map(([key, minimum]) => `Nota ${key} abaixo do mínimo: ${scores[key]}/${minimum}.`);
+  if (scoreErrors.length) {
+    errors = normalizeRuleList([...errors, ...scoreErrors]);
+    codes = [...new Set([
+      ...codes,
+      ...(scoreErrors.some((error) => error.includes('format')) ? ['WRONG_ASPECT_RATIO'] : []),
+      ...(scoreErrors.some((error) => error.includes('facts')) ? ['MISSING_INFORMATION'] : []),
+      ...(scoreErrors.some((error) => error.includes('brand')) ? ['LOGO_MISMATCH'] : []),
+      ...(scoreErrors.some((error) => error.includes('layout')) ? ['LAYOUT_MISMATCH'] : []),
+      ...(scoreErrors.some((error) => error.includes('product')) ? ['PRODUCT_MISMATCH'] : []),
+      ...(scoreErrors.some((error) => error.includes('visualQuality')) ? ['VISUAL_QUALITY_LOW'] : []),
+    ])];
+  }
   const requestedStatus = String(review?.status || '').trim();
   // A malformed-but-valid-JSON response (e.g. "{}") has no status and no
   // checks/errors/warnings — that used to fall through to 'ok' by default,
@@ -5473,13 +6199,17 @@ function normalizeCreativeReview(review, now = new Date()) {
     : hasReviewSignal
       ? 'Imagem precisa de revisão.'
       : 'Revisor retornou resposta vazia/inesperada — revise manualmente antes de aprovar.';
+  const rawSummary = String(review?.summary || '').trim();
+  const contradictoryApprovalSummary = status === 'blocked' && /aprovad|pront[ao] para publicar/i.test(rawSummary);
   return {
     agent: 'Agente Revisor de Criativo',
     status,
-    summary: String(review?.summary || defaultSummary).trim(),
+    summary: contradictoryApprovalSummary ? defaultSummary : (rawSummary || defaultSummary),
     checks,
     warnings: hasReviewSignal ? warnings : [...warnings, 'Revisor não retornou avaliação válida (resposta vazia ou incompleta).'],
     errors,
+    codes,
+    ...(Object.keys(scores).length ? { scores } : {}),
     reviewedAt: now.toISOString(),
   };
 }
@@ -5810,7 +6540,9 @@ function normalizeBrandXray(input = {}) {
   return {
     status: ['empty', 'generated', 'approved', 'needs_review'].includes(input?.status) ? input.status : (Object.keys(blocks).length ? 'generated' : 'empty'),
     source: input?.source || '',
+    analysisMode: input?.analysisMode || (input?.source === 'ai_analysis' ? 'ai' : (Object.keys(blocks).length ? 'fallback' : '')),
     blocks,
+    fieldSuggestions: normalizeBrandFieldSuggestions(input?.fieldSuggestions),
     generatedAt: input?.generatedAt || null,
     approvedAt: input?.approvedAt || null,
   };
@@ -5822,11 +6554,169 @@ function normalizeBrandXrayBlock(id, input = {}) {
     id,
     label: input.label || fallbackLabel,
     text: cleanText(input.text),
-    source: input.source || 'ai_suggestion',
+    source: input.source || 'structured_fallback',
     sources: Array.isArray(input.sources) ? input.sources : [],
     status: ['draft', 'generated', 'approved'].includes(input.status) ? input.status : 'generated',
     approvedAt: input.approvedAt || null,
   };
+}
+
+function normalizeBrandFieldSuggestions(input = []) {
+  const suggestions = [];
+  const seen = new Set();
+  for (const raw of Array.isArray(input) ? input : []) {
+    const suggestion = normalizeBrandFieldSuggestion(raw);
+    if (!suggestion || seen.has(suggestion.field)) continue;
+    seen.add(suggestion.field);
+    suggestions.push(suggestion);
+  }
+  return suggestions;
+}
+
+function normalizeBrandFieldSuggestion(input = {}, defaults = {}) {
+  const field = cleanText(input?.field);
+  if (!BRAND_XRAY_SUGGESTION_FIELDS.has(field)) return null;
+  const value = Array.isArray(input?.value)
+    ? normalizeUniqueTextList(input.value).join(', ')
+    : cleanText(input?.value);
+  if (!value) return null;
+  const confidence = ['low', 'medium', 'high'].includes(input?.confidence) ? input.confidence : 'medium';
+  return {
+    field,
+    label: cleanText(input?.label) || BRAND_XRAY_SUGGESTION_LABELS[field],
+    value,
+    reason: cleanText(input?.reason) || 'Sugestão baseada apenas nas informações cadastradas; confirme antes de salvar.',
+    source: defaults.source || input?.source || 'inferred_hypothesis',
+    confidence,
+    requiresConfirmation: true,
+  };
+}
+
+function shouldSuggestBrandField(input = {}, field) {
+  if (!BRAND_XRAY_SUGGESTION_FIELDS.has(field)) return false;
+  if (field === 'tone') return !normalizeUniqueTextList(input.tone).length;
+  if (field === 'segment') {
+    const current = cleanText(input.segment);
+    return !current || current.length > 90 || (current.match(/,/g) || []).length >= 3;
+  }
+  return !cleanText(input[field]);
+}
+
+function brandSegmentHierarchy(input = {}) {
+  return [input.segmentGroup, input.segmentCategory, input.segmentSpecialty].filter(Boolean).join(' / ');
+}
+
+function inferBuyerHypotheses(input = {}) {
+  if (input.audience) return input.audience;
+  const searchable = normalizeComparableText([
+    input.segmentGroup,
+    input.segmentCategory,
+    input.segmentSpecialty,
+    input.segment,
+    input.productsOrServices,
+    input.description,
+  ].filter(Boolean).join(' '));
+  const buyers = [];
+  const add = (...items) => items.forEach((item) => {
+    if (!buyers.includes(item)) buyers.push(item);
+  });
+  if (/embalag|descart|marmita|copo|pote|sacola/.test(searchable)) {
+    add('restaurantes e lanchonetes', 'pizzarias e operações de delivery', 'padarias e confeitarias', 'mercados e pequenos comércios', 'organizadores de festas e eventos');
+  }
+  if (/marketing|trafego|landing|site|conteudo/.test(searchable)) {
+    add('donos de negócios locais', 'prestadores de serviço', 'pequenas empresas que precisam organizar a divulgação');
+  }
+  if (/pizz|hamburg|restaurante|lanchonete/.test(searchable)) {
+    add('moradores da região', 'famílias e grupos de amigos', 'clientes que pedem por delivery');
+  }
+  if (input.audienceType === 'b2b') add('compradores, donos e gestores responsáveis por estoque e reposição');
+  if (input.audienceType === 'b2c') add('consumidores finais da região');
+  if (input.audienceType === 'mixed') add('compradores de empresas e revendedores', 'consumidores finais da região');
+  if (!buyers.length) add('pessoas ou empresas que já procuram os produtos e serviços descritos pela marca');
+  return buyers.slice(0, 8).join('; ');
+}
+
+function summarizeProductsForSuggestion(value, limit = 4) {
+  const items = cleanText(value)
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, limit);
+  if (!items.length) return '';
+  if (items.length === 1) return items[0];
+  return `${items.slice(0, -1).join(', ')} e ${items.at(-1)}`;
+}
+
+function buildFallbackBrandFieldSuggestions(input = {}, projectName = '') {
+  const suggestions = [];
+  const add = (field, value, reason, confidence = 'medium') => {
+    if (!shouldSuggestBrandField(input, field)) return;
+    const suggestion = normalizeBrandFieldSuggestion({
+      field,
+      value,
+      reason,
+      confidence,
+      source: 'inferred_hypothesis',
+    });
+    if (suggestion) suggestions.push(suggestion);
+  };
+  const name = input.brandName || projectName || 'A empresa';
+  const hierarchy = brandSegmentHierarchy(input) || input.segment || '';
+  const category = input.segmentCategory || input.segmentGroup || input.segment || 'negócio local';
+  const region = input.serviceRegion;
+  const productsSummary = summarizeProductsForSuggestion(input.productsOrServices);
+  const productCount = cleanText(input.productsOrServices)
+    .split(/[,;\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean).length;
+  const buyers = inferBuyerHypotheses(input);
+
+  add(
+    'audience',
+    buyers,
+    `Inferido a partir do foco ${audienceTypeLabel(input.audienceType) || 'comercial ainda não definido'}, da região e do que a empresa vende.`,
+  );
+  add(
+    'description',
+    [
+      `${name} atua em ${hierarchy || category}`,
+      region ? `atende ${region}` : '',
+      input.productsOrServices ? `oferece ${input.productsOrServices}` : '',
+    ].filter(Boolean).join(', ').replace(/, ([^,]+)$/, ' e $1') + '.',
+    'Texto montado somente com fatos já cadastrados, sem acrescentar promessa ou resultado.',
+    'high',
+  );
+  add(
+    'segment',
+    input.segmentSpecialty
+      ? `${input.segmentCategory || input.segmentGroup} com especialidade em ${input.segmentSpecialty}`
+      : `${category}${productsSummary ? ` com foco em ${productsSummary}` : ''}`,
+    'Organiza o campo livre de segmento sem alterar setor, nicho ou especialidade ligados ao aprendizado externo.',
+    'high',
+  );
+  add(
+    'mainDifferential',
+    productCount >= 2 ? `Variedade de opções em um só atendimento: ${productsSummary}.` : '',
+    'Possível ângulo de diferenciação baseado no portfólio cadastrado; confirme se isso realmente diferencia a empresa.',
+    'low',
+  );
+  add(
+    'positioning',
+    `Ser uma opção clara e confiável em ${category}${region ? ` para clientes de ${region}` : ''}, com comunicação centrada nas necessidades reais do público.`,
+    'Recomendação estratégica, não um fato cadastral nem uma promessa comercial.',
+  );
+  add(
+    'tone',
+    input.audienceType === 'b2b'
+      ? 'profissional, prático, direto, consultivo'
+      : input.audienceType === 'mixed'
+        ? 'profissional, acessível, claro, adaptável ao contexto'
+        : input.audienceType === 'b2c'
+          ? 'próximo, simples, convidativo, confiável'
+          : 'claro, próximo, confiável, fácil de entender',
+    'Tom recomendado de acordo com o foco comercial informado.',
+  );
+  return suggestions;
 }
 
 function buildSuggestedBrandXray(project, now = new Date()) {
@@ -5834,6 +6724,7 @@ function buildSuggestedBrandXray(project, now = new Date()) {
   const identity = normalizeBrandIdentity(project.brandIdentity || { logoPath: project.brand?.logoPath });
   const name = input.brandName || project.name;
   const segment = input.segment || 'segmento ainda não informado';
+  const segmentHierarchy = brandSegmentHierarchy(input);
   const products = input.productsOrServices || 'produtos ou serviços ainda não detalhados';
   const region = input.serviceRegion || 'região ainda não informada';
   const differential = input.mainDifferential || 'diferencial ainda não informado';
@@ -5841,32 +6732,38 @@ function buildSuggestedBrandXray(project, now = new Date()) {
   const goalText = goals.length ? goals.join(', ') : 'objetivos ainda não escolhidos';
   const colors = [...identity.editedColors, ...identity.extractedColors].filter(Boolean);
   const colorText = colors.length ? colors.join(', ') : 'cores ainda não identificadas/editadas';
-  const audienceText = input.audience || 'público-alvo ainda não informado';
+  const audienceText = input.audience || 'público-alvo ainda não confirmado pelo usuário';
+  const audienceTypeText = audienceTypeLabel(input.audienceType) || 'foco comercial ainda não definido';
+  const buyerHypotheses = inferBuyerHypotheses(input);
   const toneText = input.tone.length ? input.tone.join(', ') : null;
   const positioningText = input.positioning || null;
   const brandColorsText = input.brandColors || null;
   const websiteText = input.websiteOrInstagram || null;
   const factualConstraintsText = input.factualConstraints || null;
   const avoidText = input.avoid || null;
+  const fieldSuggestions = buildFallbackBrandFieldSuggestions(input, project.name);
   const blocks = {
     summary: normalizeBrandXrayBlock('summary', {
       label: 'Resumo da marca',
       text: [
+        segmentHierarchy ? `Classificação confirmada pelo usuário: ${segmentHierarchy}.` : null,
         `Informado pelo usuário: ${name} atua em ${segment}, oferece ${products} e atende ${region}. ${input.description || 'Descrição livre ainda não informada.'}`,
-        websiteText ? `Site/Instagram informado: ${websiteText}.` : null,
-        'Sugestão da IA: a marca provavelmente conversa com pessoas interessadas nesses produtos/serviços na região, sem tratar essa sugestão como fato confirmado.',
+        websiteText ? `Site/Instagram informado para identificação e uso nos criativos: ${websiteText}. O perfil não foi acessado automaticamente.` : null,
       ].filter(Boolean).join(' '),
-      sources: ['user_input', 'ai_suggestion'],
+      source: 'structured_fallback',
+      sources: ['user_input', 'structured_fallback'],
     }),
     communication: normalizeBrandXrayBlock('communication', {
-      label: 'Comunicação recomendada',
+      label: 'Compradores e comunicação',
       text: [
-        `Informado pelo usuário: principal diferencial — ${differential}. Público-alvo — ${audienceText}.`,
+        `Informado pelo usuário: foco comercial — ${audienceTypeText}; público confirmado — ${audienceText}; principal diferencial — ${differential}.`,
+        `Hipóteses estratégicas para confirmar: possíveis compradores — ${buyerHypotheses}. Usar essas hipóteses para orientar a comunicação, nunca como fato cadastral confirmado.`,
         positioningText ? `Posicionamento desejado pelo usuário: ${positioningText}.` : null,
         toneText ? `Tom de voz desejado pelo usuário: ${toneText}.` : null,
-        `Sugestão da IA: posicionamento local claro, confiável e comercial; tom próximo, convidativo, simples de entender e adequado ao segmento ${segment}; personalidade acolhedora, marcante e confiável.`,
-      ].filter(Boolean).join(' '),
-      sources: ['user_input', 'ai_suggestion'],
+        `Direção recomendada: posicionamento claro, confiável e comercial; tom ${input.audienceType === 'b2b' ? 'profissional, prático e direto, falando de operação, estoque, reposição e atendimento' : input.audienceType === 'mixed' ? 'profissional e acessível, alternando linguagem de negócio e de consumidor conforme o assunto' : 'próximo, simples e convidativo'}, adequado ao segmento ${segment}.`,
+      ].filter(Boolean).join('\n'),
+      source: 'structured_fallback',
+      sources: ['user_input', 'inferred_hypothesis', 'structured_fallback'],
     }),
     contentStrategy: normalizeBrandXrayBlock('contentStrategy', {
       label: 'Estratégia de conteúdo',
@@ -5876,7 +6773,8 @@ function buildSuggestedBrandXray(project, now = new Date()) {
         `Sugestão da IA: priorizar temas de produtos/serviços (${products}), ofertas reais, bastidores, prova social, datas comemorativas e chamadas para ação compatíveis com os objetivos escolhidos, sem inventar preço, promoção ou promessa.`,
         avoidText ? `Restrição do usuário — NUNCA abordar: ${avoidText}.` : null,
       ].filter(Boolean).join(' '),
-      sources: ['user_input', 'ai_suggestion'],
+      source: 'structured_fallback',
+      sources: ['user_input', 'structured_fallback'],
     }),
     visualIdentity: normalizeBrandXrayBlock('visualIdentity', {
       label: 'Identidade visual',
@@ -5885,13 +6783,16 @@ function buildSuggestedBrandXray(project, now = new Date()) {
         brandColorsText ? `Cores da marca descritas pelo usuário: ${brandColorsText}.` : null,
         `Sugestão da IA: direção visual coerente com ${segment}, com produto/serviço em destaque, alto contraste, boa leitura e poucos elementos. Evitar visual que contradiga a logo, alterar símbolo/textos/proporções, não inventar informações comerciais pela logo e não usar referências visuais como fatos.`,
       ].filter(Boolean).join(' '),
-      sources: ['logo_identity', 'ai_suggestion'],
+      source: 'structured_fallback',
+      sources: ['logo_identity', 'structured_fallback'],
     }),
   };
   return normalizeBrandXray({
     status: 'generated',
-    source: 'ai_suggestion',
+    source: 'structured_fallback',
+    analysisMode: 'fallback',
     blocks,
+    fieldSuggestions,
     generatedAt: now.toISOString(),
     approvedAt: null,
   });
@@ -5968,7 +6869,7 @@ export async function suggestProjectPillars(projectId, options = {}, targetDir =
 function formatApprovedBrandXrayLines(input = {}) {
   const xray = normalizeBrandXray(input);
   if (xray.status !== 'approved') return [];
-  return BRAND_XRAY_BLOCKS
+  return BRAND_XRAY_STRATEGIC_BLOCKS
     .map(([id, label]) => xray.blocks[id]?.text ? `${label}: ${xray.blocks[id].text}` : '')
     .filter(Boolean);
 }
@@ -6146,11 +7047,17 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     id,
     name,
     type,
-    price: String(input?.price || '').trim(),
+    price: normalizeCreativePrice(input?.price),
     items: String(input?.items || '').trim(),
     cta: String(input?.cta || '').trim(),
     autoGenerateCta: input?.autoGenerateCta === true,
     notes: String(input?.notes || '').trim(),
+    productTreatment: ['exact_asset', 'creative_redraw'].includes(String(input?.productTreatment || '').trim())
+      ? String(input.productTreatment).trim()
+      : '',
+    layoutStrength: ['strict', 'balanced', 'free'].includes(String(input?.layoutStrength || '').trim())
+      ? String(input.layoutStrength).trim()
+      : '',
     active: input?.active === false ? false : true,
     pillarId: String(input?.pillarId || '').trim() || null,
     // Groups let the operator organize offers/products (e.g. "Geral",
@@ -6242,7 +7149,7 @@ function resolveTopicPillar(topic, pillars) {
     if (explicit) return explicit;
   }
   const role = topic?.source === 'goal'
-    ? GOAL_TYPE_TO_PILLAR_ROLE[topic?.type]
+    ? goalPillarRole(topic)
     : OFFER_TYPE_TO_PILLAR_ROLE[topic?.type];
   if (!role) return null;
   return activePillars.find((pillar) => pillar.role === role) || null;
@@ -6295,6 +7202,7 @@ function uniqueOfferGroupId(name, existingGroups = []) {
 function offerTypeLabel(type) {
   return {
     offer: 'Oferta direta',
+    service: 'Serviço',
     combo: 'Combo / promoção',
     rodizio: 'Rodízio',
     delivery: 'Delivery',
@@ -6473,7 +7381,7 @@ function automaticReferenceRule(category) {
 // total (see requestOpenAiImageEdit's 4-image cap in
 // content-central-server.js), so at most one segment layout reference is
 // ever worth competing for a slot against the project's own references.
-const MAX_SEGMENT_LAYOUT_REFERENCES = 1;
+const SEGMENT_PRODUCT_REFERENCE_INSTRUCTION = 'Refer\u00eancia de produto real aprovada no aprendizado de segmento: use como inspira\u00e7\u00e3o de como esse alimento/produto realmente se parece (textura, montagem, plausibilidade) \u2014 n\u00e3o copie esta foto espec\u00edfica, o prato, o fundo ou a marca dela.';
 
 const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.';
 
@@ -6487,16 +7395,23 @@ const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no
 // missing file is skipped, not backfilled from the next-oldest candidate.
 // ponytail: fixed recency cap, no per-entry "use as reference" toggle — add
 // one if the automatic cut ever needs finer control.
-export async function buildSegmentLayoutReferences(project, paths) {
+export async function buildSegmentLayoutReferences(project, paths, options = {}) {
   const nodes = await loadSegmentLearningNodes(paths, project);
   const imageEntries = nodes
     .flatMap((node) => node.entries)
-    .filter((entry) => entry.bucket === 'approved' && entry.kind === 'image' && entry.imagePath)
-    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-    .slice(0, MAX_SEGMENT_LAYOUT_REFERENCES);
+    .filter((entry) => entry.bucket === 'approved' && entry.kind === 'image' && entry.imagePath);
+  const creativeEntry = imageEntries
+    .filter((entry) => entry.purpose !== 'product')
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
+  const productEntries = imageEntries.filter((entry) => entry.purpose === 'product');
+  const random = typeof options.random === 'function' ? options.random : Math.random;
+  const productEntry = productEntries.length
+    ? productEntries[Math.min(productEntries.length - 1, Math.max(0, Math.floor(random() * productEntries.length)))]
+    : null;
 
   const references = [];
-  for (const entry of imageEntries) {
+  for (const [entry, purpose] of [[creativeEntry, 'creative'], [productEntry, 'product']]) {
+    if (!entry) continue;
     const absolutePath = join(paths.root, 'assets', 'learning', entry.imagePath);
     if (!existsSync(absolutePath)) continue;
     const reference = normalizeReferenceMetadata({
@@ -6506,7 +7421,7 @@ export async function buildSegmentLayoutReferences(project, paths) {
       mimeType: mimeTypeFromFilename(entry.imagePath),
       role: 'layout_model',
       weight: 'medium',
-      instruction: SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
+      instruction: purpose === 'product' ? SEGMENT_PRODUCT_REFERENCE_INSTRUCTION : SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
       createdAt: entry.createdAt,
     });
     reference.absolutePath = absolutePath;
@@ -6662,7 +7577,7 @@ async function writeGeneratedImage(path, content, project) {
   <text x="${margin + 38}" y="${margin + 302}" fill="#d4d4d8" font-size="38" font-family="Arial, sans-serif">${escapeXml(placeholderSubtitle(content))}</text>
   <text x="${margin + 38}" y="${margin + 410}" fill="#ffffff" font-size="44" font-family="Arial, sans-serif">${escapeXml(truncateSvgText(fallbackHook, 34))}</text>
   <text x="${margin + 38}" y="${margin + 486}" fill="#d4d4d8" font-size="34" font-family="Arial, sans-serif">Use como prévia/teste antes de publicar.</text>
-  <text x="${margin + 38}" y="${height - margin - 52}" fill="#a1a1aa" font-size="30" font-family="Arial, sans-serif">${escapeXml(project.instagram.handle || '')}</text>
+  <text x="${margin + 38}" y="${height - margin - 52}" fill="#a1a1aa" font-size="30" font-family="Arial, sans-serif">${escapeXml(projectCreativeInstagramHandle(project))}</text>
 </svg>`;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, svg, 'utf-8');
@@ -6741,6 +7656,18 @@ function normalizeHandle(handle) {
   if (!handle) return '';
   const trimmed = String(handle).trim();
   return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+}
+
+function projectCreativeInstagramHandle(project = {}) {
+  const informed = cleanText(
+    project.brandInput?.websiteOrInstagram
+    || project.companyProfile?.websiteOrInstagram
+    || '',
+  );
+  if (informed.startsWith('@')) return normalizeHandle(informed.split(/[\s/?#]/)[0]);
+  const instagramUrl = informed.match(/(?:https?:\/\/)?(?:www\.)?instagram\.com\/([A-Za-z0-9._]+)/i);
+  if (instagramUrl?.[1]) return normalizeHandle(instagramUrl[1]);
+  return normalizeHandle(project.instagram?.handle || '');
 }
 
 function sanitizeFilename(filename) {

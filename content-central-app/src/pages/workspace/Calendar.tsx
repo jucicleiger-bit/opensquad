@@ -146,7 +146,7 @@ export function Calendar() {
                     <button
                       key={item.contentId}
                       type="button"
-                      className={`${styles.chip} ${item.contentId === selectedContentId ? styles.chipSelected : ""}`.trim()}
+                      className={`${styles.chip} ${meta.chipClass ? styles[meta.chipClass] : ""} ${item.contentId === selectedContentId ? styles.chipSelected : ""}`.trim()}
                       onClick={() => selectItem(item)}
                     >
                       <span className={`${styles.dot} ${styles[meta.dotClass]}`} />

@@ -113,8 +113,8 @@ test('AI image reviewer prompt blocks square-looking Story price dominance and p
   assert.match(prompt, /pouco uso da área superior e inferior/i);
   assert.match(prompt, /aparência de card 1:1 dentro de 9:16/i);
   assert.match(prompt, /selo de preço cobrir mais destaque que o produto/i);
-  assert.match(prompt, /oferta disser esfiha e imagem parecer pizza/i);
-  assert.match(prompt, /combo e imagem mostrar item único/i);
+  assert.match(prompt, /produto final pertencer a outra categoria/i);
+  assert.match(prompt, /quantidade diferente da referência\/oferta/i);
 });
 
 test('Content Central exposes the official persona map and prompt builders use those persona identities', () => {
@@ -160,6 +160,37 @@ test('AI image reviewer prompt also blocks missing required items (by default, w
   assert.match(attached, /imagem final anexada a este turno/i);
 });
 
+test('AI image reviewer receives the product/layout comparison manifest and returns structured codes and scores', () => {
+  const prompt = buildAiImageReviewPrompt({
+    content: {
+      channel: 'instagram_story',
+      formatLabel: 'Instagram Stories',
+      image: {
+        url: '/api/projects/loja/assets/generated/final.png',
+        references: [
+          { role: 'product_photo', absolutePath: 'C:/tmp/produto.png', relativePath: 'assets/produto.png', mimeType: 'image/png' },
+          { role: 'layout_model', absolutePath: 'C:/tmp/layout.png', relativePath: 'assets/layout.png', mimeType: 'image/png' },
+        ],
+      },
+      creativeSpec: {
+        product: { treatment: 'creative_redraw' },
+        layout: { strength: 'strict', zones: ['Topo: título.', 'Centro: produto.', 'Base: preço e CTA.'] },
+      },
+      contentTopic: { offerName: 'Pote G695', price: 'R$ 19,90', items: '100 unidades', notes: 'Não inventar capacidade térmica.' },
+    },
+    project: { name: 'Loja de Embalagens' },
+    attachedAsFile: true,
+  });
+
+  assert.match(prompt, /Anexo 1: criativo final/i);
+  assert.match(prompt, /Anexo 2: product_photo.*assets\/produto\.png/i);
+  assert.match(prompt, /Anexo 3: layout_model.*assets\/layout\.png/i);
+  assert.match(prompt, /Redesenho criativo é permitido/i);
+  assert.match(prompt, /LAYOUT_MISMATCH/);
+  assert.match(prompt, /"scores"/);
+  assert.match(prompt, /Não inventar capacidade térmica/i);
+});
+
 test('resolveContentImageAbsolutePath derives the real file path on disk from content.filePath + image.url, without needing targetDir threaded in separately', () => {
   const projectDir = 'C:\\Users\\op\\OneDrive\\Documentos\\PROJETO\\OPENSQUAD\\_opensquad\\content-central\\projects\\boss-pizzaria';
   const resolved = resolveContentImageAbsolutePath({
@@ -172,6 +203,109 @@ test('resolveContentImageAbsolutePath derives the real file path on disk from co
   // No usable filePath/url — returns null instead of guessing or throwing.
   assert.equal(resolveContentImageAbsolutePath({ projectId: 'boss-pizzaria', filePath: '', image: {} }), null);
   assert.equal(resolveContentImageAbsolutePath({ filePath: 'C:\\x\\_opensquad\\...', image: { url: '/api/projects/x/assets/assets/y.png' } }), null);
+});
+
+test('offer direction endpoint sends title, details and uploaded image to the suggester', async () => {
+  let received = null;
+  await withServer(async (dir, server) => {
+    await createCentralProject({
+      projectId: 'casa-de-embalagem',
+      name: 'Casa de embalagem',
+      brandInput: { audienceType: 'b2b', productsOrServices: 'embalagens para restaurantes, delivery e mercados' },
+    }, dir);
+    const result = await request(server, '/api/projects/casa-de-embalagem/offers/suggest-direction', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'FILME 280X300M - DISPAFILM',
+        price: 'R$ 33,90',
+        items: 'rolo para embalar alimentos',
+        imageDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      }),
+    });
+
+    assert.equal(result.response.status, 200);
+    assert.match(result.body.notes, /Chamada sugerida/);
+    assert.equal(received.name, 'FILME 280X300M - DISPAFILM');
+    assert.equal(received.price, 'R$ 33,90');
+    assert.equal(received.audienceType, 'b2b');
+    assert.match(received.productsOrServices, /restaurantes/);
+    assert.ok(received.imagePaths[0].endsWith('.png'));
+  }, {
+    offerDirectionSuggester: async (payload) => {
+      received = payload;
+      return 'Direcionamento: food-service. Chamada sugerida: Proteção prática para embalar melhor. Benefícios permitidos: protege alimentos, agiliza preparo, apoia balcão/delivery.';
+    },
+  });
+});
+
+test('offer direction fallback allows basic B2B commercial promises without technical claims', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({
+      projectId: 'casa-de-embalagem',
+      name: 'Casa de embalagem',
+      brandInput: { audienceType: 'b2b', productsOrServices: 'embalagens para restaurantes, delivery e mercados' },
+    }, dir);
+    const result = await request(server, '/api/projects/casa-de-embalagem/offers/suggest-direction', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'INSUFILME 30CM X 100M', price: 'R$ 62,40', items: 'rolo de 100m; largura 30cm' }),
+    });
+
+    assert.equal(result.response.status, 200);
+    assert.match(result.body.notes, /Promessas básicas permitidas/i);
+    assert.match(result.body.notes, /praticidade|economia operacional|reposição/i);
+    assert.match(result.body.notes, /Não prometer/i);
+  });
+});
+
+test('offer direction fallback allows family-specific bag and sealing promises when supported', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({
+      projectId: 'casa-de-embalagem',
+      name: 'Casa de embalagem',
+      brandInput: { audienceType: 'b2b', productsOrServices: 'sacolas, sacos e embalagens para comércio' },
+    }, dir);
+
+    const bag = await request(server, '/api/projects/casa-de-embalagem/offers/suggest-direction', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'SACOLA PLÁSTICA REFORÇADA', price: 'R$ 28,90', items: 'pacote com sacolas para comércio' }),
+    });
+    const sealable = await request(server, '/api/projects/casa-de-embalagem/offers/suggest-direction', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'SACO ZIP LOCK TRANSPARENTE', price: 'R$ 12,90', items: 'embalagem com fechamento zip' }),
+    });
+
+    assert.equal(bag.response.status, 200);
+    assert.match(bag.body.notes, /resist|refor/i);
+    assert.doesNotMatch(bag.body.notes, /veda/i);
+    assert.equal(sealable.response.status, 200);
+    assert.match(sealable.body.notes, /veda|fechamento/i);
+  });
+});
+
+test('offer direction fallback allows real product-family promises beyond bags', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({
+      projectId: 'casa-de-embalagem',
+      name: 'Casa de embalagem',
+      brandInput: { audienceType: 'b2b', productsOrServices: 'embalagens, descartáveis e limpeza para comércio' },
+    }, dir);
+
+    const cases = [
+      ['DETERGENTE NEUTRO 5L', 'limpeza de utensílios e remoção de gordura', /gordura|limpeza/i],
+      ['GUARDANAPO FOLHA SIMPLES', 'pacote para balcão e delivery', /absor|servir/i],
+      ['COPO DESCARTÁVEL 200ML', 'copo para bebidas', /bebida|servir/i],
+      ['POTE REDONDO COM TAMPA', 'embalagem para delivery', /fechamento|organiza/i],
+    ];
+
+    for (const [name, items, expected] of cases) {
+      const result = await request(server, '/api/projects/casa-de-embalagem/offers/suggest-direction', {
+        method: 'POST',
+        body: JSON.stringify({ name, price: 'R$ 19,90', items }),
+      });
+      assert.equal(result.response.status, 200);
+      assert.match(result.body.notes, expected);
+    }
+  });
 });
 
 test('AI image generation prompt uses ChatGPT/OpenAI instead of Grok', () => {
@@ -242,7 +376,7 @@ test('a targeted edit (an operator correction note) asks the model to change onl
   // same concrete anti-AI technique vocabulary the full brief carries —
   // otherwise the model has nothing but the bare complaint to act on.
   assert.match(editPrompt, /evite aparência de IA/i);
-  assert.match(editPrompt, /textura real e levemente irregular/i);
+  assert.match(editPrompt, /materiais e texturas realistas/i);
 
   // A rescue pass (fixing a broken canvas/aspect ratio) needs a real
   // from-scratch regeneration — editing the same broken image can't fix a
@@ -420,6 +554,22 @@ test('selectOpenAiImageEditReferences keeps a layout reference when at least one
   assert.deepEqual(selectOpenAiImageEditReferences([logo, layout], 4), [logo, layout]);
 });
 
+test('image reference selectors reserve two layout_model slots without allowing them to become edit canvases alone', () => {
+  const logo = { role: 'brand_asset', absolutePath: '/logo.png' };
+  const layoutCreative = { role: 'layout_model', absolutePath: '/creative.png' };
+  const layoutProduct = { role: 'layout_model', absolutePath: '/product.png' };
+
+  assert.deepEqual(selectOpenAiImageEditReferences([layoutCreative, layoutProduct], 4), []);
+  assert.deepEqual(
+    selectOpenAiImageEditReferences([logo, layoutCreative, layoutProduct], 4),
+    [logo, layoutCreative, layoutProduct]
+  );
+  assert.deepEqual(
+    selectImageReferencesForCodex([logo, layoutCreative, layoutProduct]),
+    [logo, layoutCreative, layoutProduct]
+  );
+});
+
 test('cropOpenAiImageToChannel resizes a generated buffer to the exact target aspect ratio', async () => {
   const { Jimp } = await import('jimp');
   const source = new Jimp({ width: 1024, height: 1536, color: 0xffffffff });
@@ -436,7 +586,7 @@ test('cropOpenAiImageToChannel resizes a generated buffer to the exact target as
   assert.equal(feedImage.bitmap.height, 1350);
 });
 
-test('cropOpenAiImageToChannel preserves the full composition with an extended blurred background instead of cutting content', async () => {
+test('cropOpenAiImageToChannel fills the target frame edge-to-edge instead of masking a wrong canvas with blurred letterbox bars', async () => {
   const { Jimp, intToRGBA } = await import('jimp');
   const width = 1024;
   const height = 1536;
@@ -445,15 +595,13 @@ test('cropOpenAiImageToChannel preserves the full composition with an extended b
   for (let x = 0; x < width; x += 1) source.setPixelColor(edgeMarker, x, 0);
   const sourceBuffer = await source.getBuffer('image/png');
 
-  // A plain cover-crop would discard the top edge marker entirely for the
-  // Feed ratio (source is proportionally taller than 4:5), leaving pure red.
+  // Filling 4:5 from this taller source crops the unsafe outer edge. The old
+  // blurred-letterbox path preserved/blurred the green marker into the final
+  // canvas and hid the fact that the provider returned the wrong shape.
   const feedBuffer = await cropOpenAiImageToChannel(sourceBuffer, { width: 1080, height: 1350 });
   const feedImage = await Jimp.read(feedBuffer);
   const topPixel = intToRGBA(feedImage.getPixelColor(540, 0));
-  assert.ok(
-    topPixel.g > topPixel.r,
-    `expected the top-edge marker to still be visible (letterboxed, not cropped away); got rgba=${JSON.stringify(topPixel)}`
-  );
+  assert.ok(topPixel.r > topPixel.g, `expected edge-to-edge cover crop with no green blur bar; got rgba=${JSON.stringify(topPixel)}`);
 });
 
 test('animateImageForReelsWithFfmpeg renders a real short vertical MP4 from a static image ("Animar para Reels")', async () => {
@@ -783,7 +931,8 @@ test('root-level segment-learnings and offer-type-learnings routes work with no 
     const offerTypesResponse = await request(server, '/api/offer-type-learnings');
     assert.equal(offerTypesResponse.response.status, 200);
     assert.ok(Array.isArray(offerTypesResponse.body.types));
-    assert.equal(offerTypesResponse.body.types.length, 10);
+    assert.ok(offerTypesResponse.body.types.length >= 10);
+    assert.ok(offerTypesResponse.body.types.some((entry) => entry.type === 'service'));
 
     const saveResponse = await request(server, '/api/offer-type-learnings', {
       method: 'POST',
@@ -1143,10 +1292,10 @@ test('content central server serves only supported API channels and upload contr
     assert.ok(!html.includes('Facebook Feed'));
     assert.ok(html.includes('type="file" id="logoFile"'));
     assert.ok(html.includes('type="file" id="referenceFile"'));
-    assert.ok(html.includes('Painel de referências'));
+    assert.ok(html.includes('Imagem e identidade visual'));
     assert.ok(html.includes('id="referenceGallery"'));
     assert.ok(html.includes('id="referenceInstruction"'));
-    assert.ok(html.includes('Referência não deve disputar com o Raio-X'));
+    assert.ok(html.includes('O Raio-X fornece o contexto estratégico'));
     assert.ok(html.includes('Preservar exatamente como enviado'));
     assert.ok(html.includes('Usar só como inspiração'));
     assert.ok(html.includes('name="referenceUsageRoles"'));
@@ -1188,11 +1337,11 @@ test('content central server serves only supported API channels and upload contr
     assert.ok(html.includes('function cancelEditReference'));
     assert.ok(html.includes('function saveReferenceEdit'));
     assert.ok(html.includes('references-update'));
-    assert.ok(html.includes('Direção visual consolidada'));
+    assert.ok(html.includes('Direção visual dos criativos'));
     assert.ok(html.includes('id="imageRules"'));
     assert.ok(html.includes('Regras técnicas extras para o ChatGPT'));
     assert.ok(!html.includes('Regras técnicas extras para o Grok'));
-    assert.ok(html.includes('Salvar direção visual consolidada'));
+    assert.ok(html.includes('Salvar direção visual'));
     assert.ok(html.includes('Teste rápido antes de programar'));
     assert.ok(html.includes('id="nextTestTopic"'));
     assert.ok(html.includes('Próximo assunto do Teste seguro'));
@@ -1242,12 +1391,13 @@ test('content central server serves only supported API channels and upload contr
     assert.ok(html.includes('Receber pedidos no WhatsApp'));
     assert.ok(html.includes('Analisar minha marca'));
     assert.ok(html.includes('Raio-X da marca'));
-    assert.ok(html.includes('Usar este Raio-X'));
+    assert.ok(html.includes('Aprovar estratégia da marca'));
     assert.ok(html.includes('id="brandXrayBlocks"'));
     assert.ok(html.includes('brand-xray-grid'));
     assert.ok(html.includes('brand-xray-card'));
     assert.ok(html.includes('autoGrowTextareas'));
-    assert.ok(html.includes('Revise os 4 blocos'));
+    assert.ok(html.includes('Revise a estratégia sugerida'));
+    assert.ok(!html.includes("const ids=['summary','communication','contentStrategy','visualIdentity']"));
     assert.ok(html.includes('id="projectReadiness"'));
     assert.ok(html.includes('function renderProjectReadiness'));
     assert.ok(html.includes('Raio-X aprovado'));
@@ -1266,7 +1416,7 @@ test('content central server serves only supported API channels and upload contr
     assert.ok(html.includes('Ativos oficiais da marca'));
     assert.ok(html.includes('Fotos reais e produtos'));
     assert.ok(html.includes('Inspirações visuais'));
-    assert.ok(html.includes('Direção visual consolidada'));
+    assert.ok(html.includes('Direção visual dos criativos'));
     assert.ok(html.includes('id="referenceCategory"'));
     assert.ok(html.includes('id="referenceUseInNextGeneration"'));
     assert.ok(html.includes('saveCompanyProfile'));
@@ -1719,6 +1869,40 @@ test('publishWithGaveteSync skips the real publish and syncs local state when th
   });
 });
 
+test('GET .../content syncs gaveta-published items so the calendar shows them as published', async () => {
+  await withGaveta(async ({ workDir }) => {
+    process.env.OPENSQUAD_GAVETA_DIR = workDir;
+    try {
+      await withServer(async (dir, server) => {
+        await createCentralProject({ projectId: 'gaveta-calendar', name: 'Gaveta Calendar' }, dir);
+        const batch = await generateContentSchedulePlan('gaveta-calendar', {
+          days: 1,
+          startDate: '2026-08-10',
+          formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+        }, dir);
+        const contentId = batch.items[0].contentId;
+        await approveContent('gaveta-calendar', contentId, dir, batch.batchId);
+        await upsertQueueItem(workDir, 'gaveta-calendar', contentId, {
+          channel: 'instagram_feed',
+          caption: 'x',
+          mediaUrl: 'https://i.ibb.co/x.jpg',
+          scheduledDate: '2026-08-10',
+          scheduledTime: '18:00',
+          publish: { realPublished: true, publishedAt: '2026-08-10T18:00:05.000Z', metaMediaId: 'media-calendar', permalink: 'https://instagram.com/p/calendar', error: null },
+        });
+
+        const listed = await request(server, '/api/projects/gaveta-calendar/content');
+
+        assert.equal(listed.body.content.find((item) => item.contentId === contentId).publish.realPublished, true);
+        const onDisk = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+        assert.equal(onDisk.publish.metaMediaId, 'media-calendar');
+      });
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_DIR;
+    }
+  });
+});
+
 test('client-facing briefing page offers a PDF download that hides interactive controls when printed', async () => {
   await withServer(async (_dir, server) => {
     await request(server, '/api/projects', {
@@ -2019,6 +2203,78 @@ test('content central API generates a schedule plan with formats, daily slots an
     assert.equal(generated.body.batch.items.filter((item) => item.channel === 'instagram_story').length, 21);
     assert.equal(generated.body.batch.items.filter((item) => item.channel === 'instagram_feed').length, 4);
     assert.equal(generated.body.batch.items[0].image.generated, true);
+  });
+});
+
+test('content central API previews the schedule plan with selected groups and commemorative extras before generation', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectId: 'preview-web',
+        name: 'Preview Web',
+        handle: '@previewweb',
+        approvalEmail: 'aprovacao@example.com',
+      }),
+    });
+    await request(server, '/api/projects/preview-web/brand-input', {
+      method: 'POST',
+      body: JSON.stringify({ brandName: 'Preview Web', segment: 'loja', contentGoals: ['authority'] }),
+    });
+    const group = await request(server, '/api/projects/preview-web/offer-groups', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Limpeza' }),
+    });
+    await request(server, '/api/projects/preview-web/offers', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Pano Microfibra', price: '3,5', groupId: group.body.group.id }),
+    });
+
+    const preview = await request(server, '/api/projects/preview-web/plan', {
+      method: 'POST',
+      body: JSON.stringify({
+        days: 2,
+        startDate: '2026-09-15',
+        formats: [{ channel: 'instagram_story', postsPerDay: 2, everyDays: 1, startTime: '09:00', intervalMinutes: 240 }],
+        groupIds: [group.body.group.id],
+        offersOnly: true,
+      }),
+    });
+
+    assert.equal(preview.response.status, 200);
+    assert.equal(preview.body.plan.regularCount, 4);
+    assert.equal(preview.body.plan.extraCount, 1);
+    assert.equal(preview.body.plan.dayPlans[0].extras[0].specialDateLabel, 'Dia do Cliente');
+    assert.ok(preview.body.plan.dayPlans.flatMap((day) => day.regular).every((item) => item.offerName === 'Pano Microfibra'));
+  });
+});
+
+test('content central API generates from operator-edited approved plan notes', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'plan-edit-web', name: 'Plan Edit Web' }),
+    });
+    await request(server, '/api/projects/plan-edit-web/offers', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Espeto para Churrasco', price: '6,2' }),
+    });
+
+    const generated = await request(server, '/api/projects/plan-edit-web/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        days: 1,
+        startDate: '2026-08-14',
+        formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+        approvedPlan: {
+          dayPlans: [{ regular: [{ id: '2026-08-14-instagram_story-01', label: 'Venda — Kit churrasco editado', reason: 'Trocar foco para fim de semana.' }] }],
+        },
+      }),
+    });
+
+    assert.equal(generated.response.status, 201);
+    assert.equal(generated.body.batch.items[0].contentTopic.planEdited, true);
+    assert.equal(generated.body.batch.items[0].contentTopic.planLabel, 'Venda — Kit churrasco editado');
   });
 });
 

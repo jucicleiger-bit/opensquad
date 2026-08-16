@@ -84,6 +84,9 @@ describe("Offers", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
     expect(screen.getByLabelText("Nome")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Serviço" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Tratamento do produto")).toHaveValue("creative_redraw");
+    expect(screen.getByLabelText("Obediência ao modelo")).toHaveValue("strict");
   });
 
   it("creates a new offer through the real endpoint and shows it in the list", async () => {
@@ -102,6 +105,10 @@ describe("Offers", () => {
     await screen.findByRole("button", { name: /Sem grupo/ });
     await expandSection("Sem grupo");
     expect(await screen.findByText("Rodízio da Boss")).toBeInTheDocument();
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const payload = JSON.parse(saveCall[1].body as string);
+    expect(payload.productTreatment).toBe("creative_redraw");
+    expect(payload.layoutStrength).toBe("strict");
   });
 
   it("deletes an offer through the real endpoint after confirmation", async () => {
@@ -202,6 +209,46 @@ describe("Offers", () => {
     expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/assets");
     expect(calls[2][0]).toBe("/api/projects/boss-pizzaria/offers");
     expect(JSON.parse(calls[2][1].body as string).photoReferenceIds).toEqual(["foto-iphone"]);
+  });
+
+  it("suggests product-specific direction into observations before saving", async () => {
+    const savedProduct = { id: "pano-microfibra", name: "Pano Microfibra 30x30", type: "offer", price: "R$ 6,50", notes: "" };
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } }],
+          globalRules: {},
+        },
+      },
+      { body: { notes: "Direcionamento: produto visto na foto. Chamada sugerida: Proteção prática para embalar melhor. Benefícios permitidos: protege, organiza e facilita o preparo." } },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-pano" } } } },
+      { body: { project: {}, offer: savedProduct } },
+      {
+        body: {
+          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [savedProduct] } }],
+          globalRules: {},
+        },
+      },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhum produto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Novo produto" }));
+    await userEvent.type(screen.getByLabelText("Nome do produto"), "Pano Microfibra 30x30");
+    await userEvent.type(screen.getByLabelText("Detalhes"), "2 unidades");
+    await userEvent.click(screen.getByRole("button", { name: "Sugerir direcionamento" }));
+    expect((screen.getByLabelText("Observações") as HTMLTextAreaElement).value).toContain("produto visto na foto");
+
+    const photoFile = new File(["fake-image-bytes"], "pano.png", { type: "image/png" });
+    await userEvent.upload(screen.getByLabelText("Foto(s) real(is) do produto"), photoFile);
+    await userEvent.click(screen.getByRole("button", { name: "Salvar produto" }));
+
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/offers/suggest-direction");
+    expect(JSON.parse(calls[1][1].body as string).name).toBe("Pano Microfibra 30x30");
+    const payload = JSON.parse(calls[3][1].body as string);
+    expect(payload.notes).toContain("Benefícios permitidos");
+    expect(payload.notes).toContain("protege");
   });
 
   it("uploads the offer photo with scope 'offer' so it never lands in the shared references gallery", async () => {

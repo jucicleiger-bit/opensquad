@@ -8,15 +8,17 @@ export function LearningGallery({
   groupKey,
   entries,
   onEntriesChange,
+  splitImagePurposes = false,
 }: {
   scope: "segment" | "offerType";
   groupKey: string;
   entries: SegmentLearningEntry[];
   onEntriesChange: (entries: SegmentLearningEntry[]) => void;
+  splitImagePurposes?: boolean;
 }) {
   const [newText, setNewText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [pendingImage, setPendingImage] = useState<{ imagePath: string; suggestedText: string } | null>(null);
+  const [pendingImage, setPendingImage] = useState<{ imagePath: string; suggestedText: string; purpose?: "product" | "creative" } | null>(null);
   const [pendingImageText, setPendingImageText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -35,13 +37,13 @@ export function LearningGallery({
     }
   }
 
-  async function handleUploadImage(file: File) {
+  async function handleUploadImage(file: File, purpose?: "product" | "creative") {
     setBusy(true);
     setError(null);
     try {
       const dataUrl = await fileToDataUrl(file);
-      const analyzed = await analyzeLearningImage({ scope, groupKey, dataUrl, filename: file.name });
-      setPendingImage(analyzed);
+      const analyzed = await analyzeLearningImage({ scope, groupKey, dataUrl, filename: file.name, purpose });
+      setPendingImage({ ...analyzed, purpose });
       setPendingImageText(analyzed.suggestedText);
     } catch (err) {
       setError((err as Error).message);
@@ -55,7 +57,7 @@ export function LearningGallery({
     setBusy(true);
     setError(null);
     try {
-      const result = await saveLearningEntry({ scope, groupKey, bucket: "approved", kind: "image", text: pendingImageText, imagePath: pendingImage.imagePath });
+      const result = await saveLearningEntry({ scope, groupKey, bucket: "approved", kind: "image", text: pendingImageText, imagePath: pendingImage.imagePath, purpose: pendingImage.purpose });
       onEntriesChange(result.entries);
       setPendingImage(null);
       setPendingImageText("");
@@ -104,6 +106,7 @@ export function LearningGallery({
                     />
                   ) : null}
                   <span>{entry.text}</span>
+                  {splitImagePurposes && entry.kind === "image" ? <span className="pill">{entry.purpose === "product" ? "Produto" : "Criativo"}</span> : null}
                 </div>
                 <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
               </div>
@@ -120,7 +123,7 @@ export function LearningGallery({
         />
         <Button disabled={busy} onClick={handleAddText}>Adicionar</Button>
       </div>
-      <div style={{ marginTop: 8 }}>
+      {!splitImagePurposes && <div style={{ marginTop: 8 }}>
         <label htmlFor={`upload-${groupKey}`}>Adicionar imagem de referência</label>
         <input
           id={`upload-${groupKey}`}
@@ -128,7 +131,17 @@ export function LearningGallery({
           accept="image/*"
           onChange={(e) => e.target.files?.[0] && handleUploadImage(e.target.files[0])}
         />
-      </div>
+      </div>}
+      {splitImagePurposes ? (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginTop: 8 }}>
+          {[{ purpose: "product" as const, label: "Refer\u00eancia de produto" }, { purpose: "creative" as const, label: "Refer\u00eancia de estrutura de criativo" }].map(({ purpose, label }) => (
+            <div key={purpose}>
+              <label htmlFor={`upload-${purpose}-${groupKey}`}>{label}</label>
+              <input id={`upload-${purpose}-${groupKey}`} type="file" accept="image/*" onChange={(e) => e.target.files?.[0] && handleUploadImage(e.target.files[0], purpose)} />
+            </div>
+          ))}
+        </div>
+      ) : null}
       {pendingImage ? (
         <Card style={{ padding: 12, marginTop: 8 }}>
           <p className="muted">A IA descreveu: revise antes de confirmar.</p>

@@ -15,6 +15,7 @@ import {
   saveCatalogSettings,
   saveOffer,
   saveOfferGroup,
+  suggestOfferDirection,
   type OfferGroup,
   type ProjectOffer,
   type SiteOfferCandidate,
@@ -50,7 +51,20 @@ const EMPTY_FORM = {
   daysOfWeek: [] as string[],
   active: true,
   photoReferenceIds: [] as string[],
+  productTreatment: "creative_redraw" as "creative_redraw" | "exact_asset",
+  layoutStrength: "strict" as "strict" | "balanced" | "free",
 };
+
+function suggestProductDirection(name: string, items: string, isCatalog: boolean) {
+  const text = `${name} ${items}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  if (/limp|microfibra|pano|esponja|detergente|desinfetante|rodo|vassoura|saco de lixo/.test(text)) {
+    return "Direcionamento: produto de limpeza. Tom prático e direto. Chamada sugerida: Mais praticidade na limpeza do dia a dia. Benefícios permitidos: limpeza prática, multiuso, apoio para casa/carro/cozinha/escritório. Não prometer que não risca, antibacteriano ou qualidade superior sem comprovação.";
+  }
+  if (/food|marmita|pote|copo|talher|prato|guardanapo|delivery|embalagem|isopor|aluminio/.test(text)) {
+    return "Direcionamento: produto para food-service/embalagem. Tom profissional e B2B. Chamada sugerida: Mais praticidade para sua operação. Benefícios permitidos: organização do atendimento, reposição fácil, apresentação profissional, apoio ao balcão/delivery. Não inventar certificação, material, capacidade ou uso térmico não cadastrado.";
+  }
+  return `Direcionamento: ${isCatalog ? "produto" : "oferta"} comercial. Tom claro e direto. Criar 1 chamada de valor baseada apenas no nome/detalhes cadastrados. Benefícios permitidos: usar somente características escritas neste cadastro. Não inventar garantia, desempenho, material, desconto ou prova não informada.`;
+}
 
 export function Offers() {
   const { project, refreshProject } = useOutletContext<WorkspaceContext>();
@@ -97,6 +111,7 @@ export function Offers() {
   }
   const [form, setForm] = useState(() => ({ ...EMPTY_FORM, groupId: defaultGroupId }));
   const [busy, setBusy] = useState(false);
+  const [suggestingDirection, setSuggestingDirection] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -256,7 +271,7 @@ export function Offers() {
   }
 
   async function handleDeleteGroup(group: OfferGroup) {
-    if (!confirm(`Apagar o grupo "${group.name}"? As ofertas dele continuam existindo, só ficam sem grupo.`)) return;
+    if (!confirm(`Apagar o grupo "${group.name}"? Os produtos dele ficam apenas no histórico e não entram mais nas próximas gerações.`)) return;
     setDeletingGroupId(group.id);
     setGroupError(null);
     try {
@@ -345,6 +360,8 @@ export function Offers() {
       daysOfWeek: offer.daysOfWeek || [],
       active: offer.active !== false,
       photoReferenceIds: offer.photoReferenceIds || [],
+      productTreatment: offer.productTreatment === "exact_asset" ? "exact_asset" : "creative_redraw",
+      layoutStrength: offer.layoutStrength === "balanced" || offer.layoutStrength === "free" ? offer.layoutStrength : "strict",
     });
     setError(null);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -361,6 +378,37 @@ export function Offers() {
     if (photoInputRef.current) photoInputRef.current.value = "";
     setError(null);
     setFormOpen(false);
+  }
+
+  async function handleSuggestDirection() {
+    setSuggestingDirection(true);
+    setError(null);
+    try {
+      const firstPhoto = photoInputRef.current?.files?.[0];
+      const imageDataUrl = firstPhoto ? await fileToDataUrl(firstPhoto) : undefined;
+      const result = await suggestOfferDirection(project.projectId, {
+        name: form.name,
+        price: form.price,
+        items: form.items,
+        type: form.type,
+        photoReferenceIds: form.photoReferenceIds,
+        imageDataUrl,
+      });
+      const suggestion = result.notes || suggestProductDirection(form.name, form.items, isCatalog);
+      setForm((current) => ({
+        ...current,
+        notes: current.notes.trim() ? `${current.notes.trim()}\n\n${suggestion}` : suggestion,
+      }));
+    } catch (err) {
+      const suggestion = suggestProductDirection(form.name, form.items, isCatalog);
+      setForm((current) => ({
+        ...current,
+        notes: current.notes.trim() ? `${current.notes.trim()}\n\n${suggestion}` : suggestion,
+      }));
+      setError(`IA indisponível agora; usei sugestão rápida. ${(err as Error).message}`);
+    } finally {
+      setSuggestingDirection(false);
+    }
   }
 
   async function handleDelete(offer: ProjectOffer) {
@@ -543,6 +591,34 @@ export function Offers() {
             <label htmlFor="offer-items">{isCatalog ? "Detalhes" : "Itens/detalhes"}</label>
             <input id="offer-items" value={form.items} onChange={(e) => setForm({ ...form, items: e.target.value })} />
 
+            {!isCatalog ? (
+              <div className="row">
+                <div>
+                  <label htmlFor="offer-product-treatment">Tratamento do produto</label>
+                  <select
+                    id="offer-product-treatment"
+                    value={form.productTreatment}
+                    onChange={(e) => setForm({ ...form, productTreatment: e.target.value as "creative_redraw" | "exact_asset" })}
+                  >
+                    <option value="creative_redraw">Redesenho criativo permitido</option>
+                    <option value="exact_asset">Manter foto/embalagem exata</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="offer-layout-strength">Obediência ao modelo</label>
+                  <select
+                    id="offer-layout-strength"
+                    value={form.layoutStrength}
+                    onChange={(e) => setForm({ ...form, layoutStrength: e.target.value as "strict" | "balanced" | "free" })}
+                  >
+                    <option value="strict">Estrita</option>
+                    <option value="balanced">Equilibrada</option>
+                    <option value="free">Livre/inspiração</option>
+                  </select>
+                </div>
+              </div>
+            ) : null}
+
             {!isCatalog && pillars.length > 0 ? (
               <>
                 <label htmlFor="offer-pillar">Pilar (opcional)</label>
@@ -619,7 +695,12 @@ export function Offers() {
               {isCatalog ? "Em estoque (entra na rotação de posts)" : "Ativo (entra nas próximas gerações)"}
             </label>
 
-            <label htmlFor="offer-notes">Observações</label>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginTop: 12 }}>
+              <label htmlFor="offer-notes" style={{ margin: 0 }}>Observações</label>
+              <Button type="button" variant="secondary" onClick={handleSuggestDirection} disabled={suggestingDirection}>
+                {suggestingDirection ? "Analisando..." : "Sugerir direcionamento"}
+              </Button>
+            </div>
             <textarea id="offer-notes" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
 
             <div style={{ display: "flex", gap: 8, marginTop: 12 }}>

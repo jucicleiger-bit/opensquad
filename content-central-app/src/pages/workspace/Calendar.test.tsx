@@ -116,6 +116,17 @@ describe("Calendar", () => {
     expect(screen.queryByRole("button", { name: "Publicar agora" })).not.toBeInTheDocument();
   });
 
+  it("marks published calendar chips with the published color class", async () => {
+    stubFetchSequence([
+      { body: PROJECT_STATE },
+      { body: { content: [baseItem({ publish: { realPublished: true } })] } },
+    ]);
+
+    renderProjectCalendar();
+
+    expect((await screen.findByRole("button", { name: /Feed/i })).className).toMatch(/chipPublicado/);
+  });
+
   it("deletes a card through the real endpoint after confirmation and clears the selection", async () => {
     vi.spyOn(window, "prompt").mockReturnValue("");
     stubFetchSequence([

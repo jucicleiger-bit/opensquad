@@ -24,6 +24,7 @@ import {
   generateCatalogSchedulePlan,
   generateContentBatch,
   generateContentSchedulePlan,
+  previewContentSchedulePlan,
   generateSpecialDateContent,
   getCentralPaths,
   listCentralProjects,
@@ -219,17 +220,20 @@ test('brand xray input uses simple user facts and approved four-block analysis i
       brandName: 'Boss Pizzaria',
       segmentGroup: 'Alimentício',
       segmentCategory: 'Pizzaria',
+      segmentSpecialty: 'Rodízio e delivery',
       segment: 'Pizzaria',
       productsOrServices: 'rodízio de pizzas, delivery, bebidas e atendimento no salão',
       description: 'Pizzaria familiar com rodízio de terça a domingo.',
       serviceRegion: 'Várzea Grande/MT',
       mainDifferential: 'Pizza bem recheada, ambiente familiar e rodízio completo',
+      websiteOrInstagram: '@bossconteudo',
       contentGoals: ['sell_products', 'promotions', 'whatsapp_orders', 'show_products', 'relationship', 'sell_products'],
     }, dir);
 
     assert.equal(updated.brandInput.segment, 'Pizzaria');
     assert.equal(updated.brandInput.segmentGroup, 'Alimentício');
     assert.equal(updated.brandInput.segmentCategory, 'Pizzaria');
+    assert.equal(updated.brandInput.segmentSpecialty, 'Rodízio e delivery');
     assert.deepEqual(updated.brandInput.contentGoals, ['sell_products', 'promotions', 'whatsapp_orders', 'show_products', 'relationship']);
     assert.equal(updated.companyProfile.segment, 'Pizzaria');
     assert.equal(updated.companyProfile.location, 'Várzea Grande/MT');
@@ -242,13 +246,24 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     assert.doesNotMatch(before.items[0].image.prompt, /RAIO-X APROVADO DA MARCA/);
     assert.match(before.items[0].image.prompt, /rodízio de pizzas, delivery/);
 
+    await updateProjectImageRules('boss-xray', {
+      visualStyle: 'Direção da aba Imagem: fundo claro, fotografia realista e detalhes vermelhos.',
+      imageRules: ['Preservar a aparência real dos produtos.'],
+    }, dir);
+
     const analyzed = await analyzeProjectBrandXray('boss-xray', {}, dir, new Date('2026-07-20T12:00:00.000Z'));
     assert.equal(analyzed.project.brandXray.status, 'generated');
+    assert.equal(analyzed.project.brandXray.analysisMode, 'fallback');
+    assert.equal(analyzed.project.brandXray.source, 'structured_fallback');
     assert.deepEqual(Object.keys(analyzed.project.brandXray.blocks), ['summary', 'communication', 'contentStrategy', 'visualIdentity']);
     assert.match(analyzed.project.brandXray.blocks.summary.text, /Várzea Grande\/MT/);
-    assert.match(analyzed.project.brandXray.blocks.communication.text, /Sugestão da IA/i);
+    assert.match(analyzed.project.brandXray.blocks.summary.text, /Alimentício \/ Pizzaria \/ Rodízio e delivery/i);
+    assert.match(analyzed.project.brandXray.blocks.communication.text, /possíveis compradores/i);
     assert.match(analyzed.project.brandXray.blocks.contentStrategy.text, /Receber pedidos no WhatsApp/i);
     assert.match(analyzed.project.brandXray.blocks.visualIdentity.text, /não inventar/i);
+    assert.ok(analyzed.project.brandXray.fieldSuggestions.some((suggestion) => suggestion.field === 'audience'));
+    assert.ok(analyzed.project.brandXray.fieldSuggestions.some((suggestion) => suggestion.field === 'tone'));
+    assert.ok(analyzed.project.brandXray.fieldSuggestions.every((suggestion) => !['segmentGroup', 'segmentCategory', 'segmentSpecialty'].includes(suggestion.field)));
 
     const approved = await approveProjectBrandXray('boss-xray', {
       edits: {
@@ -259,7 +274,11 @@ test('brand xray input uses simple user facts and approved four-block analysis i
 
     assert.equal(approved.project.brandXray.status, 'approved');
     assert.equal(approved.project.brandXray.blocks.summary.status, 'approved');
-    assert.match(approved.project.brand.visualStyle, /Raio-X visual aprovado/);
+    assert.deepEqual(approved.project.brandXray.fieldSuggestions, []);
+    assert.equal(
+      approved.project.brand.visualStyle,
+      'Direção da aba Imagem: fundo claro, fotografia realista e detalhes vermelhos.',
+    );
 
     const after = await generateContentBatch('boss-xray', {
       days: 1,
@@ -272,7 +291,9 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     assert.match(prompt, /Resumo da marca/);
     assert.match(prompt, /tom próximo, convidativo/);
     assert.match(prompt, /Receber pedidos no WhatsApp/);
-    assert.match(prompt, /preto, vermelho, branco e dourado/);
+    assert.match(prompt, /Direção da aba Imagem: fundo claro, fotografia realista e detalhes vermelhos/);
+    assert.doesNotMatch(prompt, /preto, vermelho, branco e dourado/);
+    assert.match(prompt, /Instagram: @bossconteudo/i);
     assert.match(prompt, /Referência visual nunca pode alterar preço, logo, produto, nome, promoção ou informação factual/i);
   });
 });
@@ -644,6 +665,33 @@ test('analyzeLearningImage/saveLearningEntry/deleteLearningEntry work without a 
   });
 });
 
+test('analyzeLearningImage asks for structure-only analysis when the uploaded learning image is a creative-structure reference', async () => {
+  await withTempProject(async (dir) => {
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    let receivedContext = '';
+    let receivedPurpose = '';
+    const analyzed = await analyzeLearningImage({
+      scope: 'segment',
+      groupKey: 'group:embalagens/category:casa-de-embalagem',
+      dataUrl,
+      filename: 'modelo-oferta.png',
+      purpose: 'creative',
+    }, dir, new Date(), {
+      learningImageAnalyzer: async (_imagePath, context, purpose) => {
+        receivedContext = context;
+        receivedPurpose = purpose;
+        return 'Layout vertical: logo no topo, chamada principal, produto em destaque, benefícios, preço e CTA.';
+      },
+    });
+
+    assert.equal(receivedPurpose, 'creative');
+    assert.match(receivedContext, /estrutura de criativo/i);
+    assert.match(receivedContext, /layout|hierarquia|CTA/i);
+    assert.doesNotMatch(receivedContext, /textura do produto|formato real do produto/i);
+    assert.match(analyzed.suggestedText, /Layout vertical/);
+  });
+});
+
 test('buildSegmentLayoutReferences returns only the single most recent approved image from the project\'s own segment nodes, skips avoid/text entries', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);
@@ -696,6 +744,35 @@ test('buildSegmentLayoutReferences returns only the single most recent approved 
       'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.'
     );
     await access(references[0].absolutePath);
+  });
+});
+
+test('buildSegmentLayoutReferences returns the newest creative reference plus a randomly selected product reference', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'purpose-split', name: 'Purpose Split', handle: '@purpose', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('purpose-split', {
+      brandName: 'Purpose Split', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    const paths = getCentralPaths(dir, 'purpose-split');
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const savedPaths = {};
+    for (const [name, purpose] of [['legacy', undefined], ['product-a', 'product'], ['product-b', 'product']]) {
+      const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => name });
+      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: name, imagePath: analyzed.imagePath, purpose }, dir);
+      savedPaths[name] = analyzed.imagePath;
+    }
+
+    const project = await loadProjectForTest('purpose-split', dir);
+    const first = await buildSegmentLayoutReferences(project, paths, { random: () => 0 });
+    const second = await buildSegmentLayoutReferences(project, paths, { random: () => 0.999 });
+
+    assert.equal(first.length, 2);
+    assert.equal(first[0].relativePath, savedPaths.legacy, 'purpose omitted remains a creative reference');
+    assert.match(first[0].instruction, /Modelo de composi/);
+    assert.match(first[1].instruction, /produto real aprovada/);
+    assert.equal(second[0].relativePath, savedPaths.legacy);
+    assert.notEqual(first[1].relativePath, second[1].relativePath, 'injected random selection reaches distinct approved product photos');
   });
 });
 
@@ -821,7 +898,7 @@ test('technical base summarizes pasted sector material and reuses it only inside
   });
 });
 
-test('audienceType (B2B/B2C) normalizes, mirrors between brandInput/companyProfile, and reaches the image prompt as a fact', async () => {
+test('audienceType (B2B/B2C/mixed) normalizes, mirrors between brandInput/companyProfile, and reaches the image prompt as a fact', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'casa-de-embalagem',
@@ -844,6 +921,13 @@ test('audienceType (B2B/B2C) normalizes, mirrors between brandInput/companyProfi
       channel: 'instagram_story',
     }, dir);
     assert.match(batch.items[0].image.prompt, /Foco comercial informado: B2B/);
+
+    const mixed = await updateProjectBrandInput('casa-de-embalagem', {
+      segment: 'Atacado e varejo de embalagens',
+      audienceType: 'mixed',
+    }, dir);
+    assert.equal(mixed.brandInput.audienceType, 'mixed');
+    assert.equal(mixed.companyProfile.audienceType, 'mixed');
 
     const cleared = await updateProjectBrandInput('casa-de-embalagem', {
       segment: 'Atacado de embalagens',
@@ -876,16 +960,25 @@ test('brand xray analysis uses an injected AI analyzer when provided, and falls 
         communication: 'Comunicação escrita pela IA de teste.',
         contentStrategy: 'Estratégia escrita pela IA de teste.',
         visualIdentity: 'Identidade visual escrita pela IA de teste.',
+        fieldSuggestions: [
+          { field: 'audience', value: 'Famílias e clientes de delivery', reason: 'Inferido do negócio', confidence: 'medium' },
+          { field: 'segmentCategory', value: 'Restaurante', reason: 'Tentativa de reclassificação', confidence: 'high' },
+        ],
       };
     };
 
     const withAi = await analyzeProjectBrandXray('boss-xray-ai', {}, dir, new Date(), { brandAnalyzer: fakeAnalyzer });
     assert.equal(withAi.xray.source, 'ai_analysis');
+    assert.equal(withAi.xray.analysisMode, 'ai');
     assert.equal(withAi.xray.blocks.summary.text, 'Resumo escrito pela IA de teste.');
-    assert.ok(withAi.xray.blocks.summary.sources.includes('ai_suggestion'));
+    assert.ok(withAi.xray.blocks.summary.sources.includes('ai_analysis'));
+    assert.equal(withAi.xray.fieldSuggestions.find((suggestion) => suggestion.field === 'audience')?.source, 'ai_analysis');
+    assert.equal(withAi.xray.fieldSuggestions.some((suggestion) => suggestion.field === 'segmentCategory'), false);
+    assert.equal(withAi.project.brandInput.segmentCategory, '');
 
     const failingAnalyzer = async () => { throw new Error('provider offline'); };
     const withFailure = await analyzeProjectBrandXray('boss-xray-ai', {}, dir, new Date(), { brandAnalyzer: failingAnalyzer });
+    assert.equal(withFailure.xray.analysisMode, 'fallback');
     assert.notEqual(withFailure.xray.blocks.summary.text, 'Resumo escrito pela IA de teste.');
     assert.match(withFailure.xray.blocks.summary.text, /Informado pelo usuário/);
 
@@ -893,6 +986,34 @@ test('brand xray analysis uses an injected AI analyzer when provided, and falls 
     const withPartial = await analyzeProjectBrandXray('boss-xray-ai', {}, dir, new Date(), { brandAnalyzer: partialAnalyzer });
     assert.equal(withPartial.xray.blocks.summary.text, 'Só o resumo veio da IA desta vez.');
     assert.match(withPartial.xray.blocks.communication.text, /Informado pelo usuário/);
+
+    await updateProjectBrandInput('boss-xray-ai', { audience: 'Público confirmado pelo operador' }, dir);
+    const triesToReplaceConfirmedAudience = async () => ({
+      fieldSuggestions: [{ field: 'audience', value: 'Outro público inventado', reason: 'não deve entrar' }],
+    });
+    const protectedAudience = await analyzeProjectBrandXray('boss-xray-ai', {}, dir, new Date(), { brandAnalyzer: triesToReplaceConfirmedAudience });
+    assert.equal(protectedAudience.xray.fieldSuggestions.some((suggestion) => suggestion.field === 'audience'), false);
+    assert.equal(protectedAudience.project.brandInput.audience, 'Público confirmado pelo operador');
+  });
+});
+
+test('pizzeria delivery suggests consumer buyers without misclassifying the business as a packaging supplier', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pizzaria-delivery-xray', name: 'Pizzaria Delivery' }, dir);
+    await updateProjectBrandInput('pizzaria-delivery-xray', {
+      brandName: 'Pizzaria Delivery',
+      segmentGroup: 'Alimentício',
+      segmentCategory: 'Pizzaria',
+      segment: 'Pizzaria e delivery',
+      productsOrServices: 'pizzas, esfihas e entrega por delivery',
+      audienceType: 'b2c',
+    }, dir);
+
+    const analyzed = await analyzeProjectBrandXray('pizzaria-delivery-xray', {}, dir);
+    const audienceSuggestion = analyzed.xray.fieldSuggestions.find((suggestion) => suggestion.field === 'audience');
+
+    assert.match(audienceSuggestion.value, /famílias|consumidores finais/i);
+    assert.doesNotMatch(audienceSuggestion.value, /padarias|mercados|organizadores de festas/i);
   });
 });
 
@@ -1415,6 +1536,31 @@ test('researchOnlineVisualTrends requires a webResearcher and a registered segme
       () => researchOnlineVisualTrends('pesquisa-erros', { webResearcher: async () => '   ' }, dir),
       /não retornou nenhum achado/,
     );
+  });
+});
+
+test('researchOnlineVisualTrends rejects web-tool configuration failures instead of saving them as prompt rules', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'pesquisa-firecrawl',
+      name: 'Pesquisa Firecrawl',
+      handle: '@pesquisafirecrawl',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await updateProjectCompanyProfile('pesquisa-firecrawl', { segment: 'Pizzaria', productsOrServices: 'Pizzas' }, dir);
+    await updateProjectImageRules('pesquisa-firecrawl', {
+      imageRules: ['Regra escrita à mão pelo operador'],
+    }, dir);
+
+    await assert.rejects(
+      () => researchOnlineVisualTrends('pesquisa-firecrawl', {
+        webResearcher: async () => '[Pesquisa online] Não consegui pesquisar/navegar em tempo real: as ferramentas web deste ambiente estão sem configuração (FIRECRAWL_API_KEY/FIRECRAWL_API_URL ausentes), então não posso cumprir a exigência “use busca e navegação real” sem inventar.',
+      }, dir),
+      /não conseguiu navegar de verdade/,
+    );
+
+    const project = await loadProjectForTest('pesquisa-firecrawl', dir);
+    assert.deepEqual(project.brand.imageRules, ['Regra escrita à mão pelo operador']);
   });
 });
 
@@ -2355,6 +2501,43 @@ test('Feed offer prompt uses a sales hook title, stronger CTA and blocks fake ur
   });
 });
 
+test('offer prices typed as plain decimals are normalized as Brazilian currency across topic prompt caption and image brief', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'preco-moeda-br',
+      name: 'Hygi Comércio',
+      handle: '@hygicomercio',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await saveProjectOffer('preco-moeda-br', {
+      name: 'Pano Microfibra 30x30',
+      type: 'offer',
+      price: '3,5',
+      items: '2 unidades',
+      active: true,
+    }, dir, new Date('2026-07-18T09:00:00.000Z'));
+
+    const project = await loadProjectForTest('preco-moeda-br', dir);
+    assert.equal(project.contentStrategy.offers[0].price, 'R$ 3,50');
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('preco-moeda-br', {
+      channel: 'instagram_feed',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/microfibra.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-07-18T09:05:00.000Z'));
+
+    assert.equal(content.contentTopic.price, 'R$ 3,50');
+    assert.match(content.image.prompt, /Preço exato: R\$ 3,50/);
+    assert.match(content.caption.text, /Preço: R\$ 3,50\./);
+    assert.match(generatorCalls[0].content.image.prompt, /Preço exato: R\$ 3,50/);
+    assert.match(generatorCalls[0].content.image.prompt, /Preço “R\$ 3,50” em selo compacto/);
+    assert.doesNotMatch(generatorCalls[0].content.image.prompt, /Preço exato: 3,5\b/);
+  });
+});
+
 test('Urgency offer prompt uses only the real urgency written by the operator', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -2461,10 +2644,13 @@ test('AI final prompt is compiled into concise creative brief and limited refere
     assert.match(prompt, /TEXTOS OBRIGATÓRIOS/);
     assert.match(prompt, /DIREÇÃO VISUAL/);
     assert.match(prompt, /REFERÊNCIA PRINCIPAL/);
+    assert.match(prompt, /cores oficiais da marca têm prioridade absoluta/i);
+    assert.match(prompt, /não copiar cores, paleta ou identidade visual da referência/i);
     assert.match(prompt, /LIBERDADE CRIATIVA/);
     assert.match(prompt, /Título exato:\s*2 Pizzas Grandes/i);
     assert.match(prompt, /Preço exato:\s*R\$ 79,99/i);
     assert.match(prompt, /CTA sutil: "Peça agora"/i);
+    assert.match(prompt, /Identificação da marca: @bosspizzaria — manter exatamente este @ nos criativos/i);
     assert.doesNotMatch(prompt, /BRIEFING COMPLETO ORIGINAL/);
     assert.doesNotMatch(prompt, /Informado pelo usuário/i);
     assert.doesNotMatch(prompt, /Sugestão da IA/i);
@@ -2473,7 +2659,7 @@ test('AI final prompt is compiled into concise creative brief and limited refere
     assert.doesNotMatch(prompt, /modo de operação/i);
     assert.doesNotMatch(prompt, /Não publicar sem aprovação/i);
     assert.doesNotMatch(prompt, /Variação criativa de teste: 2026/i);
-    assert.ok(prompt.length < 4700);
+    assert.ok(prompt.length < 6500);
     assert.equal((prompt.match(/9:16 Vertical/g) || []).length <= 2, true);
     assert.equal(references.filter((reference) => reference.role === 'product_photo').length, 2);
     assert.equal(references.filter((reference) => reference.role === 'layout_model').length, 1);
@@ -2519,6 +2705,50 @@ test('Story prompt treats esfiha offer as native vertical composition with compa
     assert.match(prompt, /O produto deve ser o protagonista/i);
     assert.match(prompt, /O selo de preço não pode cobrir parte relevante/i);
     assert.match(prompt, /Não posicionar o preço no centro cobrindo o produto principal/i);
+  });
+});
+
+test('multi-product offers rotate a persisted hero focus and prioritize its matching product photo', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'rodizio-rotativo', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await saveProjectOffer('rodizio-rotativo', {
+      name: 'Rodízio da Boss', type: 'rodizio', price: '49,90',
+      items: 'pizza salgada, pizza doce, batata frita, esfiha e frango frito', active: true,
+    }, dir);
+    const dataUrl = `data:image/png;base64,${Buffer.from('produto').toString('base64')}`;
+    for (const filename of ['pizza-salgada.jpg', 'pizza-doce.jpg', 'batata-frita.jpg', 'esfiha.jpg', 'frango-frito.jpg']) {
+      await saveProjectAsset('rodizio-rotativo', { kind: 'reference', filename, dataUrl, role: 'product_photo' }, dir);
+    }
+
+    const batch = await generateContentBatch('rodizio-rotativo', {
+      days: 5, startDate: '2026-08-10', channel: 'instagram_feed',
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'rodizio-rotativo');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'rodizio-rotativo', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/rodizio.png', mimeType: 'image/png' };
+      },
+    });
+
+    const focusedProducts = calls.map((call) => {
+      const match = call.content.image.prompt.match(/O foco visual desta peça é ([^.]+)\./i);
+      assert.ok(match, 'expected a generic multi-product focus line');
+      const item = match[1].toLowerCase();
+      const firstProductPhoto = call.content.image.references.find((reference) => reference.role === 'product_photo');
+      assert.ok(firstProductPhoto, 'expected a prioritized product photo');
+      const terms = item.split(' ').filter((term) => term.length > 2);
+      assert.equal(terms.some((term) => firstProductPhoto.filename.toLowerCase().includes(term)), true);
+      return item;
+    });
+    assert.equal(new Set(focusedProducts).size, 5);
+
+    const original = batch.items[0];
+    const regenerated = await regenerateContentDay('rodizio-rotativo', original.contentId, { regenerate: 'creative' }, dir);
+    assert.equal(regenerated.contentTopic.productRotationSeed, original.contentTopic.productRotationSeed);
   });
 });
 
@@ -2849,7 +3079,7 @@ test('a marketing offer with its own linked photo shows that exact real product,
     assert.match(prompt, new RegExp(`Foto selecionada: assets/references/${expectedPhoto}`));
     assert.doesNotMatch(prompt, new RegExp(`Foto selecionada: assets/references/${unexpectedPhoto}`));
     assert.doesNotMatch(prompt, /provavelmente vende serviço, não produto físico/);
-    assert.match(prompt, new RegExp(`O produto principal é exatamente o item real da foto anexada: ${offerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(prompt, new RegExp(`O produto principal é ${offerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, baseado na foto anexada`));
   });
 });
 
@@ -3038,7 +3268,7 @@ test('Story prompt prevalidates pizza combo text quantity and ignores square lay
     const prompt = generatorCalls[0].content.image.prompt;
     const references = generatorCalls[0].content.image.references;
     assert.match(prompt, /Título exato:\s*3 Pizzas Grandes/i);
-    assert.match(prompt, /Subtítulo permitido:\s*Sabores selecionados/i);
+    assert.match(prompt, /Subtítulo\/benefícios obrigatórios:\s*Sabores selecionados/i);
     assert.match(prompt, /A composição deve comunicar visualmente um combo de 3 pizzas grandes/i);
     assert.match(prompt, /Não mostrar apenas uma pizza como item unitário/i);
     assert.match(prompt, /ESTRUTURA VERTICAL OBRIGATÓRIA/i);
@@ -3048,10 +3278,14 @@ test('Story prompt prevalidates pizza combo text quantity and ignores square lay
     assert.match(prompt, /Rodapé: chamada “Peça agora” em texto pequeno/i);
     assert.doesNotMatch(prompt, /Layout principal: assets\/references\/layout-quadrado\.jpg/i);
     assert.match(prompt, /Layout principal: assets\/references\/layout-story\.jpg/i);
+    assert.match(prompt, /Força estrutural:\s*STRICT/i);
+    assert.match(prompt, /Topo \(0-18%\)/i);
     assert.ok(references.every((reference) => reference.relativePath !== 'assets/references/layout-quadrado.jpg'));
     assert.ok(references.some((reference) => reference.relativePath === 'assets/references/layout-story.jpg'));
     assert.ok(content.creativePreflight.warnings.some((warning) => warning.includes('3 Pizza grande')));
     assert.ok(content.creativePreflight.checks.some((check) => check.includes('referência de layout quadrada')));
+    assert.equal(content.creativeSpec.product.treatment, 'creative_redraw');
+    assert.equal(content.creativeSpec.layout.strength, 'strict');
   });
 });
 
@@ -3155,7 +3389,7 @@ test('image prompt excludes unrelated offer price rules that conflict with curre
       testSeed: 'seed-preco',
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
 
-    assert.match(content.image.prompt, /Preço obrigatório: 49,99/);
+    assert.match(content.image.prompt, /Preço obrigatório: R\$ 49,99/);
     assert.doesNotMatch(content.image.prompt, /rodizio 39,90/i);
     assert.doesNotMatch(content.image.prompt, /combo 3 pizza por 99,90/i);
     assert.match(content.image.prompt, /O título deve ser grande e legível/);
@@ -3226,6 +3460,56 @@ test('creative reviewer blocks AI images with cropped text or unrelated offer pr
     ]);
     assert.equal(content.contentReview.status, 'blocked');
     assert.ok(content.contentReview.warnings.some((warning) => warning.includes('Revisor de Criativo bloqueou')));
+  });
+});
+
+test('creative reviewer blocks placeholder brand text when an official logo is attached', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'revisor-logo-placeholder',
+      name: 'Hygi Embalagem',
+      handle: '@hygi',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    await saveProjectAsset('revisor-logo-placeholder', {
+      kind: 'logo',
+      filename: 'logo.png',
+      dataUrl,
+    }, dir, new Date('2026-08-14T12:00:00.000Z'), {
+      logoColorAnalyzer: async () => ['#A8A8C0', '#D8D8F0'],
+    });
+
+    const generatorCalls = [];
+    const reviewerCalls = [];
+    const content = await simulateTestPost('revisor-logo-placeholder', {
+      channel: 'instagram_feed',
+      maxCreativeAttempts: 2,
+      imageGenerator: async ({ content: currentContent, reviewFeedback }) => {
+        generatorCalls.push({ reviewFeedback, references: currentContent.image.references });
+        return { url: `https://cdn.example.com/tentativa-${generatorCalls.length}.png`, mimeType: 'image/png' };
+      },
+      imageReviewer: async () => {
+        reviewerCalls.push(true);
+        if (reviewerCalls.length === 1) {
+          return {
+            status: 'warning',
+            summary: 'A marca aparece como placeholder “SUA MARCA”.',
+            warnings: ['A marca aparece como placeholder “SUA MARCA”; substituir pela identidade final antes da publicação, se aplicável.'],
+            errors: [],
+            checks: ['Texto legível.'],
+          };
+        }
+        return { status: 'ok', summary: 'Logo oficial aplicada.', checks: ['Logo Hygi legível.'], warnings: [], errors: [] };
+      },
+    }, dir, new Date('2026-08-14T12:30:00.000Z'));
+
+    assert.ok(generatorCalls[0].references.some((reference) => reference.role === 'brand_asset'));
+    assert.equal(generatorCalls.length, 2);
+    assert.equal(content.creativeReview.status, 'ok');
+    assert.match(generatorCalls[1].reviewFeedback, /placeholder/i);
+    assert.match(generatorCalls[1].content?.image?.prompt || generatorCalls[1].reviewFeedback, /SUA MARCA|placeholder/i);
   });
 });
 
@@ -3361,8 +3645,9 @@ test('safe test enters rescue mode after repeated Story canvas format blocks', a
     assert.equal(content.image.generationAttempts, 4);
     assert.equal(generatorCalls[3].rescueMode, true);
     assert.match(generatorCalls[3].content.image.prompt, /MODO RESGATE DE STORY/i);
-    assert.ok(generatorCalls[3].content.image.references.every((reference) => reference.role !== 'layout_model'));
+    assert.ok(generatorCalls[3].content.image.references.some((reference) => reference.role === 'layout_model'));
     assert.ok(generatorCalls[3].content.image.references.some((reference) => reference.role === 'product_photo'));
+    assert.match(generatorCalls[3].content.image.prompt, /manter o modelo de layout anexado como estrutura/i);
   });
 });
 
@@ -3703,6 +3988,143 @@ test('a plain orientation/institutional offer with no pillar and no explicit CTA
   });
 });
 
+test('a service is preserved as a sales topic without being described as a physical product', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'servico-real', name: 'Consultoria Real' }, dir);
+    const saved = await saveProjectOffer('servico-real', {
+      name: 'Consultoria financeira inicial',
+      type: 'service',
+      items: 'diagnóstico e plano de ação',
+      cta: 'Agende uma conversa',
+    }, dir);
+
+    assert.equal(saved.offer.type, 'service');
+
+    const batch = await generateContentBatch('servico-real', {
+      days: 1,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+    }, dir);
+    const topic = batch.items[0].contentTopic;
+
+    assert.equal(topic.type, 'service');
+    assert.equal(topic.label, 'Serviço');
+    assert.match(topic.objective, /explicando benefício, processo e próxima ação/i);
+    assert.match(topic.objective, /sem inventar produto físico, resultado ou garantia/i);
+    assert.equal(topic.cta, 'Agende uma conversa');
+  });
+});
+
+test('a registered sales offer keeps its CTA and full notes even when assigned to a non-sales pillar', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'oferta-pilar-prova',
+      name: 'Loja de Embalagens',
+      handle: '@embalagens',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await updateProjectBrandInput('oferta-pilar-prova', {
+      brandName: 'Loja de Embalagens',
+      segment: 'Casa de embalagem e descartáveis',
+      productsOrServices: 'Embalagens para alimentação, limpeza e delivery',
+    }, dir);
+    const { pillar } = await saveProjectPillar('oferta-pilar-prova', {
+      name: 'Prova e confiança',
+      role: 'prova',
+    }, dir);
+    const { offer } = await saveProjectOffer('oferta-pilar-prova', {
+      name: 'Pote G695',
+      type: 'offer',
+      price: 'R$ 19,90',
+      items: 'Pacote com 100 unidades',
+      notes: 'Destacar fechamento prático e uso profissional. Não inventar capacidade térmica.',
+      pillarId: pillar.id,
+      productTreatment: 'creative_redraw',
+      layoutStrength: 'strict',
+    }, dir);
+    assert.equal(offer.productTreatment, 'creative_redraw');
+    assert.equal(offer.layoutStrength, 'strict');
+
+    const calls = [];
+    const content = await simulateTestPost('oferta-pilar-prova', {
+      channel: 'instagram_story',
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/pote.png', mimeType: 'image/png', provider: 'fake' };
+      },
+    }, dir, new Date('2026-08-15T13:00:00.000Z'));
+
+    assert.match(calls[0].content.image.prompt, /CTA sutil: "Peça agora"/i);
+    assert.match(calls[0].content.image.prompt, /Destacar fechamento prático e uso profissional/i);
+    assert.match(calls[0].content.image.prompt, /Não inventar capacidade térmica/i);
+    assert.doesNotMatch(calls[0].content.image.prompt, /Visual gastronômico|arroz\/prato|ambiente real de pizzaria/i);
+    assert.equal(content.creativeSpec.offer.isSales, true);
+    assert.equal(content.creativeGenerationManifest[0].provider, 'fake');
+  });
+});
+
+test('creative reviewer does not turn a positive "sem placeholder" check into a false logo block or Story rescue', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'revisor-logo-sem-falso-positivo',
+      name: 'Marca Real',
+      handle: '@marcareal',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await saveProjectAsset('revisor-logo-sem-falso-positivo', {
+      kind: 'logo',
+      filename: 'logo.png',
+      dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+    }, dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('revisor-logo-sem-falso-positivo', {
+      channel: 'instagram_story',
+      maxCreativeAttempts: 2,
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/logo-ok.png', mimeType: 'image/png' };
+      },
+      imageReviewer: async () => ({
+        status: 'ok',
+        summary: 'Arte aprovada para Instagram Stories.',
+        checks: ['Logo real aplicada corretamente, sem placeholder.'],
+        warnings: [],
+        errors: [],
+      }),
+    }, dir, new Date('2026-08-15T12:00:00.000Z'));
+
+    assert.equal(generatorCalls.length, 1);
+    assert.equal(content.creativeReview.status, 'ok');
+    assert.deepEqual(content.creativeReview.errors, []);
+    assert.ok(!content.creativeReview.codes.includes('PLACEHOLDER_LOGO'));
+  });
+});
+
+test('creative reviewer score gates block an inconsistent ok response and persist structured repair codes', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'revisor-score-gate', name: 'Score Gate' }, dir);
+    const content = await simulateTestPost('revisor-score-gate', {
+      channel: 'instagram_feed',
+      maxCreativeAttempts: 1,
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/score.png', mimeType: 'image/png' }),
+      imageReviewer: async () => ({
+        status: 'ok',
+        summary: 'Aprovada para publicar.',
+        scores: { format: 100, facts: 70, visualQuality: 90 },
+        checks: ['Formato correto.'],
+        warnings: [],
+        errors: [],
+      }),
+    }, dir, new Date('2026-08-15T12:30:00.000Z'));
+
+    assert.equal(content.creativeReview.status, 'blocked');
+    assert.match(content.creativeReview.summary, /precisa de revisão/i);
+    assert.ok(content.creativeReview.codes.includes('MISSING_INFORMATION'));
+    assert.ok(content.creativeReview.errors.some((error) => error.includes('facts')));
+  });
+});
+
 test('schedule generation mixes registered offers with selected content goals instead of only offers', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -3801,6 +4223,57 @@ test('offer groups can be created, edited and deleted, and an offer can be assig
   });
 });
 
+test('offers from a deleted group are retained as history but never re-enter the generation pool', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'grupo-removido', name: 'Grupo Removido' }, dir);
+    const { group: antiga } = await saveProjectOfferGroup('grupo-removido', { name: 'Campanha antiga' }, dir);
+    const { group: atual } = await saveProjectOfferGroup('grupo-removido', { name: 'Produtos atuais' }, dir);
+    await saveProjectOffer('grupo-removido', { name: 'Produto antigo', groupId: antiga.id }, dir);
+    await saveProjectOffer('grupo-removido', { name: 'Produto atual', groupId: atual.id }, dir);
+
+    await deleteProjectOfferGroup('grupo-removido', antiga.id, dir);
+    const batch = await generateContentBatch('grupo-removido', {
+      days: 3,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+    }, dir);
+
+    const offerNames = batch.items.filter((item) => item.contentTopic.source === 'offer').map((item) => item.contentTopic.offerName);
+    assert.ok(offerNames.every((name) => name === 'Produto atual'));
+    assert.ok(!offerNames.includes('Produto antigo'));
+  });
+});
+
+test('a selected group keeps its own product queue while authority posts are interleaved', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'fila-por-grupo', name: 'Fila por Grupo' }, dir);
+    await updateProjectBrandInput('fila-por-grupo', { brandName: 'Fila', segment: 'loja', contentGoals: ['engagement'] }, dir);
+    const { group } = await saveProjectOfferGroup('fila-por-grupo', { name: 'Produtos para venda' }, dir);
+    await saveProjectOffer('fila-por-grupo', { name: 'Produto 1', groupId: group.id }, dir);
+    await saveProjectOffer('fila-por-grupo', { name: 'Produto 2', groupId: group.id }, dir);
+    await saveProjectOffer('fila-por-grupo', { name: 'Produto 3', groupId: group.id }, dir);
+
+    const first = await generateContentSchedulePlan('fila-por-grupo', {
+      days: 4,
+      startDate: '2026-08-03',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      groupIds: [group.id],
+    }, dir);
+    const second = await generateContentSchedulePlan('fila-por-grupo', {
+      days: 2,
+      startDate: '2026-08-07',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      groupIds: [group.id],
+    }, dir);
+
+    const generatedOffers = [...first.items, ...second.items]
+      .filter((item) => item.contentTopic.source === 'offer')
+      .map((item) => item.contentTopic.offerName);
+    assert.deepEqual(generatedOffers.slice(0, 3), ['Produto 1', 'Produto 2', 'Produto 3']);
+    assert.ok([...first.items, ...second.items].some((item) => item.contentTopic.source === 'goal'));
+  });
+});
+
 test('generating a schedule with groupIds only pulls offers from the requested group(s), leaving goal topics untouched', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'grupos-geracao', name: 'Grupos Geracao' }, dir);
@@ -3883,6 +4356,132 @@ test('offersOnly is also respected by generateContentSchedulePlan (the pillar-aw
 
     assert.equal(batch.items.length, 3);
     assert.ok(batch.items.every((item) => item.contentTopic.source === 'offer' && item.contentTopic.offerName === 'Combo Fim de Semana'));
+  });
+});
+
+test('pillar-aware planning never relabels a selected-group sale as education or positioning', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'intencao-pilares', name: 'Casa de Embalagem' }, dir);
+    await updateProjectBrandInput('intencao-pilares', {
+      brandName: 'Casa de Embalagem',
+      segment: 'Casa de embalagem',
+      productsOrServices: 'Embalagens para restaurantes e delivery',
+      contentGoals: ['sell_products', 'authority', 'relationship', 'engagement'],
+    }, dir);
+    const { group } = await saveProjectOfferGroup('intencao-pilares', { name: 'Produtos de venda' }, dir);
+    await saveProjectOffer('intencao-pilares', { name: 'Marmita com tampa', type: 'offer', groupId: group.id }, dir);
+    await saveProjectOffer('intencao-pilares', { name: 'Copo para delivery', type: 'offer', groupId: group.id }, dir);
+    await saveProjectPillar('intencao-pilares', { name: 'Ensina', role: 'ensina', weight: 1 }, dir);
+    await saveProjectPillar('intencao-pilares', { name: 'Prova', role: 'prova', weight: 1 }, dir);
+    await saveProjectPillar('intencao-pilares', { name: 'Posiciona', role: 'posiciona', weight: 1 }, dir);
+    await saveProjectPillar('intencao-pilares', { name: 'Convida', role: 'convida', weight: 1 }, dir);
+
+    const plan = await previewContentSchedulePlan('intencao-pilares', {
+      days: 12,
+      startDate: '2026-08-17',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      groupIds: [group.id],
+      offersOnly: false,
+    }, dir);
+
+    const topics = plan.dayPlans.flatMap((day) => day.regular).map((slot) => slot.topic);
+    const offers = topics.filter((topic) => topic.source === 'offer');
+    assert.ok(offers.length > 0, 'selected group should keep producing real offers');
+    assert.ok(offers.every((topic) => topic.pillar?.role === 'convida'), 'sales offers must stay in the Convida pillar');
+    assert.ok(topics.some((topic) => topic.goalKey === 'authority' && topic.pillar?.role === 'ensina'));
+    assert.ok(topics.some((topic) => topic.goalKey === 'relationship' && topic.pillar?.role === 'posiciona'));
+    assert.ok(topics.some((topic) => topic.goalKey === 'engagement' && topic.pillar?.role === 'posiciona'));
+  });
+});
+
+test('previewContentSchedulePlan summarizes regular slots and adds commemorative extras without consuming the daily quota', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'preview-agenda', name: 'Casa de Embalagem' }, dir);
+    await updateProjectBrandInput('preview-agenda', {
+      brandName: 'Casa de Embalagem',
+      segment: 'Casa de embalagem',
+      productsOrServices: 'embalagens, descartáveis e produtos de limpeza',
+      contentGoals: ['sell_products', 'authority', 'relationship'],
+    }, dir);
+    const { group: limpeza } = await saveProjectOfferGroup('preview-agenda', { name: 'Limpeza' }, dir);
+    await saveProjectOffer('preview-agenda', { name: 'Pano Microfibra 30x30', price: '3,5', groupId: limpeza.id }, dir);
+    await saveProjectOffer('preview-agenda', { name: 'Detergente para Máquina', price: '46,95', groupId: limpeza.id }, dir);
+    await saveProjectOffer('preview-agenda', { name: 'Oferta fora do grupo', price: 'R$ 99,00' }, dir);
+
+    const plan = await previewContentSchedulePlan('preview-agenda', {
+      days: 3,
+      startDate: '2026-09-14',
+      formats: [
+        { channel: 'instagram_story', postsPerDay: 3, everyDays: 1, startTime: '09:00', intervalMinutes: 240 },
+        { channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '12:00', intervalMinutes: 0 },
+      ],
+      groupIds: [limpeza.id],
+    }, dir);
+
+    assert.equal(plan.days, 3);
+    assert.equal(plan.dayPlans.length, 3);
+    assert.equal(plan.regularCount, 12);
+    assert.equal(plan.dayPlans[0].regular.length, 4);
+    assert.equal(plan.dayPlans[1].date, '2026-09-15');
+    assert.equal(plan.dayPlans[1].regular.length, 4, 'regular quota stays intact on commemorative dates');
+    assert.deepEqual(plan.dayPlans[1].extras.map((item) => item.specialDateLabel), ['Dia do Cliente', 'Dia do Cliente']);
+    assert.equal(plan.extraCount, 2);
+    assert.ok(plan.dayPlans[1].extras.every((item) => item.extra === true && item.source === 'special_date'));
+    assert.ok(plan.dayPlans.flatMap((day) => day.regular).some((item) => item.source === 'goal'), 'unchecking offersOnly keeps Raio-X/content-goal subjects mixed in');
+    assert.ok(!plan.dayPlans.flatMap((day) => day.regular).some((item) => item.offerName === 'Oferta fora do grupo'));
+    assert.match(plan.summary, /12 posts normais/);
+    assert.match(plan.summary, /2 extras/);
+  });
+});
+
+test('previewContentSchedulePlan honors offersOnly for the selected group while still listing commemorative extras outside the quota', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'preview-so-grupo', name: 'Preview Só Grupo' }, dir);
+    await updateProjectBrandInput('preview-so-grupo', { brandName: 'Preview Só Grupo', segment: 'loja', contentGoals: ['authority'] }, dir);
+    const { group } = await saveProjectOfferGroup('preview-so-grupo', { name: 'Promoções' }, dir);
+    await saveProjectOffer('preview-so-grupo', { name: 'Combo Promo', price: '29,9', groupId: group.id }, dir);
+
+    const plan = await previewContentSchedulePlan('preview-so-grupo', {
+      days: 2,
+      startDate: '2026-09-15',
+      formats: [{ channel: 'instagram_story', postsPerDay: 2, everyDays: 1, startTime: '09:00', intervalMinutes: 240 }],
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    assert.equal(plan.regularCount, 4);
+    assert.ok(plan.dayPlans.flatMap((day) => day.regular).every((item) => item.source === 'offer' && item.offerName === 'Combo Promo'));
+    assert.deepEqual(plan.dayPlans[0].extras.map((item) => item.label), ['Extra — Dia do Cliente']);
+    assert.equal(plan.dayPlans[0].extras[0].extra, true);
+    assert.equal(plan.dayPlans[0].regular.length, 2);
+  });
+});
+
+test('generateContentSchedulePlan applies operator edits from the approved preview plan to the generated card', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'plano-editado', name: 'Plano Editado' }, dir);
+    await saveProjectOffer('plano-editado', { name: 'Espeto para Churrasco', price: '6,2' }, dir);
+
+    const batch = await generateContentSchedulePlan('plano-editado', {
+      days: 1,
+      startDate: '2026-08-14',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      approvedPlan: {
+        dayPlans: [{
+          regular: [{
+            id: '2026-08-14-instagram_story-01',
+            label: 'Venda — Kit churrasco editado',
+            reason: 'Focar em comércio que vende espetinho no fim de semana.',
+          }],
+        }],
+      },
+    }, dir);
+
+    assert.equal(batch.items[0].contentTopic.planEdited, true);
+    assert.equal(batch.items[0].contentTopic.planLabel, 'Venda — Kit churrasco editado');
+    assert.match(batch.items[0].contentTopic.objective, /Kit churrasco editado/);
+    assert.match(batch.items[0].image.prompt, /Plano aprovado pelo operador: Venda — Kit churrasco editado/);
+    assert.match(batch.items[0].image.prompt, /Focar em comércio que vende espetinho/);
   });
 });
 
@@ -4818,7 +5417,7 @@ test('regenerating a card picks up a real photo attached to the offer AFTER the 
 
     const prompt = generatorCalls[0].content.image.prompt;
     assert.match(prompt, /Foto selecionada: assets\/references\/redmi-a7-pro\.jpg/);
-    assert.match(prompt, /O produto principal é exatamente o item real da foto anexada: Redmi A7 Pro 4\/64GB/);
+    assert.match(prompt, /O produto principal é Redmi A7 Pro 4\/64GB, baseado na foto anexada/);
     assert.deepEqual(generatorCalls[0].content.contentTopic.photoReferenceIds, [uploaded.metadata.id]);
   });
 });
@@ -6396,7 +6995,7 @@ test('offerObjective falls back to the original hardcoded default (unchanged wor
     // assertions elsewhere in this file, e.g. the "Criar oferta de combo
     // para 2 Pizzas Grande" test) keeps using the original per-offer wording
     // via legacyOfferObjective — this only asserts the loader's own default.
-    assert.equal(loaded.baseInstruction, 'Criar oferta de combo, com preço e CTA de delivery claros.');
+    assert.equal(loaded.baseInstruction, 'Combo/promoção: mostrar todos os itens do combo, preço/condição se cadastrados, economia percebida e CTA de pedido. Não misturar com outras ofertas nem inventar desconto.');
     assert.equal(loaded.entries.length, 0);
     assert.equal(loaded.hasOverride, false);
   });

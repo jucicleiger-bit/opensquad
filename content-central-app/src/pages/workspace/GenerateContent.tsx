@@ -6,8 +6,11 @@ import {
   generateContent,
   generateSpecialDateContent,
   listCommemorativeDates,
+  previewContentPlan,
   type CommemorativeDate,
   type GenerateFormatInput,
+  type GenerateContentInput,
+  type PlannedContentSchedule,
 } from "@/api/client";
 import { channelFullLabel, FEED_CREATIVE_CHANNELS, VERTICAL_CREATIVE_CHANNELS } from "./contentDisplay";
 import { Button } from "@/components/Button";
@@ -159,6 +162,8 @@ function GenerateMarketingContent() {
   const [contentRules, setContentRules] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [plannedSchedule, setPlannedSchedule] = useState<PlannedContentSchedule | null>(null);
+  const [plannedPayload, setPlannedPayload] = useState<GenerateContentInput | null>(null);
 
   const activeOfferCount = (project.contentStrategy?.offers || []).filter((offer) => offer.active !== false).length;
   const offerGroups = project.contentStrategy?.offerGroups || [];
@@ -296,32 +301,108 @@ function GenerateMarketingContent() {
     setFormats((current) => current.map((f) => (channels.includes(f.channel) ? { ...f, enabled: true } : f)));
   }
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
+  function buildGenerateInput(): GenerateContentInput | null {
     const enabled = formats.filter((f) => f.enabled);
     if (!enabled.length) {
       setError("Marque pelo menos um formato.");
-      return;
+      return null;
     }
+    const payloadFormats: GenerateFormatInput[] = enabled.map((f) => ({
+      channel: f.channel,
+      postsPerDay: f.postsPerDay,
+      everyDays: f.everyDays,
+      startTime: f.startTime,
+      intervalMinutes: f.intervalMinutes,
+    }));
+    return {
+      days,
+      startDate,
+      formats: payloadFormats,
+      contentRules,
+      groupIds: selectedGroupIds.size ? [...selectedGroupIds] : undefined,
+      offersOnly: selectedGroupIds.size > 0 && offersOnly,
+    };
+  }
+
+  async function createCommemorativeExtrasFromPlan(plan: PlannedContentSchedule) {
+    const byDateAndLabel = new Map<string, { date: string; label: string; channels: Set<string>; postTime?: string }>();
+    for (const day of plan.dayPlans) {
+      for (const extra of day.extras || []) {
+        const label = (extra.label || "").replace(/^Extra —\s*/, "") || extra.specialDateLabel || "Data comemorativa";
+        const key = `${extra.date}__${label}`;
+        const entry = byDateAndLabel.get(key) || { date: extra.date, label, channels: new Set<string>(), postTime: extra.scheduledTime };
+        entry.channels.add(extra.channel);
+        byDateAndLabel.set(key, entry);
+      }
+    }
+    for (const extra of byDateAndLabel.values()) {
+      await generateSpecialDateContent(project.projectId, {
+        date: extra.date,
+        label: extra.label,
+        channels: Array.from(extra.channels),
+        postTime: extra.postTime,
+      });
+    }
+  }
+
+  async function generateFromPayload(payload: GenerateContentInput, plan?: PlannedContentSchedule | null) {
+    await generateContent(project.projectId, payload);
+    if (plan?.extraCount) await createCommemorativeExtrasFromPlan(plan);
+    navigate(`/projects/${project.projectId}/calendario`);
+  }
+
+  async function handlePlanAgenda() {
+    const payload = buildGenerateInput();
+    if (!payload) return;
     setBusy(true);
     setError(null);
     try {
-      const payloadFormats: GenerateFormatInput[] = enabled.map((f) => ({
-        channel: f.channel,
-        postsPerDay: f.postsPerDay,
-        everyDays: f.everyDays,
-        startTime: f.startTime,
-        intervalMinutes: f.intervalMinutes,
-      }));
-      await generateContent(project.projectId, {
-        days,
-        startDate,
-        formats: payloadFormats,
-        contentRules,
-        groupIds: selectedGroupIds.size ? [...selectedGroupIds] : undefined,
-        offersOnly: selectedGroupIds.size > 0 && offersOnly,
-      });
-      navigate(`/projects/${project.projectId}/calendario`);
+      const { plan } = await previewContentPlan(project.projectId, payload);
+      setPlannedSchedule(plan);
+      setPlannedPayload(payload);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function updatePlannedSlot(dayIndex: number, section: "regular" | "extras", slotIndex: number, updates: { label?: string; reason?: string }) {
+    setPlannedSchedule((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        dayPlans: current.dayPlans.map((day, index) => {
+          if (index !== dayIndex) return day;
+          return {
+            ...day,
+            [section]: day[section].map((slot, itemIndex) => (itemIndex === slotIndex ? { ...slot, ...updates } : slot)),
+          };
+        }),
+      };
+    });
+  }
+
+  async function handleGenerateApprovedPlan() {
+    if (!plannedPayload || !plannedSchedule) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await generateFromPayload({ ...plannedPayload, approvedPlan: plannedSchedule }, plannedSchedule);
+    } catch (err) {
+      setError((err as Error).message);
+      setBusy(false);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const payload = buildGenerateInput();
+    if (!payload) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await generateFromPayload(payload);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -484,12 +565,78 @@ function GenerateMarketingContent() {
             </span>
           </div>
 
-          <Button type="submit" className="full-width" style={{ marginTop: 10 }} disabled={busy}>
-            {busy ? "Organizando agenda..." : "Gerar conteúdos"}
-          </Button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+            <Button type="button" className="full-width" style={{ flex: 1 }} disabled={busy} onClick={handlePlanAgenda}>
+              {busy ? "Pensando agenda..." : "Planejar agenda"}
+            </Button>
+            <Button type="submit" variant="secondary" style={{ flex: 1 }} disabled={busy}>
+              {busy ? "Organizando agenda..." : "Gerar conteúdos"}
+            </Button>
+          </div>
         </form>
         {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
       </Card>
+
+      {plannedSchedule ? (
+        <Card style={{ padding: 20, marginTop: 20 }}>
+          <h3 className="section-heading" style={{ marginTop: 0 }}>Resumo do que será postado</h3>
+          <p className="muted" style={{ marginTop: 0 }}>{plannedSchedule.summary}</p>
+          {plannedSchedule.rules?.offersOnly ? (
+            <div className="notice" style={{ marginBottom: 12 }}>
+              Gerando apenas o(s) grupo(s) selecionado(s). Datas comemorativas entram como extras por fora da contagem.
+            </div>
+          ) : null}
+          <div style={{ display: "grid", gap: 12 }}>
+            {plannedSchedule.dayPlans.map((day, dayIndex) => (
+              <div key={day.date} style={{ border: "1px solid var(--line)", borderRadius: 12, padding: 12 }}>
+                <h4 style={{ margin: "0 0 8px" }}>Dia {day.dayNumber} — {formatCommemorativeDate(day.date)}</h4>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {day.regular.map((item, itemIndex) => (
+                    <div key={item.id} style={{ display: "grid", gap: 6 }}>
+                      <strong>{item.channelLabel}{item.price ? ` — ${item.price}` : ""}</strong>
+                      <label>
+                        Assunto
+                        <input
+                          aria-label={`Editar assunto ${item.id}`}
+                          value={item.label || ""}
+                          onChange={(event) => updatePlannedSlot(dayIndex, "regular", itemIndex, { label: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        Orientação para este card
+                        <textarea
+                          aria-label={`Editar orientação ${item.id}`}
+                          value={item.reason || ""}
+                          onChange={(event) => updatePlannedSlot(dayIndex, "regular", itemIndex, { reason: event.target.value })}
+                          rows={2}
+                        />
+                      </label>
+                    </div>
+                  ))}
+                  {day.extras.map((item, itemIndex) => (
+                    <div key={item.id} className="notice" style={{ marginTop: 4 }}>
+                      <strong>{item.channelLabel}: extra</strong>
+                      <label>
+                        Data comemorativa
+                        <input
+                          aria-label={`Editar extra ${item.id}`}
+                          value={item.label || ""}
+                          onChange={(event) => updatePlannedSlot(dayIndex, "extras", itemIndex, { label: event.target.value, reason: item.reason })}
+                        />
+                      </label>
+                      <br />
+                      <span className="muted">Extra de data comemorativa — não desconta dos posts normais do dia.</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <Button type="button" className="full-width" style={{ marginTop: 12 }} disabled={busy} onClick={handleGenerateApprovedPlan}>
+            {busy ? "Gerando conteúdos..." : "Gerar conteúdos aprovados"}
+          </Button>
+        </Card>
+      ) : null}
 
       <Card style={{ padding: 20, marginTop: 20 }}>
         <h3 className="section-heading" style={{ marginTop: 0 }}>Datas comemorativas</h3>

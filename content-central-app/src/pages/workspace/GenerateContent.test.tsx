@@ -172,6 +172,75 @@ describe("GenerateContent", () => {
     expect(JSON.parse(generateCall[1].body as string).offersOnly).toBe(true);
   });
 
+  it("previews the planned agenda before generation and can generate approved regular plus commemorative extra cards", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria",
+            contentStrategy: {
+              offers: [{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }],
+              offerGroups: [{ id: "black-friday", name: "Black Friday" }],
+            },
+          }],
+          globalRules: {},
+        },
+      },
+      EMPTY_COMMEMORATIVE_DATES,
+      {
+        body: {
+          plan: {
+            summary: "4 posts normais + 1 extra de data comemorativa.",
+            regularCount: 4,
+            extraCount: 1,
+            dayPlans: [
+              {
+                dayNumber: 1,
+                date: "2026-09-15",
+                regular: [{ id: "r1", channelLabel: "Instagram Stories", label: "Venda — Rodízio", kind: "Venda", reason: "Oferta do grupo selecionado" }],
+                extras: [{ id: "e1", channel: "instagram_story", channelLabel: "Instagram Stories", specialDateLabel: "Dia do Cliente", label: "Extra — Dia do Cliente" }],
+              },
+            ],
+          },
+        },
+      },
+      { body: { batch: { items: [{ contentId: "a" }] } } },
+      { body: { batch: { items: [{ contentId: "extra" }] } } },
+      { body: { content: [] } },
+    ]);
+    renderGenerate();
+
+    await screen.findByRole("checkbox", { name: "Black Friday" });
+    await userEvent.click(screen.getByRole("checkbox", { name: "Black Friday" }));
+    await userEvent.click(screen.getByRole("button", { name: "Planejar agenda" }));
+
+    expect(await screen.findByText("Resumo do que será postado")).toBeInTheDocument();
+    expect(screen.getByText("4 posts normais + 1 extra de data comemorativa.")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Extra — Dia do Cliente")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Editar assunto r1"));
+    await userEvent.type(screen.getByLabelText("Editar assunto r1"), "Venda — Rodízio de quarta editado");
+    await userEvent.clear(screen.getByLabelText("Editar orientação r1"));
+    await userEvent.type(screen.getByLabelText("Editar orientação r1"), "Focar em família no meio da semana.");
+
+    await userEvent.click(screen.getByRole("button", { name: "Gerar conteúdos aprovados" }));
+
+    expect(await screen.findByRole("heading", { name: "Calendário" })).toBeInTheDocument();
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    const planCall = calls.find(([url]) => url === "/api/projects/boss-pizzaria/plan");
+    const generateCall = calls.find(([url]) => url === "/api/projects/boss-pizzaria/generate");
+    const extraCall = calls.find(([url]) => url === "/api/projects/boss-pizzaria/generate-special-date");
+    expect(planCall).toBeTruthy();
+    expect(JSON.parse(planCall![1].body as string).groupIds).toEqual(["black-friday"]);
+    expect(generateCall).toBeTruthy();
+    expect(JSON.parse(generateCall![1].body as string).approvedPlan.dayPlans[0].regular[0]).toMatchObject({
+      label: "Venda — Rodízio de quarta editado",
+      reason: "Focar em família no meio da semana.",
+    });
+    expect(extraCall).toBeTruthy();
+    expect(JSON.parse(extraCall![1].body as string)).toMatchObject({ label: "Dia do Cliente", channels: ["instagram_story"] });
+  }, 15_000);
+
   it("generates content through the real endpoint and navigates to the calendar", async () => {
     stubFetchSequence([
       { body: projectState([{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }]) },
