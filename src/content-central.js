@@ -5916,15 +5916,20 @@ function buildPrimaryAiImageReferences(references, options = {}) {
       : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
   const postType = deriveCreativePostType(options.topic);
   const shape = creativeShapeGroupForChannel(options.channel);
-  // A template is now mandatory, not a suggestion — an untagged legacy
-  // layout_model reference (postType/shape both '') never counts as a
-  // match, or generation would silently keep working exactly like before
-  // this change for any project holding one, defeating the whole point.
+  // A template is mandatory, not a suggestion — only a segment_structure-
+  // tagged reference (an operator-authored creative structure with
+  // postType set) counts as a match; a segment_product reference or a
+  // legacy untagged layout_model reference never does, or generation
+  // would silently keep working exactly like before this change for any
+  // project holding one, defeating the whole point. A structure's shape
+  // is optional though — left blank by the operator, it's tagged "works
+  // for both" and matches whichever shape this generation needs.
   const matchingLayouts = selected.filter((reference) => (
     reference.role === 'layout_model'
+    && reference.referenceKind === 'segment_structure'
     && (!isStory || !isSquareLikeReference(reference))
     && reference.postType === postType
-    && reference.shape === shape
+    && (!reference.shape || reference.shape === shape)
   ));
   if (!matchingLayouts.length) {
     const postTypeLabel = CREATIVE_POST_TYPE_LABELS[postType] || postType;
@@ -5936,9 +5941,17 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   // every generation (even across separate test runs) was otherwise
   // anchored to whichever one happened to be first.
   const layoutReferences = pickRotatingReferenceList(matchingLayouts, options.variationSeed, 1);
+  // Additive, not gated on a structure match existing: a registered
+  // segment product-reference photo (texture/plausibility guidance, e.g.
+  // "this is what real mozzarella pull looks like") rides along whenever
+  // present. It never blocks generation and never competes with the
+  // mandatory structure match above.
+  const segmentProductReferences = selected.filter((reference) => (
+    reference.role === 'layout_model' && reference.referenceKind === 'segment_product'
+  )).slice(0, 1);
   const visualCandidates = selected.filter((reference) => reference.role === 'visual_reference');
   const visualReferences = pickRotatingReferenceList(visualCandidates, `${options.variationSeed || ''}-visual`, layoutReferences.length ? 0 : 1);
-  return uniqueReferences([...brandAssets, ...productPhotos, ...layoutReferences, ...visualReferences]);
+  return uniqueReferences([...brandAssets, ...productPhotos, ...layoutReferences, ...segmentProductReferences, ...visualReferences]);
 }
 
 function isVerticalStoryChannel(channel) {
@@ -7210,6 +7223,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
     reference.previewUrl = `/api/learning-assets/${entry.imagePath.split('/').map(encodeURIComponent).join('/')}`;
     reference.postType = entry.postType || '';
     reference.shape = entry.shape || '';
+    reference.referenceKind = 'segment_structure';
     references.push(reference);
   }
   if (productEntry) {
@@ -7227,6 +7241,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
       });
       reference.absolutePath = absolutePath;
       reference.previewUrl = `/api/learning-assets/${productEntry.imagePath.split('/').map(encodeURIComponent).join('/')}`;
+      reference.referenceKind = 'segment_product';
       references.push(reference);
     }
   }

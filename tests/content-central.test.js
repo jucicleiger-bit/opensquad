@@ -925,6 +925,101 @@ test('buildSegmentLayoutReferences returns nothing when the project has no Setor
   });
 });
 
+test('buildSegmentLayoutReferences tags creative entries segment_structure and the product entry segment_product', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'kind-tags', name: 'Kind Tags', handle: '@kindtags', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('kind-tags', {
+      brandName: 'Kind Tags', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    const paths = getCentralPaths(dir, 'kind-tags');
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    await registerCreativeTemplate(groupKey, 'offer', 'vertical', dir, 'estrutura.png');
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'produto.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'produto' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: 'mussarela derretendo', imagePath: analyzed.imagePath, purpose: 'product' }, dir);
+
+    const project = await loadProjectForTest('kind-tags', dir);
+    const references = await buildSegmentLayoutReferences(project, paths);
+
+    const structureRef = references.find((r) => r.referenceKind === 'segment_structure');
+    const productRef = references.find((r) => r.referenceKind === 'segment_product');
+    assert.ok(structureRef, 'creative entry keeps its segment_structure tag');
+    assert.ok(productRef, 'product entry gets tagged segment_product');
+    assert.equal(structureRef.role, 'layout_model');
+    assert.equal(productRef.role, 'layout_model');
+  });
+});
+
+test('a structure with no Formato set matches generation for both vertical and feed channels', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'formato-livre', name: 'Formato Livre', handle: '@formatolivre', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('formato-livre', {
+      brandName: 'Formato Livre', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('formato-livre', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', '', dir, 'universal.png');
+
+    const story = await simulateTestPost('formato-livre', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+    assert.equal(story.imageGenerationError, null);
+
+    const feed = await simulateTestPost('formato-livre', {
+      channel: 'instagram_feed',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-21T12:00:00.000Z'));
+    assert.equal(feed.imageGenerationError, null);
+  });
+});
+
+test('a registered product reference alone never satisfies the mandatory creative-template match', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'so-produto', name: 'So Produto', handle: '@soproduto', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('so-produto', {
+      brandName: 'So Produto', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('so-produto', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'produto.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'produto' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'mussarela derretendo', imagePath: analyzed.imagePath, purpose: 'product' }, dir);
+
+    const content = await simulateTestPost('so-produto', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.match(content.imageGenerationError, /Nenhum modelo de criativo cadastrado/);
+  });
+});
+
+test('a registered product reference rides along as an additional reference when a matching structure exists', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'estrutura-mais-produto', name: 'Estrutura Mais Produto', handle: '@emp', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('estrutura-mais-produto', {
+      brandName: 'Estrutura Mais Produto', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('estrutura-mais-produto', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    await registerCreativeTemplate(groupKey, 'offer', 'vertical', dir, 'estrutura.png');
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'produto.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'produto' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: 'mussarela derretendo', imagePath: analyzed.imagePath, purpose: 'product' }, dir);
+
+    const content = await simulateTestPost('estrutura-mais-produto', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(content.imageGenerationError, null);
+    const kinds = content.image.references.map((r) => r.referenceKind).filter(Boolean);
+    assert.deepEqual(kinds.sort(), ['segment_product', 'segment_structure']);
+  });
+});
+
 test('generation blocks with a clear error when no creative template matches the topic\'s postType and shape, and simulateTestPost records it instead of leaving a half-written draft', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sem-modelo', name: 'Sem Modelo', handle: '@semmodelo', approvalEmail: 'a@example.com' }, dir);
