@@ -3826,6 +3826,7 @@ function normalizeSegmentLearningEntry(input = {}) {
     bucket: ['technical', 'approved', 'avoid'].includes(input.bucket) ? input.bucket : 'approved',
     kind,
     text: cleanText(input.text),
+    title: kind === 'image' ? String(input.title || '') : '',
     imagePath: kind === 'image' ? String(input.imagePath || '').replace(/\\/g, '/') : '',
     purpose,
     postType,
@@ -4163,6 +4164,7 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
       bucket: input.bucket,
       kind: input.kind,
       text: input.text,
+      title: input.title,
       imagePath: input.imagePath,
       purpose: input.purpose,
       postType: input.postType,
@@ -5075,6 +5077,12 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
 
   content.image.references = baseReferences;
   content.image.prompt = basePrompt;
+
+  const structureReference = baseReferences.find((reference) => reference.referenceKind === 'segment_structure');
+  content.creativeStructureUsed = structureReference
+    ? { title: structureReference.title || '', postType: structureReference.postType || '', shape: structureReference.shape || '' }
+    : null;
+  content.usedSegmentProductReference = baseReferences.some((reference) => reference.referenceKind === 'segment_product');
 
   const generatedImage = await options.imageGenerator({
     content,
@@ -7221,6 +7229,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
     });
     reference.absolutePath = absolutePath;
     reference.previewUrl = `/api/learning-assets/${entry.imagePath.split('/').map(encodeURIComponent).join('/')}`;
+    reference.title = entry.title || '';
     reference.postType = entry.postType || '';
     reference.shape = entry.shape || '';
     reference.referenceKind = 'segment_structure';

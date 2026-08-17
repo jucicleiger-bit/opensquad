@@ -1074,6 +1074,55 @@ test('generation proceeds once a matching creative template exists for the topic
   });
 });
 
+test('records which creative structure was used and whether a segment product reference rode along', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'registra-uso', name: 'Registra Uso', handle: '@registrauso', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('registra-uso', {
+      brandName: 'Registra Uso', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('registra-uso', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    const groupKey = 'group:alimenticio/category:pizzaria';
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const structure = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'estrutura.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'estrutura' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', title: 'Oferta vertical com preco', text: 'modelo', imagePath: structure.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
+
+    const productPhoto = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'produto.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'produto' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: 'mussarela derretendo', imagePath: productPhoto.imagePath, purpose: 'product' }, dir);
+
+    const content = await simulateTestPost('registra-uso', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.deepEqual(content.creativeStructureUsed, { title: 'Oferta vertical com preco', postType: 'offer', shape: 'vertical' });
+    assert.equal(content.usedSegmentProductReference, true);
+
+    const persisted = JSON.parse(await readFile(content.filePath, 'utf-8'));
+    assert.deepEqual(persisted.creativeStructureUsed, { title: 'Oferta vertical com preco', postType: 'offer', shape: 'vertical' });
+    assert.equal(persisted.usedSegmentProductReference, true);
+  });
+});
+
+test('creativeStructureUsed and usedSegmentProductReference reflect no product reference registered', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-produto', name: 'Sem Produto', handle: '@semproduto', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('sem-produto', {
+      brandName: 'Sem Produto', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('sem-produto', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'estrutura.png');
+
+    const content = await simulateTestPost('sem-produto', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.deepEqual(content.creativeStructureUsed, { title: '', postType: 'offer', shape: 'vertical' });
+    assert.equal(content.usedSegmentProductReference, false);
+  });
+});
+
 test('a corrupted/hand-edited learning store file (schemaVersion set but nodes/types missing) does not crash saveLearningEntry — it self-heals with an empty collection instead of throwing', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'store-corrompido', name: 'Store Corrompido', handle: '@sc', approvalEmail: 'a@example.com' }, dir);
