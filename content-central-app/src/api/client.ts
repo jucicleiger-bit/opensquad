@@ -354,6 +354,8 @@ export interface ContentItem {
   videoGenerationError?: string | null;
   creativeSharedWith?: string[] | null;
   creativeGroupKey?: string | null;
+  creativeStructureUsed?: { title: string; postType?: string; shape?: string } | null;
+  usedSegmentProductReference?: boolean;
 }
 
 class ApiError extends Error {}

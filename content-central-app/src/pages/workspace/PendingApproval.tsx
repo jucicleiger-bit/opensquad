@@ -250,6 +250,21 @@ export function PendingApproval() {
     );
   }
 
+  // Surfaces which segment-learning creative structure (if any) and
+  // whether a registered product-reference photo actually reached this
+  // generation — so the operator can tell at a glance whether the
+  // registered "raio-x" references were used, without digging into logs.
+  function renderCreativeReferencePills(item: ContentItem) {
+    const structure = item.creativeStructureUsed;
+    if (!structure && !item.usedSegmentProductReference) return null;
+    return (
+      <>
+        {structure ? <span className="pill">Estrutura: {structure.title || "sem nome"}</span> : null}
+        {item.usedSegmentProductReference ? <span className="pill">Referencia de produto: usada</span> : null}
+      </>
+    );
+  }
+
   function downloadFileName(item: ContentItem): string {
     const ext = item.image?.mimeType === "image/jpeg" ? "jpg" : "png";
     return `${item.contentId}.${ext}`;
@@ -355,6 +370,7 @@ export function PendingApproval() {
             </h3>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
               {renderPillarPill(leader)}
+              {renderCreativeReferencePills(leader)}
               {group.members.map((member) => (
                 <span key={member.contentId} className="pill">
                   {member.formatLabel || channelLabel(member.channel)}
@@ -459,6 +475,7 @@ export function PendingApproval() {
           <div style={{ marginTop: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span className="pill">{statusMeta(item).label}</span>
             {renderPillarPill(item)}
+            {renderCreativeReferencePills(item)}
           </div>
           <ContentPipeline item={item} />
           {item.imageGenerationError ? (

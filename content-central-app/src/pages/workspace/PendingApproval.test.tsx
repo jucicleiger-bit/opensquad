@@ -104,6 +104,37 @@ describe("PendingApproval", () => {
     expect(screen.queryByText("Bastidor & Sabor")).not.toBeInTheDocument();
   });
 
+  it("shows which creative structure was used and whether a segment product reference rode along", async () => {
+    stubFetchSequence([
+      { body: PROJECT_STATE },
+      {
+        body: {
+          content: [
+            baseItem({
+              creativeStructureUsed: { title: "Oferta vertical com preco", postType: "offer", shape: "vertical" },
+              usedSegmentProductReference: true,
+            }),
+          ],
+        },
+      },
+    ]);
+
+    renderPendingApproval();
+
+    expect(await screen.findByText("Estrutura: Oferta vertical com preco")).toBeInTheDocument();
+    expect(screen.getByText("Referencia de produto: usada")).toBeInTheDocument();
+  });
+
+  it("does not show creative-reference pills when the fields are absent", async () => {
+    stubFetchSequence([{ body: PROJECT_STATE }, { body: { content: [baseItem()] } }]);
+
+    renderPendingApproval();
+
+    await screen.findByText("Legenda aguardando aprovação");
+    expect(screen.queryByText(/^Estrutura:/)).toBeNull();
+    expect(screen.queryByText("Referencia de produto: usada")).toBeNull();
+  });
+
   it("does not show items that are already approved", async () => {
     stubFetchSequence([
       { body: PROJECT_STATE },
