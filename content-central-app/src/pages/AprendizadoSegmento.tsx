@@ -3,7 +3,7 @@ import { SEGMENT_TREE, getSegmentLearningNodes, type SegmentLearningNode } from 
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
-import { CreativeStructureGallery, LearningGallery } from "@/components/LearningGallery";
+import { CreativeStructureGallery, LearningGallery, ProductReferenceGallery } from "@/components/LearningGallery";
 
 export function AprendizadoSegmento() {
   const [group, setGroup] = useState("");
@@ -72,9 +72,20 @@ export function AprendizadoSegmento() {
           <Card style={{ padding: 16 }}>
             <h2>Estruturas de criativo</h2>
             <p className="muted" style={{ margin: "var(--space-2xs) 0 var(--space-md)" }}>
-              Cadastre aqui os modelos de layout que a IA pode seguir. Cada estrutura precisa ter nome, tipo de post e formato.
+              Cadastre aqui os modelos de layout que a IA pode seguir. Cada estrutura precisa ter nome e tipo de post.
             </p>
             <CreativeStructureGallery
+              scope="segment"
+              nodes={nodes}
+              onNodeEntriesChange={(path, entries) => setNodes((current) => (current || []).map((node) => (node.path === path ? { ...node, entries } : node)))}
+            />
+          </Card>
+          <Card style={{ padding: 16 }}>
+            <h2>Referencias de produto</h2>
+            <p className="muted" style={{ margin: "var(--space-2xs) 0 var(--space-md)" }}>
+              Fotos reais ou guias de produto (textura, montagem, combos). Ajudam a IA a entender como o produto realmente se parece — nao definem layout.
+            </p>
+            <ProductReferenceGallery
               scope="segment"
               nodes={nodes}
               onNodeEntriesChange={(path, entries) => setNodes((current) => (current || []).map((node) => (node.path === path ? { ...node, entries } : node)))}
@@ -89,6 +100,7 @@ export function AprendizadoSegmento() {
                 entries={node.entries}
                 splitImagePurposes
                 showCreativeStructures={false}
+                showProductReferences={false}
                 onEntriesChange={(entries) => setNodes((current) => (current || []).map((n) => (n.path === node.path ? { ...n, entries } : n)))}
               />
             </Card>

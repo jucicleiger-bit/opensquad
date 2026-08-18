@@ -164,4 +164,38 @@ describe("LearningGallery - creative structure references", () => {
       expect(payload.purpose).toBe("creative");
     });
   });
+
+  it("hides the product-reference section when showProductReferences is false", () => {
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+        showProductReferences={false}
+      />,
+    );
+
+    expect(screen.queryByText("Referencias de produto")).toBeNull();
+  });
+
+  it("still shows Aprovado/Evitar buckets and the general text field on a per-node card even when the product-reference section is hidden", () => {
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          { id: "t1", bucket: "approved", kind: "text", text: "nota geral", source: "manual", createdAt: "2026-01-01T00:00:00.000Z" },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+        showCreativeStructures={false}
+        showProductReferences={false}
+      />,
+    );
+
+    expect(screen.getByText("nota geral")).toBeInTheDocument();
+    expect(screen.getByLabelText("Novo aprendizado em texto")).toBeInTheDocument();
+  });
 });

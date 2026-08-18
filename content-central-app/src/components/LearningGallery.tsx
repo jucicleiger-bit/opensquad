@@ -85,6 +85,54 @@ export function CreativeStructureGallery({
         entries={selectedNode.entries}
         onEntriesChange={(entries) => onNodeEntriesChange(selectedNode.path, entries)}
         splitImagePurposes
+        showProductReferences={false}
+        onlyCreativeStructures
+      />
+    </div>
+  );
+}
+
+export function ProductReferenceGallery({
+  scope,
+  nodes,
+  onNodeEntriesChange,
+}: {
+  scope: "segment" | "offerType";
+  nodes: SegmentLearningNode[];
+  onNodeEntriesChange: (path: string, entries: SegmentLearningEntry[]) => void;
+}) {
+  const [selectedPath, setSelectedPath] = useState("");
+  const selectedNode = nodes.find((node) => node.path === selectedPath) || nodes[nodes.length - 1];
+
+  useEffect(() => {
+    if (!nodes.length) return;
+    setSelectedPath((current) => (nodes.some((node) => node.path === current) ? current : nodes[nodes.length - 1].path));
+  }, [nodes]);
+
+  if (!selectedNode) return null;
+
+  return (
+    <div className="stack-md">
+      {nodes.length > 1 ? (
+        <div>
+          <label htmlFor="product-reference-node">Salvar e editar referencias de produto em</label>
+          <select id="product-reference-node" value={selectedNode.path} onChange={(event) => setSelectedPath(event.target.value)}>
+            {nodes.map((node) => (
+              <option key={node.path} value={node.path}>{node.label}</option>
+            ))}
+          </select>
+          <p className="muted" style={{ margin: "var(--space-xs) 0 0", fontSize: "var(--text-sm)" }}>
+            Referencias salvas no Setor valem para todo o ramo; no Nicho ou Especialidade, ficam mais específicas.
+          </p>
+        </div>
+      ) : null}
+      <LearningGallery
+        scope={scope}
+        groupKey={selectedNode.path}
+        entries={selectedNode.entries}
+        onEntriesChange={(entries) => onNodeEntriesChange(selectedNode.path, entries)}
+        splitImagePurposes
+        showCreativeStructures={false}
         onlyCreativeStructures
       />
     </div>
@@ -98,6 +146,7 @@ export function LearningGallery({
   onEntriesChange,
   splitImagePurposes = false,
   showCreativeStructures = true,
+  showProductReferences = true,
   onlyCreativeStructures = false,
 }: {
   scope: "segment" | "offerType";
@@ -106,6 +155,7 @@ export function LearningGallery({
   onEntriesChange: (entries: SegmentLearningEntry[]) => void;
   splitImagePurposes?: boolean;
   showCreativeStructures?: boolean;
+  showProductReferences?: boolean;
   onlyCreativeStructures?: boolean;
 }) {
   const [newText, setNewText] = useState("");
@@ -321,30 +371,30 @@ export function LearningGallery({
         </section>
       ) : null}
 
+      {splitImagePurposes && showProductReferences ? (
+        <section className="field-card stack-sm">
+          <div>
+            <h3>Referencias de produto</h3>
+            <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
+              Fotos reais ou guias de produto. Elas ajudam o produto, nao definem layout.
+            </p>
+          </div>
+          {productReferences.map((entry) => (
+            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "48px minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "center", paddingBottom: "var(--space-xs)", borderBottom: "1px solid var(--line)" }}>
+              {entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de produto"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : <span />}
+              <span>{entry.text}</span>
+              <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
+            </div>
+          ))}
+          <div>
+            <label htmlFor={`upload-product-${groupKey}`}>Nova referencia de produto</label>
+            <input id={`upload-product-${groupKey}`} type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && handleUploadImage(event.target.files[0], "product")} />
+          </div>
+        </section>
+      ) : null}
+
       {!onlyCreativeStructures ? (
         <>
-          {splitImagePurposes ? (
-            <section className="field-card stack-sm">
-              <div>
-                <h3>Referencias de produto</h3>
-                <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
-                  Fotos reais ou guias de produto. Elas ajudam o produto, nao definem layout.
-                </p>
-              </div>
-              {productReferences.map((entry) => (
-                <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "48px minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "center", paddingBottom: "var(--space-xs)", borderBottom: "1px solid var(--line)" }}>
-                  {entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de produto"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : <span />}
-                  <span>{entry.text}</span>
-                  <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
-                </div>
-              ))}
-              <div>
-                <label htmlFor={`upload-product-${groupKey}`}>Nova referencia de produto</label>
-                <input id={`upload-product-${groupKey}`} type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && handleUploadImage(event.target.files[0], "product")} />
-              </div>
-            </section>
-          ) : null}
-
           {buckets.map(({ key, label }) => {
             const currentEntries = bucketEntries.filter((entry) => entry.bucket === key);
             if (!currentEntries.length) return null;

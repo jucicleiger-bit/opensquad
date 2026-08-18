@@ -29,7 +29,7 @@ function renderPage() {
 }
 
 describe("AprendizadoSegmento", () => {
-  it("shows one creative-structure panel and keeps product references inside each segment level", async () => {
+  it("shows one creative-structure panel and one product-reference panel, each with a Setor/Nicho scope selector", async () => {
     stubFetchSequence([
       {
         body: {
@@ -57,7 +57,9 @@ describe("AprendizadoSegmento", () => {
     expect(await screen.findByText("Esfiha tem que ser redonda")).toBeInTheDocument();
     expect(screen.getByAltText("Esfiha redonda")).toHaveAttribute("src", "/api/learning-assets/segment/group-alimenticio/esfiha.png");
     expect(screen.getAllByLabelText("Nova estrutura de criativo")).toHaveLength(1);
-    expect(screen.getAllByLabelText("Nova referencia de produto")).toHaveLength(2);
+    expect(screen.getAllByLabelText("Nova referencia de produto")).toHaveLength(1);
+    expect(screen.getByLabelText("Salvar e editar estruturas em")).toBeInTheDocument();
+    expect(screen.getByLabelText("Salvar e editar referencias de produto em")).toBeInTheDocument();
     expect(screen.queryByText("Criativo")).toBeNull();
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
     expect(decodeURIComponent(call[0])).toContain("segmentGroup=Alimentício");
