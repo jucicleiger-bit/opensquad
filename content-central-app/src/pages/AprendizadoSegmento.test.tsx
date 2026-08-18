@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +7,8 @@ import { App } from "@/App";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+
+const EMPTY_STATE = { projects: [], globalRules: {}, alerts: [] };
 
 function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
   let call = 0;
@@ -31,6 +33,7 @@ function renderPage() {
 describe("AprendizadoSegmento", () => {
   it("shows one creative-structure panel and one product-reference panel, each with a Setor/Nicho scope selector", async () => {
     stubFetchSequence([
+      { body: EMPTY_STATE },
       {
         body: {
           nodes: [
@@ -50,8 +53,8 @@ describe("AprendizadoSegmento", () => {
     ]);
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText("Setor"), { target: { value: "Alimentício" } });
-    fireEvent.change(screen.getByLabelText("Nicho"), { target: { value: "Pizzaria" } });
+    await userEvent.selectOptions(await screen.findByLabelText("Setor"), "Alimentício");
+    await userEvent.selectOptions(screen.getByLabelText("Nicho"), "Pizzaria");
     await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
 
     expect(await screen.findByText("Esfiha tem que ser redonda")).toBeInTheDocument();
@@ -65,12 +68,13 @@ describe("AprendizadoSegmento", () => {
     expect(screen.queryByText("Criativo")).toBeNull();
     expect(screen.getAllByText("Estruturas de criativo")).toHaveLength(1);
     expect(screen.getAllByText("Referencias de produto")).toHaveLength(1);
-    const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+    const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
     expect(decodeURIComponent(call[0])).toContain("segmentGroup=Alimentício");
   });
 
   it("sends purpose=creative when analyzing an uploaded creative-structure reference", async () => {
     stubFetchSequence([
+      { body: EMPTY_STATE },
       {
         body: {
           nodes: [
@@ -82,14 +86,14 @@ describe("AprendizadoSegmento", () => {
     ]);
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText("Setor"), { target: { value: "Negócios locais e lojas" } });
+    await userEvent.selectOptions(await screen.findByLabelText("Setor"), "Negócios locais e lojas");
     await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
 
     const file = new File(["fake-image"], "modelo.png", { type: "image/png" });
     await userEvent.upload(await screen.findByLabelText("Nova estrutura de criativo"), file);
     expect(await screen.findByDisplayValue("Layout vertical com preco e CTA.")).toBeInTheDocument();
 
-    const analyzeCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const analyzeCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
     expect(analyzeCall[0]).toBe("/api/segment-learnings/analyze-image");
     expect(JSON.parse(String(analyzeCall[1].body))).toMatchObject({
       scope: "segment",
@@ -99,20 +103,34 @@ describe("AprendizadoSegmento", () => {
     });
   });
 
-  it("accepts a Nicho typed free-text that isn't in the fixed segment list — matches Company.tsx's 'digite um novo nicho' combobox", async () => {
+  it("lists a Nicho registered on a real project's Raio-X (Empresa) even though it isn't in the fixed segment list", async () => {
     stubFetchSequence([
+      {
+        body: {
+          projects: [
+            {
+              projectId: "casa-de-frios-sp",
+              name: "Casa de Frios SP",
+              brandInput: { segmentGroup: "Negócios locais e lojas", segmentCategory: "Casa de Frios" },
+            },
+          ],
+          globalRules: {},
+          alerts: [],
+        },
+      },
       { body: { nodes: [{ path: "group:negocios-locais-e-lojas/category:casa-de-frios", label: "Negocios locais e lojas / Casa de Frios", level: "nicho", entries: [] }] } },
     ]);
     renderPage();
 
-    fireEvent.change(await screen.findByLabelText("Setor"), { target: { value: "Negócios locais e lojas" } });
-    fireEvent.change(screen.getByLabelText("Nicho"), { target: { value: "Casa de Frios" } });
+    await userEvent.selectOptions(await screen.findByLabelText("Setor"), "Negócios locais e lojas");
+    expect(await screen.findByRole("option", { name: "Casa de Frios" })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Nicho"), "Casa de Frios");
     await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
 
     await waitFor(() => {
-      const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+      const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
       expect(call[0]).toContain("segmentCategory=Casa+de+Frios");
     });
-    expect(await screen.findByLabelText("Nova estrutura de criativo")).toBeInTheDocument();
   });
 });

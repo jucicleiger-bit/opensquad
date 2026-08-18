@@ -1,12 +1,13 @@
-import { useState } from "react";
-import { SEGMENT_TREE, getSegmentLearningNodes, type SegmentLearningNode } from "@/api/client";
+import { useEffect, useState } from "react";
+import { SEGMENT_TREE, getSegmentLearningNodes, getState, type ProjectSummary, type SegmentLearningNode } from "@/api/client";
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { CreativeStructureGallery, LearningGallery, ProductReferenceGallery } from "@/components/LearningGallery";
 
-const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
-const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
+function nonEmpty(value: string | undefined): value is string {
+  return Boolean(value && value.trim());
+}
 
 export function AprendizadoSegmento() {
   const [group, setGroup] = useState("");
@@ -15,11 +16,27 @@ export function AprendizadoSegmento() {
   const [nodes, setNodes] = useState<SegmentLearningNode[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
 
-  // Setor/Nicho are free text (datalist just suggests) — a Nicho typed as
-  // new on the Empresa page (Company.tsx's identical combobox pattern)
-  // isn't in SEGMENT_TREE, so a strict <select> here could never show it.
-  const categoryOptions = SEGMENT_TREE.find((item) => item.group === group)?.categories || ALL_SEGMENT_CATEGORY_OPTIONS;
+  useEffect(() => {
+    getState().then((result) => setProjects(result.projects)).catch(() => {});
+  }, []);
+
+  // Setor/Nicho stay a closed <select>, but the option list is the fixed
+  // catalog PLUS whatever a real project has actually registered on the
+  // Empresa/Raio-X page (Company.tsx's segmentGroup/segmentCategory) — a
+  // Nicho typed as new there (e.g. "Casa de Frios") needs to show up here
+  // to register creative structures/product references for it.
+  const groupOptions = [...new Set([
+    ...SEGMENT_TREE.map((item) => item.group),
+    ...projects.map((project) => project.brandInput?.segmentGroup).filter(nonEmpty),
+  ])];
+  const staticCategoryOptions = SEGMENT_TREE.find((item) => item.group === group)?.categories || [];
+  const registeredCategoryOptions = projects
+    .filter((project) => project.brandInput?.segmentGroup === group)
+    .map((project) => project.brandInput?.segmentCategory)
+    .filter(nonEmpty);
+  const categoryOptions = [...new Set([...staticCategoryOptions, ...registeredCategoryOptions])];
 
   async function handleLoad() {
     setLoading(true);
@@ -44,34 +61,21 @@ export function AprendizadoSegmento() {
         <div className="row">
           <div>
             <label htmlFor="segmento-setor">Setor</label>
-            <input
-              id="segmento-setor"
-              list="segmento-setor-options"
-              placeholder="ex: Engenharia, Alimentício, Negócios locais e lojas"
-              value={group}
-              onChange={(e) => { setGroup(e.target.value); setCategory(""); }}
-            />
-            <datalist id="segmento-setor-options">
-              {SEGMENT_GROUP_OPTIONS.map((option) => (
-                <option key={option} value={option} />
+            <select id="segmento-setor" value={group} onChange={(e) => { setGroup(e.target.value); setCategory(""); }}>
+              <option value="">Selecione</option>
+              {groupOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
               ))}
-            </datalist>
+            </select>
           </div>
           <div>
             <label htmlFor="segmento-nicho">Nicho</label>
-            <input
-              id="segmento-nicho"
-              list="segmento-nicho-options"
-              placeholder="Escolha uma opção ou digite uma nova"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              disabled={!group}
-            />
-            <datalist id="segmento-nicho-options">
+            <select id="segmento-nicho" value={category} onChange={(e) => setCategory(e.target.value)} disabled={!group}>
+              <option value="">Selecione</option>
               {categoryOptions.map((option) => (
-                <option key={option} value={option} />
+                <option key={option} value={option}>{option}</option>
               ))}
-            </datalist>
+            </select>
           </div>
           <div>
             <label htmlFor="segmento-especialidade">Especialidade (opcional)</label>
