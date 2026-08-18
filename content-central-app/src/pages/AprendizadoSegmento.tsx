@@ -3,7 +3,7 @@ import { SEGMENT_TREE, getSegmentLearningNodes, type SegmentLearningNode } from 
 import { Card } from "@/components/Card";
 import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
-import { LearningGallery } from "@/components/LearningGallery";
+import { CreativeStructureGallery, LearningGallery } from "@/components/LearningGallery";
 
 export function AprendizadoSegmento() {
   const [group, setGroup] = useState("");
@@ -69,6 +69,17 @@ export function AprendizadoSegmento() {
         <EmptyState title="Nenhum nível disponível" description="Escolha pelo menos o Setor." />
       ) : (
         <div style={{ display: "grid", gap: 16 }}>
+          <Card style={{ padding: 16 }}>
+            <h2>Estruturas de criativo</h2>
+            <p className="muted" style={{ margin: "var(--space-2xs) 0 var(--space-md)" }}>
+              Cadastre aqui os modelos de layout que a IA pode seguir. Cada estrutura precisa ter nome, tipo de post e formato.
+            </p>
+            <CreativeStructureGallery
+              scope="segment"
+              nodes={nodes}
+              onNodeEntriesChange={(path, entries) => setNodes((current) => (current || []).map((node) => (node.path === path ? { ...node, entries } : node)))}
+            />
+          </Card>
           {nodes.map((node) => (
             <Card key={node.path} style={{ padding: 16 }}>
               <b>{node.label}</b>
@@ -77,6 +88,7 @@ export function AprendizadoSegmento() {
                 groupKey={node.path}
                 entries={node.entries}
                 splitImagePurposes
+                showCreativeStructures={false}
                 onEntriesChange={(entries) => setNodes((current) => (current || []).map((n) => (n.path === node.path ? { ...n, entries } : n)))}
               />
             </Card>

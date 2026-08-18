@@ -22,8 +22,8 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
   );
 }
 
-describe("LearningGallery — creative template tagging", () => {
-  it("shows postType and shape selects only for a creative-purpose pending image, and includes them in the save call", async () => {
+describe("LearningGallery - creative structure references", () => {
+  it("requires a structure name, post type and shape before saving a creative structure", async () => {
     stubFetchSequence([
       { body: { imagePath: "segment/x/modelo.png", suggestedText: "modelo" } },
       { body: { entries: [] } },
@@ -35,20 +35,24 @@ describe("LearningGallery — creative template tagging", () => {
     );
 
     const file = new File(["x"], "modelo.png", { type: "image/png" });
-    const creativeInput = screen.getByLabelText("Referência de estrutura de criativo") as HTMLInputElement;
-    await user.upload(creativeInput, file);
+    await user.upload(screen.getByLabelText("Nova estrutura de criativo"), file);
 
-    await waitFor(() => screen.getByLabelText("Tipo de post"));
+    await waitFor(() => screen.getByLabelText("Nome da estrutura"));
+    expect(screen.getByText("Salvar referencia")).toBeDisabled();
+
+    await user.type(screen.getByLabelText("Nome da estrutura"), "Oferta vertical");
     await user.selectOptions(screen.getByLabelText("Tipo de post"), "offer");
     await user.selectOptions(screen.getByLabelText("Formato"), "vertical");
-    await user.click(screen.getByText("Confirmar"));
+    await user.click(screen.getByText("Salvar referencia"));
 
     await waitFor(() => {
       const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
       expect(calls[1][0]).toBe("/api/segment-learnings/entries");
       const payload = JSON.parse(calls[1][1].body as string);
+      expect(payload.title).toBe("Oferta vertical");
       expect(payload.postType).toBe("offer");
       expect(payload.shape).toBe("vertical");
+      expect(payload.purpose).toBe("creative");
     });
   });
 
@@ -61,36 +65,13 @@ describe("LearningGallery — creative template tagging", () => {
     );
 
     const file = new File(["x"], "produto.png", { type: "image/png" });
-    const productInput = screen.getByLabelText("Referência de produto") as HTMLInputElement;
-    await user.upload(productInput, file);
+    await user.upload(screen.getByLabelText("Nova referencia de produto"), file);
 
-    await waitFor(() => screen.getByText("Confirmar"));
+    await waitFor(() => screen.getByText("Salvar referencia"));
     expect(screen.queryByLabelText("Tipo de post")).toBeNull();
   });
 
-  it("keeps Confirmar disabled for a creative-purpose pending image until both postType and shape are set", async () => {
-    stubFetchSequence([{ body: { imagePath: "segment/x/modelo.png", suggestedText: "modelo" } }]);
-    const user = userEvent.setup();
-
-    render(
-      <LearningGallery scope="segment" groupKey="group:x" entries={[]} onEntriesChange={() => {}} splitImagePurposes />,
-    );
-
-    const file = new File(["x"], "modelo.png", { type: "image/png" });
-    const creativeInput = screen.getByLabelText("Referência de estrutura de criativo") as HTMLInputElement;
-    await user.upload(creativeInput, file);
-
-    await waitFor(() => screen.getByLabelText("Tipo de post"));
-    expect(screen.getByText("Confirmar")).toBeDisabled();
-
-    await user.selectOptions(screen.getByLabelText("Tipo de post"), "offer");
-    expect(screen.getByText("Confirmar")).toBeDisabled();
-
-    await user.selectOptions(screen.getByLabelText("Formato"), "vertical");
-    expect(screen.getByText("Confirmar")).not.toBeDisabled();
-  });
-
-  it("renders postType/shape pills on an existing tagged creative entry", () => {
+  it("renders named creative structures with postType and shape pills", () => {
     render(
       <LearningGallery
         scope="segment"
@@ -100,6 +81,7 @@ describe("LearningGallery — creative template tagging", () => {
             id: "1",
             bucket: "approved",
             kind: "image",
+            title: "Oferta vertical",
             text: "modelo aprovado",
             imagePath: "segment/x/modelo.png",
             purpose: "creative",
@@ -114,7 +96,50 @@ describe("LearningGallery — creative template tagging", () => {
       />,
     );
 
+    expect(screen.getByText("Oferta vertical")).toBeInTheDocument();
     expect(screen.getByText("Oferta")).toBeInTheDocument();
     expect(screen.getByText("Vertical (Stories/Reels)")).toBeInTheDocument();
+  });
+
+  it("updates an existing creative structure instead of creating a second one", async () => {
+    stubFetchSequence([{ body: { entries: [] } }]);
+    const user = userEvent.setup();
+
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          {
+            id: "1",
+            bucket: "approved",
+            kind: "image",
+            title: "Oferta antiga",
+            text: "modelo aprovado",
+            imagePath: "segment/x/modelo.png",
+            purpose: "creative",
+            postType: "offer",
+            shape: "vertical",
+            source: "manual",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    await user.click(screen.getByText("Editar"));
+    await user.clear(screen.getByLabelText("Nome da estrutura"));
+    await user.type(screen.getByLabelText("Nome da estrutura"), "Oferta premium");
+    await user.click(screen.getByText("Salvar edição"));
+
+    await waitFor(() => {
+      const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+      const payload = JSON.parse(calls[0][1].body as string);
+      expect(payload.entryId).toBe("1");
+      expect(payload.title).toBe("Oferta premium");
+      expect(payload.purpose).toBe("creative");
+    });
   });
 });
