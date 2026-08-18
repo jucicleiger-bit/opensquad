@@ -3647,7 +3647,9 @@ test('Story prompt prevalidates pizza combo text quantity and ignores square lay
     assert.ok(references.some((reference) => reference.relativePath === storyTemplate.imagePath));
     assert.ok(content.creativePreflight.warnings.some((warning) => warning.includes('3 Pizza grande')));
     assert.ok(content.creativePreflight.checks.some((check) => check.includes('referência de layout quadrada')));
-    assert.equal(content.creativeSpec.product.treatment, 'creative_redraw');
+    assert.equal(content.creativeSpec.product.treatment, 'faithful_enhance');
+    assert.match(prompt, /Modo PRODUTO FIEL MELHORADO/i);
+    assert.match(prompt, /apoio visual nunca pode disputar atenção com o produto/i);
     assert.equal(content.creativeSpec.layout.strength, 'strict');
   });
 });

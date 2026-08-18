@@ -91,7 +91,7 @@ export interface ProjectOffer {
   groupId?: string | null;
   daysOfWeek?: string[];
   photoReferenceIds?: string[];
-  productTreatment?: "creative_redraw" | "exact_asset" | "";
+  productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
 }
 
@@ -909,7 +909,7 @@ export interface SaveOfferInput {
   daysOfWeek?: string[];
   active?: boolean;
   photoReferenceIds?: string[];
-  productTreatment?: "creative_redraw" | "exact_asset" | "";
+  productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
 }
 

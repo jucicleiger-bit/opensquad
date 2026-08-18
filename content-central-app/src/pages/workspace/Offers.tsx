@@ -37,6 +37,7 @@ const thumbStyle = {
   fontSize: 11,
 } as const;
 const thumbImgStyle = { width: "100%", height: "100%", objectFit: "cover" } as const;
+type ProductTreatment = "faithful_enhance" | "creative_redraw" | "exact_asset";
 
 const EMPTY_FORM = {
   name: "",
@@ -51,7 +52,7 @@ const EMPTY_FORM = {
   daysOfWeek: [] as string[],
   active: true,
   photoReferenceIds: [] as string[],
-  productTreatment: "creative_redraw" as "creative_redraw" | "exact_asset",
+  productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
 };
 
@@ -360,7 +361,9 @@ export function Offers() {
       daysOfWeek: offer.daysOfWeek || [],
       active: offer.active !== false,
       photoReferenceIds: offer.photoReferenceIds || [],
-      productTreatment: offer.productTreatment === "exact_asset" ? "exact_asset" : "creative_redraw",
+      productTreatment: offer.productTreatment === "exact_asset" || offer.productTreatment === "creative_redraw"
+        ? offer.productTreatment
+        : "faithful_enhance",
       layoutStrength: offer.layoutStrength === "balanced" || offer.layoutStrength === "free" ? offer.layoutStrength : "strict",
     });
     setError(null);
@@ -598,8 +601,9 @@ export function Offers() {
                   <select
                     id="offer-product-treatment"
                     value={form.productTreatment}
-                    onChange={(e) => setForm({ ...form, productTreatment: e.target.value as "creative_redraw" | "exact_asset" })}
+                    onChange={(e) => setForm({ ...form, productTreatment: e.target.value as ProductTreatment })}
                   >
+                    <option value="faithful_enhance">Produto fiel melhorado</option>
                     <option value="creative_redraw">Redesenho criativo permitido</option>
                     <option value="exact_asset">Manter foto/embalagem exata</option>
                   </select>

@@ -5227,8 +5227,9 @@ function buildBrandColorLine(project = {}) {
 function normalizeProductTreatment(value, hasProductReference = false) {
   const normalized = String(value || '').trim().toLowerCase();
   if (['exact_asset', 'exact', 'preserve_exact', 'foto_exata'].includes(normalized)) return 'exact_asset';
+  if (['faithful_enhance', 'faithful', 'enhance', 'produto_fiel', 'produto_fiel_melhorado', 'melhorar_fiel'].includes(normalized)) return 'faithful_enhance';
   if (['creative_redraw', 'redraw', 'reinterpret', 'recriar'].includes(normalized)) return 'creative_redraw';
-  return hasProductReference ? 'creative_redraw' : 'none';
+  return hasProductReference ? 'faithful_enhance' : 'none';
 }
 
 function normalizeLayoutStrength(value, hasLayoutReference = false) {
@@ -5293,6 +5294,8 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       referenceIds: productReferences.map((reference) => reference.id).filter(Boolean),
       preserve: productTreatment === 'exact_asset'
         ? ['silhueta', 'cores', 'rótulo', 'marca', 'proporções']
+        : productTreatment === 'faithful_enhance'
+          ? ['embalagem', 'cor principal', 'formato', 'quantidade', 'identidade visual']
         : productTreatment === 'creative_redraw'
           ? ['categoria', 'silhueta reconhecível', 'cores principais', 'quantidade']
           : [],
@@ -5371,6 +5374,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   const hasLinkedProductPhoto = Boolean(topic.photoReferenceIds?.length)
     && productReferences.some((reference) => topic.photoReferenceIds.includes(reference.id));
   const productFocus = detectCreativeProductFocus(topic, hasLinkedProductPhoto, creativeSpec.product.treatment);
+  const productLockedToPhoto = ['exact_asset', 'faithful_enhance'].includes(creativeSpec.product.treatment);
   const quantityRules = buildCreativeQuantityRules(topic, productFocus, exactTitle);
   const visualSummary = summarizeBrandForCreative(project);
   // Which single layout/visual reference to use is already rotated upstream
@@ -5444,9 +5448,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Utilizar as fotos reais selecionadas para esta geração.',
       creativeSpec.product.treatment === 'exact_asset'
         ? 'Modo FOTO EXATA: preservar embalagem, rótulo, marca, cores, textos e proporções; pode apenas recortar e ajustar luz/sombra para integrar ao layout.'
-        : 'Modo REDESENHO CRIATIVO: pode redesenhar, reiluminar e valorizar o produto para melhorar a peça, mas deve preservar categoria, silhueta reconhecível, cores principais e quantidade da oferta.',
+        : creativeSpec.product.treatment === 'faithful_enhance'
+          ? 'Modo PRODUTO FIEL MELHORADO: usar o produto real da foto como base obrigatória; pode recortar, limpar fundo, corrigir enquadramento, luz, sombra e contraste para deixar comercial.'
+          : 'Modo REDESENHO CRIATIVO: pode redesenhar, reiluminar e valorizar o produto para melhorar a peça, mas deve preservar categoria, silhueta reconhecível, cores principais e quantidade da oferta.',
       creativeSpec.product.treatment === 'creative_redraw'
         ? 'O redesenho não precisa reproduzir cada letra do rótulo, mas não pode transformar o item em outro produto, outra versão ou outra quantidade.'
+        : creativeSpec.product.treatment === 'faithful_enhance'
+          ? 'Não redesenhar livremente a embalagem, rótulo, formato, cor principal ou quantidade; melhorar a apresentação sem criar uma versão nova do produto.'
         : 'Não substituir por outro produto/serviço nem deformar sua identidade real.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
@@ -5470,6 +5478,12 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       buildVisualStyleLine(project),
       buildBrandColorLine(project),
       ...productFocus.visualLines,
+      productReferences.length
+        ? 'O criativo deve ter apoio visual além do produto: blocos/formas com cores da marca, sombra, textura leve, benefício curto e no máximo um detalhe contextual pequeno.'
+        : '',
+      productReferences.length
+        ? 'Esse apoio visual nunca pode disputar atenção com o produto, ocupar mais área que ele ou virar cenário grande do segmento.'
+        : '',
       ...quantityRules.visualLines,
       isFoodBusiness(project)
         ? 'Comida: atenção real ao arroz/prato — grãos soltos, textura, brilho natural; evitar simetria/brilho de IA; luz quente e natural.'
@@ -5512,7 +5526,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
     section('LIBERDADE CRIATIVA', [
-      layoutReference && creativeSpec.layout.strength === 'strict'
+      productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
+        ? 'Pode variar fundo, luz, tipografia e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
+        : productLockedToPhoto
+          ? 'Pode variar enquadramento, fundo, luz e tipografia apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.'
+        : layoutReference && creativeSpec.layout.strength === 'strict'
         ? 'Pode variar fundo, luz, tipografia e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
         : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
       variation.length
@@ -5522,6 +5540,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     section('RESTRIÇÕES FINAIS', [
       isVerticalStory ? 'Não criar composição com aparência de flyer quadrado centralizado.' : '',
       exactPrice ? 'Não posicionar o preço no centro cobrindo o produto principal.' : '',
+      productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
       ...productFocus.restrictionLines,
       ...quantityRules.restrictionLines,
       'Não inserir textos aleatórios, marcas concorrentes, telefone, endereço ou informações não fornecidas.',
@@ -5720,11 +5739,15 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
   // exact product instead of leaving the AI to invent/guess a generic one.
   if (hasLinkedProductPhoto && topic.offerName) {
     const exactAsset = productTreatment === 'exact_asset';
+    const faithfulEnhance = productTreatment === 'faithful_enhance';
     return {
       heroLine: `1. ${topic.offerName} real (foto anexada) em destaque como produto principal.`,
       assetLines: exactAsset ? [
         `O produto principal é exatamente o item real da foto anexada: ${topic.offerName}. Não trocar por outro modelo, cor ou versão.`,
         'Preservar fielmente formato, cor, textos, logotipos, botões e proporções reais do produto fotografado.',
+      ] : faithfulEnhance ? [
+        `O produto principal é o item real da foto anexada: ${topic.offerName}. Melhorar apresentação sem trocar embalagem, cor, formato, quantidade ou identidade visual.`,
+        'Pode corrigir recorte, enquadramento, limpeza de fundo, luz e sombra; não redesenhar livremente nem criar uma versão nova do produto.',
       ] : [
         `O produto principal é ${topic.offerName}, baseado na foto anexada. Pode redesenhar para melhorar a apresentação comercial.`,
         'Preservar categoria, silhueta reconhecível, cores principais e quantidade; não precisa copiar perfeitamente cada letra do rótulo.',
@@ -5732,10 +5755,13 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
       visualLines: [
         exactAsset
           ? `O foco visual desta peça é o produto real fotografado (${topic.offerName}), não uma reinterpretação genérica.`
+          : faithfulEnhance
+            ? `O foco visual desta peça é o produto real fotografado (${topic.offerName}) com apresentação mais limpa e comercial.`
           : `O foco visual desta peça é uma reinterpretação comercial melhorada e claramente reconhecível de ${topic.offerName}.`,
       ],
       restrictionLines: [
         'Não substituir o produto por outra categoria, versão incompatível ou quantidade diferente da oferta.',
+        faithfulEnhance || exactAsset ? 'Não colocar objetos, comida, cenário ou textura de fundo com mais destaque que o produto da foto.' : '',
       ],
     };
   }
@@ -6898,7 +6924,7 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     cta: String(input?.cta || '').trim(),
     autoGenerateCta: input?.autoGenerateCta === true,
     notes: String(input?.notes || '').trim(),
-    productTreatment: ['exact_asset', 'creative_redraw'].includes(String(input?.productTreatment || '').trim())
+    productTreatment: ['exact_asset', 'faithful_enhance', 'creative_redraw'].includes(String(input?.productTreatment || '').trim())
       ? String(input.productTreatment).trim()
       : '',
     layoutStrength: ['strict', 'balanced', 'free'].includes(String(input?.layoutStrength || '').trim())

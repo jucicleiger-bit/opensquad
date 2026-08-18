@@ -85,7 +85,7 @@ describe("Offers", () => {
     await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
     expect(screen.getByLabelText("Nome")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Serviço" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Tratamento do produto")).toHaveValue("creative_redraw");
+    expect(screen.getByLabelText("Tratamento do produto")).toHaveValue("faithful_enhance");
     expect(screen.getByLabelText("Obediência ao modelo")).toHaveValue("strict");
   });
 
@@ -107,7 +107,7 @@ describe("Offers", () => {
     expect(await screen.findByText("Rodízio da Boss")).toBeInTheDocument();
     const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
     const payload = JSON.parse(saveCall[1].body as string);
-    expect(payload.productTreatment).toBe("creative_redraw");
+    expect(payload.productTreatment).toBe("faithful_enhance");
     expect(payload.layoutStrength).toBe("strict");
   });
 

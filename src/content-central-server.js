@@ -3271,12 +3271,16 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     '- preço em box/moldura grande demais, simples demais, desalinhado ou cobrindo o produto principal;',
     '- se o selo de preço cobrir mais destaque que o produto, esconder parte importante do produto ou ficar dominante demais no centro;',
     '- se o produto final pertencer a outra categoria, versão incompatível ou quantidade diferente da referência/oferta;',
+    '- em produto fiel melhorado ou foto exata, se cenário, comida, objetos de fundo ou elementos do segmento tiverem mais destaque que o produto real;',
     '- se houver layout_model e a ordem de leitura, zonas ou hierarquia principais não forem obedecidas;',
     '',
     'Para Story/Reels, aprove somente se a peça parecer nativa de Story vertical: topo, centro e base usados com hierarquia clara, sem flyer quadrado centralizado.',
     'Se a marca aparecer como placeholder, não trate como alerta leve: retorne status "blocked" e inclua o erro para refazer a imagem com a logo oficial.',
     spec.product?.treatment === 'creative_redraw'
       ? 'Redesenho criativo é permitido e não deve ser bloqueado por diferenças cosméticas de rótulo; bloqueie apenas se mudar categoria, silhueta reconhecível, cores principais ou quantidade.'
+      : '',
+    spec.product?.treatment === 'faithful_enhance'
+      ? 'No modo faithful_enhance, aceite melhorias de recorte, luz, sombra e limpeza, mas bloqueie se a embalagem/produto mudar ou se o cenário virar protagonista.'
       : '',
     spec.product?.treatment === 'exact_asset'
       ? 'No modo exact_asset, compare rigorosamente embalagem, rótulo, marca, cores e proporções com a foto de produto anexada.'
