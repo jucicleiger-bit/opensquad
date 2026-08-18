@@ -777,7 +777,7 @@ test('buildSegmentLayoutReferences returns every approved creative image, newest
     const imagePaths = {};
     for (const name of ['img1', 'img2', 'img3', 'img4', 'img5']) {
       const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => `Descrição ${name}` });
-      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath }, dir, new Date());
+      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath, purpose: 'creative' }, dir, new Date());
       imagePaths[name] = analyzed.imagePath;
     }
     await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'text', text: 'não parecer gerado por IA' }, dir, new Date());
@@ -823,7 +823,7 @@ test('buildSegmentLayoutReferences returns the newest creative reference plus a 
     const groupKey = 'group:alimenticio/category:pizzaria';
     const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     const savedPaths = {};
-    for (const [name, purpose] of [['legacy', undefined], ['product-a', 'product'], ['product-b', 'product']]) {
+    for (const [name, purpose] of [['legacy', undefined], ['creative-a', 'creative'], ['product-a', 'product'], ['product-b', 'product']]) {
       const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => name });
       await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: name, imagePath: analyzed.imagePath, purpose }, dir);
       savedPaths[name] = analyzed.imagePath;
@@ -833,11 +833,11 @@ test('buildSegmentLayoutReferences returns the newest creative reference plus a 
     const first = await buildSegmentLayoutReferences(project, paths, { random: () => 0 });
     const second = await buildSegmentLayoutReferences(project, paths, { random: () => 0.999 });
 
-    assert.equal(first.length, 2);
-    assert.equal(first[0].relativePath, savedPaths.legacy, 'purpose omitted remains a creative reference');
+    assert.equal(first.length, 2, 'purpose omitted ("legacy") is excluded — only the explicitly-tagged creative entry plus one product entry come back');
+    assert.equal(first[0].relativePath, savedPaths['creative-a'], 'only an explicit purpose:"creative" entry counts as a creative reference');
     assert.match(first[0].instruction, /Modelo de composi/);
     assert.match(first[1].instruction, /produto real aprovada/);
-    assert.equal(second[0].relativePath, savedPaths.legacy);
+    assert.equal(second[0].relativePath, savedPaths['creative-a']);
     assert.notEqual(first[1].relativePath, second[1].relativePath, 'injected random selection reaches distinct approved product photos');
   });
 });
@@ -858,7 +858,7 @@ test('buildSegmentLayoutReferences skips a missing-on-disk image and still retur
     const imagePaths = {};
     for (const name of ['img1', 'img2']) {
       const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: `${name}.png` }, dir, new Date(), { learningImageAnalyzer: async () => `Descrição ${name}` });
-      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath }, dir, new Date());
+      await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: `Descrição ${name}`, imagePath: analyzed.imagePath, purpose: 'creative' }, dir, new Date());
       imagePaths[name] = analyzed.imagePath;
     }
 
@@ -2185,7 +2185,7 @@ test('generated image prompts only include layout references from the SAME segme
       brandName: 'Pizzaria Cruz', segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
     }, dir);
     const pizzaAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'pizza-layout.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Layout de pizza' });
-    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'Layout de pizza', imagePath: pizzaAnalyzed.imagePath }, dir, new Date());
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'Layout de pizza', imagePath: pizzaAnalyzed.imagePath, purpose: 'creative' }, dir, new Date());
     await saveProjectOffer('pizzaria-cruz', { name: 'Pizza Grande', type: 'offer', price: 'R$ 45' }, dir);
 
     await createCentralProject({ projectId: 'casa-embalagem', name: 'Casa de Embalagem', handle: '@casaembalagem', approvalEmail: 'b@example.com' }, dir);
@@ -2193,7 +2193,7 @@ test('generated image prompts only include layout references from the SAME segme
       brandName: 'Casa de Embalagem', segmentGroup: 'Negócios locais e lojas', segmentCategory: 'Casa de embalagem', segment: 'casa de embalagem', productsOrServices: 'embalagens',
     }, dir);
     const embalagemAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', dataUrl, filename: 'embalagem-layout.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Layout de embalagem' });
-    await saveLearningEntry({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', bucket: 'approved', kind: 'image', text: 'Layout de embalagem', imagePath: embalagemAnalyzed.imagePath }, dir, new Date());
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', bucket: 'approved', kind: 'image', text: 'Layout de embalagem', imagePath: embalagemAnalyzed.imagePath, purpose: 'creative' }, dir, new Date());
     await saveProjectOffer('casa-embalagem', { name: 'Papel Alumínio 100m', type: 'offer', price: 'R$ 62,40' }, dir);
 
     const pizzaBatch = await generateContentBatch('pizzaria-cruz', { days: 1, startDate: '2026-07-20', channel: 'instagram_story' }, dir);

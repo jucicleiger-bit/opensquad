@@ -3813,7 +3813,7 @@ const SEGMENT_LEVELS = ['setor', 'nicho', 'especialidade'];
 
 function normalizeSegmentLearningEntry(input = {}) {
   const kind = input.kind === 'image' ? 'image' : 'text';
-  const purpose = kind === 'image' ? (input.purpose === 'product' ? 'product' : 'creative') : undefined;
+  const purpose = kind === 'image' && ['product', 'creative'].includes(input.purpose) ? input.purpose : undefined;
   const isCreativeImage = kind === 'image' && purpose === 'creative';
   const postType = isCreativeImage && ['offer', 'institutional', 'special_date', 'ad_creative'].includes(input.postType)
     ? input.postType
@@ -4160,18 +4160,34 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
     const nodesKey = learningStoreNodesKey(scope);
     const groupKey = scope === 'segment' ? String(input.groupKey || '') : slugify(input.groupKey || '');
     const node = store[nodesKey][groupKey] || { label: input.groupKey, entries: [] };
-    const entry = normalizeSegmentLearningEntry({
+    const entryInput = {
       bucket: input.bucket,
       kind: input.kind,
-      text: input.text,
       title: input.title,
+      text: input.text,
       imagePath: input.imagePath,
       purpose: input.purpose,
       postType: input.postType,
       shape: input.shape,
       source: 'manual',
-    });
-    node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+    };
+    const entryId = String(input.entryId || '').trim();
+    if (entryId) {
+      node.entries = node.entries.map((existing) => (
+        existing.id === entryId
+          ? normalizeSegmentLearningEntry({
+            ...existing,
+            ...entryInput,
+            id: existing.id,
+            createdAt: existing.createdAt,
+            imagePath: input.imagePath || existing.imagePath,
+          })
+          : existing
+      ));
+    } else {
+      const entry = normalizeSegmentLearningEntry(entryInput);
+      node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+    }
     store[nodesKey] = { ...store[nodesKey], [groupKey]: node };
     store.schemaVersion = scope === 'segment' ? 2 : 1;
     await writeLearningStore(paths, scope, store);
@@ -7203,7 +7219,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
     .flatMap((node) => node.entries)
     .filter((entry) => entry.bucket === 'approved' && entry.kind === 'image' && entry.imagePath);
   const creativeEntries = imageEntries
-    .filter((entry) => entry.purpose !== 'product')
+    .filter((entry) => entry.purpose === 'creative')
     .filter((entry) => !options.postType || entry.postType === options.postType)
     .filter((entry) => !options.shape || entry.shape === options.shape)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -7224,7 +7240,9 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
       mimeType: mimeTypeFromFilename(entry.imagePath),
       role: 'layout_model',
       weight: 'medium',
-      instruction: SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
+      instruction: entry.title
+        ? `${SEGMENT_LAYOUT_REFERENCE_INSTRUCTION} Nome da estrutura: ${entry.title}.`
+        : SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
       createdAt: entry.createdAt,
     });
     reference.absolutePath = absolutePath;
