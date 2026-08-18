@@ -74,7 +74,7 @@ describe("LearningGallery - creative structure references", () => {
     expect(screen.queryByLabelText("Modelo do post")).toBeNull();
   });
 
-  it("renders named creative structures with postType and shape pills", () => {
+  it("renders a named creative structure's card as just the photo and its name — no description or pills on the card face", () => {
     render(
       <LearningGallery
         scope="segment"
@@ -100,8 +100,51 @@ describe("LearningGallery - creative structure references", () => {
     );
 
     expect(screen.getByText("Oferta vertical")).toBeInTheDocument();
-    expect(screen.getByText("Oferta direta")).toBeInTheDocument();
-    expect(screen.getByText("Vertical (Stories/Reels)")).toBeInTheDocument();
+    expect(screen.getByAltText("Oferta vertical")).toHaveAttribute("src", "/api/learning-assets/segment/x/modelo.png");
+    expect(screen.queryByText("modelo aprovado")).toBeNull();
+    expect(screen.queryByText("Oferta direta")).toBeNull();
+    expect(screen.queryByText("Vertical (Stories/Reels)")).toBeNull();
+  });
+
+  it("opens an edit popup with all fields when Editar is clicked, pre-filled from the structure", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          {
+            id: "1",
+            bucket: "approved",
+            kind: "image",
+            title: "Oferta vertical",
+            text: "modelo aprovado",
+            imagePath: "segment/x/modelo.png",
+            purpose: "creative",
+            postType: "offer",
+            shape: "vertical",
+            source: "manual",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByText("Editar"));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(screen.getByLabelText("Nome da estrutura")).toHaveValue("Oferta vertical");
+    expect(screen.getByLabelText("Modelo do post")).toHaveValue("offer");
+    expect(screen.getByLabelText("Formato")).toHaveValue("vertical");
+    expect(screen.getByLabelText("Descrição da estrutura")).toHaveValue("modelo aprovado");
+
+    await user.click(screen.getByText("Cancelar"));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("lays out multiple creative structures as a grid, not a single-column stack", () => {
@@ -260,7 +303,9 @@ describe("LearningGallery - creative structure references", () => {
     });
   });
 
-  it("shows a low-emphasis 'Vertical + Feed' pill instead of no pill when a structure's Formato is left blank", () => {
+  it("opens the edit popup with Formato left on 'Selecione' for a structure that has no shape set (applies to both)", async () => {
+    const user = userEvent.setup();
+
     render(
       <LearningGallery
         scope="segment"
@@ -273,7 +318,8 @@ describe("LearningGallery - creative structure references", () => {
       />,
     );
 
-    expect(screen.getByText("Vertical + Feed")).toBeInTheDocument();
+    await user.click(screen.getByText("Editar"));
+    expect(screen.getByLabelText("Formato")).toHaveValue("");
   });
 
   it("suppresses the section heading when showHeading is false, for a composing gallery that already renders its own outer heading", () => {

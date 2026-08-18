@@ -47,7 +47,7 @@ function previewSrc(entry: SegmentLearningEntry) {
 }
 
 function structureTitle(entry: SegmentLearningEntry) {
-  return entry.title || entry.text.split("\n")[0] || "Estrutura sem nome";
+  return entry.title || "Estrutura sem nome";
 }
 
 function emptyTemplate() {
@@ -196,6 +196,7 @@ export function LearningGallery({
   const bucketEntries = entries.filter((entry) => !isCreativeStructure(entry) && !isProductReference(entry));
   const canConfirmCreative = pendingImage?.purpose !== "creative" || (pendingStructureTitle.trim() && pendingPostType);
   const canSaveEdit = editingStructure.title.trim() && editingStructure.postType;
+  const editingEntry = creativeStructures.find((entry) => entry.id === editingStructureId) || null;
 
   async function handleAddText() {
     if (!newText.trim()) return;
@@ -333,60 +334,19 @@ export function LearningGallery({
             </div>
           ) : null}
           {creativeStructures.length ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "var(--space-sm)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "var(--space-sm)" }}>
               {creativeStructures.map((entry) => (
                 <div key={entry.id} className="field-card stack-sm">
-                  <div style={{ display: "flex", gap: "var(--space-sm)", alignItems: "start" }}>
-                    {entry.imagePath ? (
-                      <img src={previewSrc(entry)} alt={structureTitle(entry)} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 12, flex: "0 0 auto" }} />
-                    ) : (
-                      <span style={{ width: 56, height: 56, flex: "0 0 auto" }} />
-                    )}
-                    <div style={{ minWidth: 0, flex: 1 }}>
-                      <strong>{structureTitle(entry)}</strong>
-                      <div className="actions-row" style={{ marginTop: "var(--space-xs)" }}>
-                        {entry.postType ? <span className="pill">{POST_TYPE_LABELS[entry.postType]}</span> : null}
-                        <span className="pill">{entry.shape ? SHAPE_LABELS[entry.shape] : "Vertical + Feed"}</span>
-                      </div>
-                    </div>
-                  </div>
-                  {entry.text ? <p className="muted" style={{ margin: "var(--space-xs) 0 0", fontSize: "var(--text-sm)" }}>{entry.text}</p> : null}
+                  {entry.imagePath ? (
+                    <img src={previewSrc(entry)} alt={structureTitle(entry)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 10 }} />
+                  ) : (
+                    <div style={{ width: "100%", height: 160, borderRadius: 10, background: "var(--surface-2)" }} />
+                  )}
+                  <strong>{structureTitle(entry)}</strong>
                   <div className="actions-row" style={{ justifyContent: "flex-end" }}>
                     <Button variant="secondary" disabled={busy} onClick={() => beginEditStructure(entry)}>Editar</Button>
                     <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
                   </div>
-                  {editingStructureId === entry.id ? (
-                    <div className="stack-sm">
-                      <div className="row">
-                        <div>
-                          <label htmlFor={`edit-title-${entry.id}`}>Nome da estrutura</label>
-                          <input id={`edit-title-${entry.id}`} value={editingStructure.title} onChange={(event) => setEditingStructure((current) => ({ ...current, title: event.target.value }))} />
-                        </div>
-                        <div>
-                          <label htmlFor={`edit-post-type-${entry.id}`}>Modelo do post</label>
-                          <select id={`edit-post-type-${entry.id}`} value={editingStructure.postType} onChange={(event) => setEditingStructure((current) => ({ ...current, postType: event.target.value as PostType | "" }))}>
-                            <option value="">Selecione</option>
-                            {Object.entries(POST_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                          </select>
-                        </div>
-                        <div>
-                          <label htmlFor={`edit-shape-${entry.id}`}>Formato</label>
-                          <select id={`edit-shape-${entry.id}`} value={editingStructure.shape} onChange={(event) => setEditingStructure((current) => ({ ...current, shape: event.target.value as Shape | "" }))}>
-                            <option value="">Selecione</option>
-                            {Object.entries(SHAPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                          </select>
-                        </div>
-                      </div>
-                      <div>
-                        <label htmlFor={`edit-text-${entry.id}`}>Descrição da estrutura</label>
-                        <textarea id={`edit-text-${entry.id}`} value={editingStructure.text} onChange={(event) => setEditingStructure((current) => ({ ...current, text: event.target.value }))} />
-                      </div>
-                      <div className="actions-row">
-                        <Button disabled={busy || !canSaveEdit} onClick={() => handleSaveStructureEdit(entry)}>Salvar edição</Button>
-                        <Button variant="secondary" disabled={busy} onClick={() => setEditingStructureId(null)}>Cancelar</Button>
-                      </div>
-                    </div>
-                  ) : null}
                 </div>
               ))}
             </div>
@@ -493,6 +453,50 @@ export function LearningGallery({
           <div className="actions-row">
             <Button disabled={busy || !canConfirmCreative} onClick={handleConfirmImage}>Salvar referencia</Button>
             <Button variant="secondary" disabled={busy} onClick={clearPendingImage}>Descartar</Button>
+          </div>
+        </div>
+      ) : null}
+      {editingEntry ? (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setEditingStructureId(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.72)", display: "grid", placeItems: "center", zIndex: 1000, padding: "var(--space-lg)" }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            className="field-card stack-sm"
+            style={{ width: "min(92vw, 480px)", maxHeight: "90vh", overflowY: "auto" }}
+          >
+            <h3 style={{ margin: 0 }}>Editar estrutura</h3>
+            <div>
+              <label htmlFor="edit-title">Nome da estrutura</label>
+              <input id="edit-title" value={editingStructure.title} onChange={(event) => setEditingStructure((current) => ({ ...current, title: event.target.value }))} />
+            </div>
+            <div className="row">
+              <div>
+                <label htmlFor="edit-post-type">Modelo do post</label>
+                <select id="edit-post-type" value={editingStructure.postType} onChange={(event) => setEditingStructure((current) => ({ ...current, postType: event.target.value as PostType | "" }))}>
+                  <option value="">Selecione</option>
+                  {Object.entries(POST_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="edit-shape">Formato</label>
+                <select id="edit-shape" value={editingStructure.shape} onChange={(event) => setEditingStructure((current) => ({ ...current, shape: event.target.value as Shape | "" }))}>
+                  <option value="">Selecione</option>
+                  {Object.entries(SHAPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="edit-text">Descrição da estrutura</label>
+              <textarea id="edit-text" value={editingStructure.text} onChange={(event) => setEditingStructure((current) => ({ ...current, text: event.target.value }))} />
+            </div>
+            <div className="actions-row">
+              <Button disabled={busy || !canSaveEdit} onClick={() => handleSaveStructureEdit(editingEntry)}>Salvar edição</Button>
+              <Button variant="secondary" disabled={busy} onClick={() => setEditingStructureId(null)}>Cancelar</Button>
+            </div>
           </div>
         </div>
       ) : null}
