@@ -122,8 +122,8 @@ export function LearningGallery({
   const creativeStructures = entries.filter(isCreativeStructure);
   const productReferences = entries.filter(isProductReference);
   const bucketEntries = entries.filter((entry) => !isCreativeStructure(entry) && !isProductReference(entry));
-  const canConfirmCreative = pendingImage?.purpose !== "creative" || (pendingStructureTitle.trim() && pendingPostType && pendingShape);
-  const canSaveEdit = editingStructure.title.trim() && editingStructure.postType && editingStructure.shape;
+  const canConfirmCreative = pendingImage?.purpose !== "creative" || (pendingStructureTitle.trim() && pendingPostType);
+  const canSaveEdit = editingStructure.title.trim() && editingStructure.postType;
 
   async function handleAddText() {
     if (!newText.trim()) return;
@@ -172,7 +172,7 @@ export function LearningGallery({
         text: pendingImageText,
         imagePath: pendingImage.imagePath,
         purpose: pendingImage.purpose,
-        ...(pendingImage.purpose === "creative" ? { postType: pendingPostType || undefined, shape: pendingShape || undefined } : {}),
+        ...(pendingImage.purpose === "creative" ? { postType: pendingPostType || undefined, shape: pendingShape } : {}),
       });
       onEntriesChange(result.entries);
       clearPendingImage();
@@ -198,7 +198,7 @@ export function LearningGallery({
         title: editingStructure.title.trim(),
         text: editingStructure.text,
         postType: editingStructure.postType || undefined,
-        shape: editingStructure.shape || undefined,
+        shape: editingStructure.shape,
       });
       onEntriesChange(result.entries);
       setEditingStructureId(null);
@@ -258,7 +258,7 @@ export function LearningGallery({
             </p>
           </div>
           {creativeStructures.length ? (
-            <div className="stack-sm">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "var(--space-sm)" }}>
               {creativeStructures.map((entry) => (
                 <div key={entry.id} className="field-card stack-sm">
                   <div style={{ display: "grid", gridTemplateColumns: "56px minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "start" }}>

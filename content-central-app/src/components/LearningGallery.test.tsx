@@ -23,7 +23,7 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 }
 
 describe("LearningGallery - creative structure references", () => {
-  it("requires a structure name, post type and shape before saving a creative structure", async () => {
+  it("requires a structure name and post type before saving a creative structure — Formato stays optional", async () => {
     stubFetchSequence([
       { body: { imagePath: "segment/x/modelo.png", suggestedText: "modelo" } },
       { body: { entries: [] } },
@@ -41,8 +41,11 @@ describe("LearningGallery - creative structure references", () => {
     expect(screen.getByText("Salvar referencia")).toBeDisabled();
 
     await user.type(screen.getByLabelText("Nome da estrutura"), "Oferta vertical");
+    expect(screen.getByText("Salvar referencia")).toBeDisabled();
+
     await user.selectOptions(screen.getByLabelText("Tipo de post"), "offer");
-    await user.selectOptions(screen.getByLabelText("Formato"), "vertical");
+    expect(screen.getByText("Salvar referencia")).toBeEnabled();
+
     await user.click(screen.getByText("Salvar referencia"));
 
     await waitFor(() => {
@@ -51,7 +54,7 @@ describe("LearningGallery - creative structure references", () => {
       const payload = JSON.parse(calls[1][1].body as string);
       expect(payload.title).toBe("Oferta vertical");
       expect(payload.postType).toBe("offer");
-      expect(payload.shape).toBe("vertical");
+      expect(payload.shape).toBe("");
       expect(payload.purpose).toBe("creative");
     });
   });
@@ -99,6 +102,25 @@ describe("LearningGallery - creative structure references", () => {
     expect(screen.getByText("Oferta vertical")).toBeInTheDocument();
     expect(screen.getByText("Oferta")).toBeInTheDocument();
     expect(screen.getByText("Vertical (Stories/Reels)")).toBeInTheDocument();
+  });
+
+  it("lays out multiple creative structures as a grid, not a single-column stack", () => {
+    const { container } = render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          { id: "1", bucket: "approved", kind: "image", title: "Oferta vertical", text: "modelo 1", imagePath: "segment/x/a.png", purpose: "creative", postType: "offer", shape: "vertical", source: "manual", createdAt: "2026-01-01T00:00:00.000Z" },
+          { id: "2", bucket: "approved", kind: "image", title: "Institucional", text: "modelo 2", imagePath: "segment/x/b.png", purpose: "creative", postType: "institutional", shape: "feed", source: "manual", createdAt: "2026-01-02T00:00:00.000Z" },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    const grid = container.querySelector('[style*="grid-template-columns"]');
+    expect(grid).not.toBeNull();
+    expect(grid?.children).toHaveLength(2);
   });
 
   it("updates an existing creative structure instead of creating a second one", async () => {
