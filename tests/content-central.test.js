@@ -916,6 +916,7 @@ test('buildSegmentLayoutReferences filters creative images by postType and shape
     const combos = [
       ['offer-vertical', 'offer', 'vertical'],
       ['offer-feed', 'offer', 'feed'],
+      ['rodizio-vertical', 'rodizio', 'vertical'],
       ['institutional-vertical', 'institutional', 'vertical'],
     ];
     for (const [name, postType, shape] of combos) {
@@ -928,11 +929,17 @@ test('buildSegmentLayoutReferences filters creative images by postType and shape
     const offerVertical = await buildSegmentLayoutReferences(project, paths, { postType: 'offer', shape: 'vertical' });
     assert.deepEqual(offerVertical.map((r) => r.relativePath), [savedPaths['offer-vertical']]);
 
+    const rodizioVertical = await buildSegmentLayoutReferences(project, paths, { postType: 'rodizio', fallbackPostType: 'offer', shape: 'vertical' });
+    assert.deepEqual(rodizioVertical.map((r) => r.relativePath), [savedPaths['rodizio-vertical']]);
+
+    const serviceFallback = await buildSegmentLayoutReferences(project, paths, { postType: 'service', fallbackPostType: 'offer', shape: 'vertical' });
+    assert.deepEqual(serviceFallback.map((r) => r.relativePath), [savedPaths['offer-vertical']]);
+
     const specialDate = await buildSegmentLayoutReferences(project, paths, { postType: 'special_date', shape: 'vertical' });
     assert.deepEqual(specialDate, []);
 
     const allUnfiltered = await buildSegmentLayoutReferences(project, paths);
-    assert.equal(allUnfiltered.length, 3, 'no filter passed → every creative entry comes back, matching existing callers that never asked for a filter');
+    assert.equal(allUnfiltered.length, 4, 'no filter passed → every creative entry comes back, matching existing callers that never asked for a filter');
 
     // A blank-shape structure means "works for both" (mirrors the relaxed
     // match in buildPrimaryAiImageReferences) — it must not be dropped by
@@ -1112,11 +1119,13 @@ test('generation proceeds once a matching creative template exists for the topic
     await updateProjectBrandInput('com-modelo', {
       brandName: 'Com Modelo', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
     }, dir);
-    await saveProjectOffer('com-modelo', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    await saveProjectOffer('com-modelo', { name: 'Rodizio da Casa', type: 'rodizio', price: 'R$ 49,90' }, dir);
 
     const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
-    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'modelo-oferta.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
-    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'modelo', imagePath: analyzed.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
+    const offerAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'modelo-oferta.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo oferta' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'modelo oferta', imagePath: offerAnalyzed.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
+    const rodizioAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'modelo-rodizio.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo rodizio' });
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'modelo rodizio', imagePath: rodizioAnalyzed.imagePath, purpose: 'creative', postType: 'rodizio', shape: 'vertical' }, dir);
 
     const generatorCalls = [];
     await simulateTestPost('com-modelo', {
@@ -1125,7 +1134,8 @@ test('generation proceeds once a matching creative template exists for the topic
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
 
     assert.equal(generatorCalls.length, 1);
-    assert.match(generatorCalls[0].content.image.prompt, /modelo-oferta\.png/);
+    assert.match(generatorCalls[0].content.image.prompt, /modelo-rodizio\.png/);
+    assert.doesNotMatch(generatorCalls[0].content.image.prompt, /modelo-oferta\.png/);
   });
 });
 

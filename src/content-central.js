@@ -1269,7 +1269,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
       image: {
         localPath: imageLocalPath,
         prompt: buildImagePrompt(project, globalRules.rules, contentRules, dayNumber, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-        references: await buildImageReferencePayload(project, paths),
+        references: await buildImageReferencePayload(project, paths, { channel, topic: contentTopic }),
         aspectRatio,
         dimensions,
         generated: true,
@@ -1532,7 +1532,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
       image: {
         localPath: imageLocalPath,
         prompt: buildImagePrompt(project, globalRules.rules, [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-        references: await buildImageReferencePayload(project, paths),
+        references: await buildImageReferencePayload(project, paths, { channel, topic: contentTopic }),
         aspectRatio,
         dimensions,
         generated: true,
@@ -1730,7 +1730,7 @@ export async function buildSegmentTemplateContentItem(piece, project, paths) {
     image: {
       localPath: imageLocalPath,
       prompt: `Adaptação de template de segmento (${piece.label}) a partir de uma peça já aprovada — ver templateEditBasePath.`,
-      references: await buildImageReferencePayload(project, paths),
+      references: await buildImageReferencePayload(project, paths, { channel, topic: contentTopic }),
       aspectRatio,
       dimensions,
       generated: true,
@@ -1969,7 +1969,7 @@ export async function generateAdCreative(projectId, options = {}, targetDir = pr
     image: {
       localPath: imageLocalPath,
       prompt: buildImagePrompt(project, [], [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-      references: await buildImageReferencePayload(project, paths),
+      references: await buildImageReferencePayload(project, paths, { channel, topic: contentTopic }),
       aspectRatio,
       dimensions,
       generated: true,
@@ -2039,7 +2039,7 @@ export async function regenerateAdCreative(projectId, adCreativeId, targetDir = 
     if (!safeId) throw new Error('ID do criativo inválido.');
     const filePath = join(paths.adCreativesDir, `${safeId}.json`);
     const adCreative = await readJson(filePath);
-    adCreative.image.references = await buildImageReferencePayload(project, paths);
+    adCreative.image.references = await buildImageReferencePayload(project, paths, { channel: adCreative.channel, topic: adCreative.contentTopic });
     return adCreative;
   });
 }
@@ -2431,7 +2431,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           image: {
             localPath: imageLocalPath,
             prompt: buildImagePrompt(project, globalRules.rules, [...itemContentRules, ruleLabel], dayNumber, { channel: format.channel, formatLabel: format.label, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
-            references: await buildImageReferencePayload(project, paths),
+            references: await buildImageReferencePayload(project, paths, { channel: format.channel, topic: contentTopic }),
             aspectRatio,
             dimensions,
             generated: true,
@@ -2999,7 +2999,7 @@ async function applyContentRegeneration(content, project, projectId, options, pa
         };
       }
     }
-    if (paths) content.image.references = await buildImageReferencePayload(project, paths);
+    if (paths) content.image.references = await buildImageReferencePayload(project, paths, { channel: content.channel, topic: content.contentTopic });
     if (project.projectType === 'catalog') {
       // Catalog cards never go through AI art, including on regenerate —
       // "regenerating" just recomposes the same real photo again (useful
@@ -3815,7 +3815,8 @@ function normalizeSegmentLearningEntry(input = {}) {
   const kind = input.kind === 'image' ? 'image' : 'text';
   const purpose = kind === 'image' && ['product', 'creative'].includes(input.purpose) ? input.purpose : undefined;
   const isCreativeImage = kind === 'image' && purpose === 'creative';
-  const postType = isCreativeImage && ['offer', 'institutional', 'special_date', 'ad_creative'].includes(input.postType)
+  const supportedPostTypes = new Set([...OFFER_TYPES, 'special_date', 'ad_creative']);
+  const postType = isCreativeImage && supportedPostTypes.has(input.postType)
     ? input.postType
     : '';
   const shape = isCreativeImage && ['vertical', 'feed'].includes(input.shape)
@@ -5870,15 +5871,24 @@ function deriveCreativePostType(topic = {}) {
   if (topic.source === 'goal') return 'institutional';
   if (topic.source === 'special_date' && !topic.offerId) return 'special_date';
   if (topic.source === 'ad_creative' && !topic.offerId) return 'ad_creative';
-  return 'offer';
+  return OFFER_TYPES.has(topic.type) ? topic.type : 'offer';
 }
 
 // Mirrors the option labels in content-central-app/src/components/LearningGallery.tsx's
 // postType/shape selects, so the "no template" error below speaks the same
 // vocabulary the operator tags templates with, not raw enum values.
 const CREATIVE_POST_TYPE_LABELS = {
-  offer: 'Oferta',
+  offer: 'Oferta direta',
+  service: 'Serviço',
+  combo: 'Combo / promoção',
+  rodizio: 'Rodízio',
+  delivery: 'Delivery',
+  product: 'Produto destaque',
+  orientation: 'Post de orientação',
+  desire: 'Post de desejo',
+  urgency: 'Urgência / hoje tem',
   institutional: 'Institucional',
+  social_proof: 'Prova social',
   special_date: 'Data comemorativa',
   ad_creative: 'Anúncio pago',
 };
@@ -5956,13 +5966,23 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   // project holding one, defeating the whole point. A structure's shape
   // is optional though — left blank by the operator, it's tagged "works
   // for both" and matches whichever shape this generation needs.
-  const matchingLayouts = selected.filter((reference) => (
+  const exactLayouts = selected.filter((reference) => (
     reference.role === 'layout_model'
     && reference.referenceKind === 'segment_structure'
     && (!isStory || !isSquareLikeReference(reference))
     && reference.postType === postType
     && (!reference.shape || reference.shape === shape)
   ));
+  const fallbackLayouts = postType === 'offer'
+    ? []
+    : selected.filter((reference) => (
+      reference.role === 'layout_model'
+      && reference.referenceKind === 'segment_structure'
+      && (!isStory || !isSquareLikeReference(reference))
+      && reference.postType === 'offer'
+      && (!reference.shape || reference.shape === shape)
+    ));
+  const matchingLayouts = exactLayouts.length ? exactLayouts : fallbackLayouts;
   if (!matchingLayouts.length) {
     const postTypeLabel = CREATIVE_POST_TYPE_LABELS[postType] || postType;
     const shapeLabel = shape ? (CREATIVE_SHAPE_LABELS[shape] || shape) : 'formato desconhecido';
@@ -7226,11 +7246,17 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
   const imageEntries = nodes
     .flatMap((node) => node.entries)
     .filter((entry) => entry.bucket === 'approved' && entry.kind === 'image' && entry.imagePath);
-  const creativeEntries = imageEntries
+  const creativeCandidates = imageEntries
     .filter((entry) => entry.purpose === 'creative')
-    .filter((entry) => !options.postType || entry.postType === options.postType)
     .filter((entry) => !options.shape || !entry.shape || entry.shape === options.shape)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  const exactCreativeEntries = options.postType
+    ? creativeCandidates.filter((entry) => entry.postType === options.postType)
+    : creativeCandidates;
+  const fallbackCreativeEntries = options.postType && options.fallbackPostType && !exactCreativeEntries.length
+    ? creativeCandidates.filter((entry) => entry.postType === options.fallbackPostType)
+    : [];
+  const creativeEntries = exactCreativeEntries.length ? exactCreativeEntries : fallbackCreativeEntries;
   const productEntries = imageEntries.filter((entry) => entry.purpose === 'product');
   const random = typeof options.random === 'function' ? options.random : Math.random;
   const productEntry = productEntries.length
@@ -7283,7 +7309,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
   return references;
 }
 
-async function buildImageReferencePayload(project, paths) {
+async function buildImageReferencePayload(project, paths, options = {}) {
   const logoReference = getProjectLogoReference(project, paths);
   const references = uniqueReferences([
     logoReference,
@@ -7299,7 +7325,12 @@ async function buildImageReferencePayload(project, paths) {
       ...reference,
       absolutePath: join(paths.projectDir, reference.relativePath),
     }));
-  const layoutReferences = await buildSegmentLayoutReferences(project, paths);
+  const postType = deriveCreativePostType(options.topic);
+  const layoutReferences = await buildSegmentLayoutReferences(project, paths, {
+    postType,
+    fallbackPostType: postType === 'offer' ? undefined : 'offer',
+    shape: creativeShapeGroupForChannel(options.channel),
+  });
   return [...projectReferences, ...layoutReferences];
 }
 

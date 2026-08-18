@@ -187,7 +187,7 @@ export interface SegmentLearningEntry {
   text: string;
   imagePath?: string;
   purpose?: "product" | "creative";
-  postType?: "offer" | "institutional" | "special_date" | "ad_creative";
+  postType?: "offer" | "service" | "combo" | "rodizio" | "delivery" | "product" | "orientation" | "desire" | "urgency" | "institutional" | "social_proof" | "special_date" | "ad_creative";
   shape?: "vertical" | "feed";
   // The project the image was actually uploaded to — segment/offer-type
   // learning stores are global (shared across projects), but the file
@@ -831,7 +831,7 @@ export function analyzeLearningImage(
 }
 
 export function saveLearningEntry(
-  input: { scope: "segment" | "offerType"; groupKey: string; entryId?: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; title?: string; text: string; imagePath?: string; purpose?: "product" | "creative"; postType?: "offer" | "institutional" | "special_date" | "ad_creative"; shape?: "vertical" | "feed" | "" },
+  input: { scope: "segment" | "offerType"; groupKey: string; entryId?: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; title?: string; text: string; imagePath?: string; purpose?: "product" | "creative"; postType?: "offer" | "service" | "combo" | "rodizio" | "delivery" | "product" | "orientation" | "desire" | "urgency" | "institutional" | "social_proof" | "special_date" | "ad_creative"; shape?: "vertical" | "feed" | "" },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
   return api(`/api/segment-learnings/entries`, {
     method: "POST",

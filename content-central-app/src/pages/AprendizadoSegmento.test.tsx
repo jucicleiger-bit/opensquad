@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +34,6 @@ describe("AprendizadoSegmento", () => {
       {
         body: {
           nodes: [
-            { path: "group:alimenticio", label: "Alimenticio", level: "setor", entries: [] },
             {
               path: "group:alimenticio/category:pizzaria",
               label: "Alimenticio / Pizzaria",
@@ -44,6 +43,7 @@ describe("AprendizadoSegmento", () => {
                 { id: "e2", bucket: "approved", kind: "image", imagePath: "segment/group-alimenticio/esfiha.png", text: "Esfiha redonda", source: "manual", createdAt: "2026-08-01" },
               ],
             },
+            { path: "group:alimenticio", label: "Alimenticio", level: "setor", entries: [] },
           ],
         },
       },
@@ -60,6 +60,8 @@ describe("AprendizadoSegmento", () => {
     expect(screen.getAllByLabelText("Nova referencia de produto")).toHaveLength(1);
     expect(screen.getByLabelText("Salvar e editar estruturas em")).toBeInTheDocument();
     expect(screen.getByLabelText("Salvar e editar referencias de produto em")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByLabelText("Salvar e editar estruturas em")).toHaveValue("group:alimenticio/category:pizzaria"));
+    expect(screen.getByLabelText("Salvar e editar referencias de produto em")).toHaveValue("group:alimenticio/category:pizzaria");
     expect(screen.queryByText("Criativo")).toBeNull();
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
     expect(decodeURIComponent(call[0])).toContain("segmentGroup=Alimentício");

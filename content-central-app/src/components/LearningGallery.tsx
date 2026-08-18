@@ -14,8 +14,17 @@ type PostType = NonNullable<SegmentLearningEntry["postType"]>;
 type Shape = NonNullable<SegmentLearningEntry["shape"]>;
 
 const POST_TYPE_LABELS: Record<PostType, string> = {
-  offer: "Oferta",
+  offer: "Oferta direta",
+  service: "Servico",
+  combo: "Combo / promocao",
+  rodizio: "Rodizio",
+  delivery: "Delivery",
+  product: "Produto destaque",
+  orientation: "Post de orientacao",
+  desire: "Post de desejo",
+  urgency: "Urgencia / hoje tem",
   institutional: "Institucional",
+  social_proof: "Prova social",
   special_date: "Data comemorativa",
   ad_creative: "Anuncio pago",
 };
@@ -45,6 +54,13 @@ function emptyTemplate() {
   return { title: "", text: "", postType: "" as PostType | "", shape: "" as Shape | "" };
 }
 
+function preferredSegmentNode(nodes: SegmentLearningNode[]) {
+  return nodes.find((node) => node.level === "especialidade")
+    || nodes.find((node) => node.level === "nicho")
+    || nodes.find((node) => node.level === "setor")
+    || nodes[nodes.length - 1];
+}
+
 export function CreativeStructureGallery({
   scope,
   nodes,
@@ -55,11 +71,12 @@ export function CreativeStructureGallery({
   onNodeEntriesChange: (path: string, entries: SegmentLearningEntry[]) => void;
 }) {
   const [selectedPath, setSelectedPath] = useState("");
-  const selectedNode = nodes.find((node) => node.path === selectedPath) || nodes[nodes.length - 1];
+  const defaultNode = preferredSegmentNode(nodes);
+  const selectedNode = nodes.find((node) => node.path === selectedPath) || defaultNode;
 
   useEffect(() => {
     if (!nodes.length) return;
-    setSelectedPath((current) => (nodes.some((node) => node.path === current) ? current : nodes[nodes.length - 1].path));
+    setSelectedPath((current) => (nodes.some((node) => node.path === current) ? current : preferredSegmentNode(nodes)?.path || ""));
   }, [nodes]);
 
   if (!selectedNode) return null;
@@ -102,11 +119,12 @@ export function ProductReferenceGallery({
   onNodeEntriesChange: (path: string, entries: SegmentLearningEntry[]) => void;
 }) {
   const [selectedPath, setSelectedPath] = useState("");
-  const selectedNode = nodes.find((node) => node.path === selectedPath) || nodes[nodes.length - 1];
+  const defaultNode = preferredSegmentNode(nodes);
+  const selectedNode = nodes.find((node) => node.path === selectedPath) || defaultNode;
 
   useEffect(() => {
     if (!nodes.length) return;
-    setSelectedPath((current) => (nodes.some((node) => node.path === current) ? current : nodes[nodes.length - 1].path));
+    setSelectedPath((current) => (nodes.some((node) => node.path === current) ? current : preferredSegmentNode(nodes)?.path || ""));
   }, [nodes]);
 
   if (!selectedNode) return null;
@@ -334,7 +352,7 @@ export function LearningGallery({
                           <input id={`edit-title-${entry.id}`} value={editingStructure.title} onChange={(event) => setEditingStructure((current) => ({ ...current, title: event.target.value }))} />
                         </div>
                         <div>
-                          <label htmlFor={`edit-post-type-${entry.id}`}>Tipo de post</label>
+                          <label htmlFor={`edit-post-type-${entry.id}`}>Modelo do post</label>
                           <select id={`edit-post-type-${entry.id}`} value={editingStructure.postType} onChange={(event) => setEditingStructure((current) => ({ ...current, postType: event.target.value as PostType | "" }))}>
                             <option value="">Selecione</option>
                             {Object.entries(POST_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
@@ -440,7 +458,7 @@ export function LearningGallery({
                 <input id={`pending-title-${groupKey}`} value={pendingStructureTitle} onChange={(event) => setPendingStructureTitle(event.target.value)} placeholder="Ex: Oferta vertical com preco na base" />
               </div>
               <div>
-                <label htmlFor={`pending-post-type-${groupKey}`}>Tipo de post</label>
+                <label htmlFor={`pending-post-type-${groupKey}`}>Modelo do post</label>
                 <select id={`pending-post-type-${groupKey}`} value={pendingPostType} onChange={(event) => setPendingPostType(event.target.value as PostType | "")}>
                   <option value="">Selecione</option>
                   {Object.entries(POST_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}

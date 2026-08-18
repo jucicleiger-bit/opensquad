@@ -43,7 +43,7 @@ describe("LearningGallery - creative structure references", () => {
     await user.type(screen.getByLabelText("Nome da estrutura"), "Oferta vertical");
     expect(screen.getByText("Salvar referencia")).toBeDisabled();
 
-    await user.selectOptions(screen.getByLabelText("Tipo de post"), "offer");
+    await user.selectOptions(screen.getByLabelText("Modelo do post"), "rodizio");
     expect(screen.getByText("Salvar referencia")).toBeEnabled();
 
     await user.click(screen.getByText("Salvar referencia"));
@@ -53,7 +53,7 @@ describe("LearningGallery - creative structure references", () => {
       expect(calls[1][0]).toBe("/api/segment-learnings/entries");
       const payload = JSON.parse(calls[1][1].body as string);
       expect(payload.title).toBe("Oferta vertical");
-      expect(payload.postType).toBe("offer");
+      expect(payload.postType).toBe("rodizio");
       expect(payload.shape).toBe("");
       expect(payload.purpose).toBe("creative");
     });
@@ -71,7 +71,7 @@ describe("LearningGallery - creative structure references", () => {
     await user.upload(screen.getByLabelText("Nova referencia de produto"), file);
 
     await waitFor(() => screen.getByText("Salvar referencia"));
-    expect(screen.queryByLabelText("Tipo de post")).toBeNull();
+    expect(screen.queryByLabelText("Modelo do post")).toBeNull();
   });
 
   it("renders named creative structures with postType and shape pills", () => {
@@ -100,7 +100,7 @@ describe("LearningGallery - creative structure references", () => {
     );
 
     expect(screen.getByText("Oferta vertical")).toBeInTheDocument();
-    expect(screen.getByText("Oferta")).toBeInTheDocument();
+    expect(screen.getByText("Oferta direta")).toBeInTheDocument();
     expect(screen.getByText("Vertical (Stories/Reels)")).toBeInTheDocument();
   });
 
