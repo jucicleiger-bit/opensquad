@@ -212,6 +212,86 @@ describe("LearningGallery - creative structure references", () => {
     expect(screen.queryByText("Referencias de produto")).toBeNull();
   });
 
+  it("asks for confirmation before deleting a creative structure, and does nothing when the operator cancels", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const onEntriesChange = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          { id: "1", bucket: "approved", kind: "image", title: "Oferta vertical", text: "modelo", imagePath: "segment/x/a.png", purpose: "creative", postType: "offer", shape: "vertical", source: "manual", createdAt: "2026-01-01T00:00:00.000Z" },
+        ]}
+        onEntriesChange={onEntriesChange}
+        splitImagePurposes
+      />,
+    );
+
+    await user.click(screen.getByText("Apagar"));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(onEntriesChange).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("deletes a creative structure once the operator confirms", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    stubFetchSequence([{ body: { entries: [] } }]);
+    const user = userEvent.setup();
+
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          { id: "1", bucket: "approved", kind: "image", title: "Oferta vertical", text: "modelo", imagePath: "segment/x/a.png", purpose: "creative", postType: "offer", shape: "vertical", source: "manual", createdAt: "2026-01-01T00:00:00.000Z" },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    await user.click(screen.getByText("Apagar"));
+
+    await waitFor(() => {
+      expect((fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0][0]).toBe("/api/segment-learnings/entries-delete");
+    });
+  });
+
+  it("shows a low-emphasis 'Vertical + Feed' pill instead of no pill when a structure's Formato is left blank", () => {
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          { id: "1", bucket: "approved", kind: "image", title: "Serve pros dois", text: "modelo", imagePath: "segment/x/a.png", purpose: "creative", postType: "offer", shape: undefined, source: "manual", createdAt: "2026-01-01T00:00:00.000Z" },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    expect(screen.getByText("Vertical + Feed")).toBeInTheDocument();
+  });
+
+  it("suppresses the section heading when showHeading is false, for a composing gallery that already renders its own outer heading", () => {
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+        showHeading={false}
+      />,
+    );
+
+    expect(screen.queryByText("Estruturas de criativo")).toBeNull();
+    expect(screen.queryByText("Referencias de produto")).toBeNull();
+  });
+
   it("still shows Aprovado/Evitar buckets and the general text field on a per-node card even when the product-reference section is hidden", () => {
     render(
       <LearningGallery

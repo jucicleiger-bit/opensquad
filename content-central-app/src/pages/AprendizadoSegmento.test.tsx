@@ -63,6 +63,8 @@ describe("AprendizadoSegmento", () => {
     await waitFor(() => expect(screen.getByLabelText("Salvar e editar estruturas em")).toHaveValue("group:alimenticio/category:pizzaria"));
     expect(screen.getByLabelText("Salvar e editar referencias de produto em")).toHaveValue("group:alimenticio/category:pizzaria");
     expect(screen.queryByText("Criativo")).toBeNull();
+    expect(screen.getAllByText("Estruturas de criativo")).toHaveLength(1);
+    expect(screen.getAllByText("Referencias de produto")).toHaveLength(1);
     const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
     expect(decodeURIComponent(call[0])).toContain("segmentGroup=Alimentício");
   });

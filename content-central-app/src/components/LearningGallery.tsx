@@ -103,6 +103,7 @@ export function CreativeStructureGallery({
         onEntriesChange={(entries) => onNodeEntriesChange(selectedNode.path, entries)}
         splitImagePurposes
         showProductReferences={false}
+        showHeading={false}
         onlyCreativeStructures
       />
     </div>
@@ -151,6 +152,7 @@ export function ProductReferenceGallery({
         onEntriesChange={(entries) => onNodeEntriesChange(selectedNode.path, entries)}
         splitImagePurposes
         showCreativeStructures={false}
+        showHeading={false}
         onlyCreativeStructures
       />
     </div>
@@ -165,6 +167,7 @@ export function LearningGallery({
   splitImagePurposes = false,
   showCreativeStructures = true,
   showProductReferences = true,
+  showHeading = true,
   onlyCreativeStructures = false,
 }: {
   scope: "segment" | "offerType";
@@ -174,6 +177,7 @@ export function LearningGallery({
   splitImagePurposes?: boolean;
   showCreativeStructures?: boolean;
   showProductReferences?: boolean;
+  showHeading?: boolean;
   onlyCreativeStructures?: boolean;
 }) {
   const [newText, setNewText] = useState("");
@@ -279,6 +283,7 @@ export function LearningGallery({
   }
 
   async function handleDelete(entryId: string) {
+    if (!confirm("Apagar esta referência? Essa ação não pode ser desfeita.")) return;
     setBusy(true);
     setError(null);
     try {
@@ -319,30 +324,36 @@ export function LearningGallery({
     <div className="stack-md">
       {splitImagePurposes && showCreativeStructures ? (
         <section className="field-card stack-sm">
-          <div>
-            <h3>Estruturas de criativo</h3>
-            <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
-              Somente estas referencias entram como modelo de layout na geração. Imagens comuns em Aprovado nao entram mais como estrutura.
-            </p>
-          </div>
+          {showHeading ? (
+            <div>
+              <h3>Estruturas de criativo</h3>
+              <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
+                Somente estas referencias entram como modelo de layout na geração. Imagens comuns em Aprovado nao entram mais como estrutura.
+              </p>
+            </div>
+          ) : null}
           {creativeStructures.length ? (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "var(--space-sm)" }}>
               {creativeStructures.map((entry) => (
                 <div key={entry.id} className="field-card stack-sm">
-                  <div style={{ display: "grid", gridTemplateColumns: "56px minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "start" }}>
-                    {entry.imagePath ? <img src={previewSrc(entry)} alt={structureTitle(entry)} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 12 }} /> : <span />}
-                    <div>
+                  <div style={{ display: "flex", gap: "var(--space-sm)", alignItems: "start" }}>
+                    {entry.imagePath ? (
+                      <img src={previewSrc(entry)} alt={structureTitle(entry)} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 12, flex: "0 0 auto" }} />
+                    ) : (
+                      <span style={{ width: 56, height: 56, flex: "0 0 auto" }} />
+                    )}
+                    <div style={{ minWidth: 0, flex: 1 }}>
                       <strong>{structureTitle(entry)}</strong>
                       <div className="actions-row" style={{ marginTop: "var(--space-xs)" }}>
                         {entry.postType ? <span className="pill">{POST_TYPE_LABELS[entry.postType]}</span> : null}
-                        {entry.shape ? <span className="pill">{SHAPE_LABELS[entry.shape]}</span> : null}
+                        <span className="pill">{entry.shape ? SHAPE_LABELS[entry.shape] : "Vertical + Feed"}</span>
                       </div>
-                      {entry.text ? <p className="muted" style={{ margin: "var(--space-xs) 0 0", fontSize: "var(--text-sm)" }}>{entry.text}</p> : null}
                     </div>
-                    <div className="actions-row">
-                      <Button variant="secondary" disabled={busy} onClick={() => beginEditStructure(entry)}>Editar</Button>
-                      <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
-                    </div>
+                  </div>
+                  {entry.text ? <p className="muted" style={{ margin: "var(--space-xs) 0 0", fontSize: "var(--text-sm)" }}>{entry.text}</p> : null}
+                  <div className="actions-row" style={{ justifyContent: "flex-end" }}>
+                    <Button variant="secondary" disabled={busy} onClick={() => beginEditStructure(entry)}>Editar</Button>
+                    <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
                   </div>
                   {editingStructureId === entry.id ? (
                     <div className="stack-sm">
@@ -391,12 +402,14 @@ export function LearningGallery({
 
       {splitImagePurposes && showProductReferences ? (
         <section className="field-card stack-sm">
-          <div>
-            <h3>Referencias de produto</h3>
-            <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
-              Fotos reais ou guias de produto. Elas ajudam o produto, nao definem layout.
-            </p>
-          </div>
+          {showHeading ? (
+            <div>
+              <h3>Referencias de produto</h3>
+              <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
+                Fotos reais ou guias de produto. Elas ajudam o produto, nao definem layout.
+              </p>
+            </div>
+          ) : null}
           {productReferences.map((entry) => (
             <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "48px minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "center", paddingBottom: "var(--space-xs)", borderBottom: "1px solid var(--line)" }}>
               {entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de produto"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : <span />}
@@ -420,7 +433,7 @@ export function LearningGallery({
               <section key={key} className="stack-sm">
                 <h3>{label}</h3>
                 {currentEntries.map((entry) => (
-                  <div key={entry.id} style={{ display: "grid", gridTemplateColumns: entry.kind === "image" ? "48px minmax(0, 1fr) auto" : "minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "center", padding: "var(--space-xs) 0", borderBottom: "1px solid var(--line)" }}>
+                  <div key={entry.id} style={{ display: "grid", gridTemplateColumns: entry.kind === "image" ? "48px minmax(0, 1fr) auto" : "minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "start", padding: "var(--space-xs) 0", borderBottom: "1px solid var(--line)" }}>
                     {entry.kind === "image" && entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de aprendizado"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : null}
                     <span>{entry.text}</span>
                     <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
