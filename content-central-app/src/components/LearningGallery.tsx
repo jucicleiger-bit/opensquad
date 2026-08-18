@@ -343,6 +343,10 @@ export function LearningGallery({
                     <div style={{ width: "100%", height: 160, borderRadius: 10, background: "var(--surface-2)" }} />
                   )}
                   <strong>{structureTitle(entry)}</strong>
+                  <div className="actions-row">
+                    {entry.postType ? <span className="pill">{POST_TYPE_LABELS[entry.postType]}</span> : null}
+                    <span className="pill">{entry.shape ? SHAPE_LABELS[entry.shape] : "Vertical + Feed"}</span>
+                  </div>
                   <div className="actions-row" style={{ justifyContent: "flex-end" }}>
                     <Button variant="secondary" disabled={busy} onClick={() => beginEditStructure(entry)}>Editar</Button>
                     <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
@@ -465,8 +469,17 @@ export function LearningGallery({
         >
           <div
             onClick={(event) => event.stopPropagation()}
-            className="field-card stack-sm"
-            style={{ width: "min(92vw, 480px)", maxHeight: "90vh", overflowY: "auto" }}
+            className="stack-sm"
+            style={{
+              width: "min(92vw, 480px)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              background: "var(--panel-2)",
+              border: "1px solid var(--line)",
+              borderRadius: "var(--radius-lg)",
+              boxShadow: "var(--shadow-card)",
+              padding: "var(--space-md)",
+            }}
           >
             <h3 style={{ margin: 0 }}>Editar estrutura</h3>
             <div>

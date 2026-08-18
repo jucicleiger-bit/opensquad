@@ -74,7 +74,7 @@ describe("LearningGallery - creative structure references", () => {
     expect(screen.queryByLabelText("Modelo do post")).toBeNull();
   });
 
-  it("renders a named creative structure's card as just the photo and its name — no description or pills on the card face", () => {
+  it("renders a named creative structure's card with photo, name, and postType/shape pills — no description on the card face", () => {
     render(
       <LearningGallery
         scope="segment"
@@ -101,9 +101,25 @@ describe("LearningGallery - creative structure references", () => {
 
     expect(screen.getByText("Oferta vertical")).toBeInTheDocument();
     expect(screen.getByAltText("Oferta vertical")).toHaveAttribute("src", "/api/learning-assets/segment/x/modelo.png");
+    expect(screen.getByText("Oferta direta")).toBeInTheDocument();
+    expect(screen.getByText("Vertical (Stories/Reels)")).toBeInTheDocument();
     expect(screen.queryByText("modelo aprovado")).toBeNull();
-    expect(screen.queryByText("Oferta direta")).toBeNull();
-    expect(screen.queryByText("Vertical (Stories/Reels)")).toBeNull();
+  });
+
+  it("shows a 'Vertical + Feed' pill on the card face instead of no pill when a structure's Formato is left blank", () => {
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          { id: "1", bucket: "approved", kind: "image", title: "Serve pros dois", text: "modelo", imagePath: "segment/x/a.png", purpose: "creative", postType: "offer", shape: undefined, source: "manual", createdAt: "2026-01-01T00:00:00.000Z" },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    expect(screen.getByText("Vertical + Feed")).toBeInTheDocument();
   });
 
   it("opens an edit popup with all fields when Editar is clicked, pre-filled from the structure", async () => {
