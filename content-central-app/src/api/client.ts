@@ -831,7 +831,7 @@ export function analyzeLearningImage(
 }
 
 export function saveLearningEntry(
-  input: { scope: "segment" | "offerType"; groupKey: string; entryId?: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; title?: string; text: string; imagePath?: string; purpose?: "product" | "creative"; postType?: "offer" | "institutional" | "special_date" | "ad_creative"; shape?: "vertical" | "feed" },
+  input: { scope: "segment" | "offerType"; groupKey: string; entryId?: string; bucket: "technical" | "approved" | "avoid"; kind: "text" | "image"; title?: string; text: string; imagePath?: string; purpose?: "product" | "creative"; postType?: "offer" | "institutional" | "special_date" | "ad_creative"; shape?: "vertical" | "feed" | "" },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
   return api(`/api/segment-learnings/entries`, {
     method: "POST",
