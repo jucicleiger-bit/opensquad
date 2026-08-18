@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,8 +50,8 @@ describe("AprendizadoSegmento", () => {
     ]);
     renderPage();
 
-    await userEvent.selectOptions(await screen.findByLabelText("Setor"), "Alimentício");
-    await userEvent.selectOptions(screen.getByLabelText("Nicho"), "Pizzaria");
+    fireEvent.change(await screen.findByLabelText("Setor"), { target: { value: "Alimentício" } });
+    fireEvent.change(screen.getByLabelText("Nicho"), { target: { value: "Pizzaria" } });
     await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
 
     expect(await screen.findByText("Esfiha tem que ser redonda")).toBeInTheDocument();
@@ -82,7 +82,7 @@ describe("AprendizadoSegmento", () => {
     ]);
     renderPage();
 
-    await userEvent.selectOptions(await screen.findByLabelText("Setor"), "Negócios locais e lojas");
+    fireEvent.change(await screen.findByLabelText("Setor"), { target: { value: "Negócios locais e lojas" } });
     await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
 
     const file = new File(["fake-image"], "modelo.png", { type: "image/png" });
@@ -97,5 +97,22 @@ describe("AprendizadoSegmento", () => {
       filename: "modelo.png",
       purpose: "creative",
     });
+  });
+
+  it("accepts a Nicho typed free-text that isn't in the fixed segment list — matches Company.tsx's 'digite um novo nicho' combobox", async () => {
+    stubFetchSequence([
+      { body: { nodes: [{ path: "group:negocios-locais-e-lojas/category:casa-de-frios", label: "Negocios locais e lojas / Casa de Frios", level: "nicho", entries: [] }] } },
+    ]);
+    renderPage();
+
+    fireEvent.change(await screen.findByLabelText("Setor"), { target: { value: "Negócios locais e lojas" } });
+    fireEvent.change(screen.getByLabelText("Nicho"), { target: { value: "Casa de Frios" } });
+    await userEvent.click(screen.getByRole("button", { name: "Ver aprendizado" }));
+
+    await waitFor(() => {
+      const call = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[0];
+      expect(call[0]).toContain("segmentCategory=Casa+de+Frios");
+    });
+    expect(await screen.findByLabelText("Nova estrutura de criativo")).toBeInTheDocument();
   });
 });

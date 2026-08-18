@@ -5,6 +5,9 @@ import { Button } from "@/components/Button";
 import { EmptyState } from "@/components/EmptyState";
 import { CreativeStructureGallery, LearningGallery, ProductReferenceGallery } from "@/components/LearningGallery";
 
+const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
+const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
+
 export function AprendizadoSegmento() {
   const [group, setGroup] = useState("");
   const [category, setCategory] = useState("");
@@ -13,7 +16,10 @@ export function AprendizadoSegmento() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const categoryOptions = SEGMENT_TREE.find((item) => item.group === group)?.categories || [];
+  // Setor/Nicho are free text (datalist just suggests) — a Nicho typed as
+  // new on the Empresa page (Company.tsx's identical combobox pattern)
+  // isn't in SEGMENT_TREE, so a strict <select> here could never show it.
+  const categoryOptions = SEGMENT_TREE.find((item) => item.group === group)?.categories || ALL_SEGMENT_CATEGORY_OPTIONS;
 
   async function handleLoad() {
     setLoading(true);
@@ -38,21 +44,34 @@ export function AprendizadoSegmento() {
         <div className="row">
           <div>
             <label htmlFor="segmento-setor">Setor</label>
-            <select id="segmento-setor" value={group} onChange={(e) => { setGroup(e.target.value); setCategory(""); }}>
-              <option value="">Selecione</option>
-              {SEGMENT_TREE.map((item) => (
-                <option key={item.group} value={item.group}>{item.group}</option>
+            <input
+              id="segmento-setor"
+              list="segmento-setor-options"
+              placeholder="ex: Engenharia, Alimentício, Negócios locais e lojas"
+              value={group}
+              onChange={(e) => { setGroup(e.target.value); setCategory(""); }}
+            />
+            <datalist id="segmento-setor-options">
+              {SEGMENT_GROUP_OPTIONS.map((option) => (
+                <option key={option} value={option} />
               ))}
-            </select>
+            </datalist>
           </div>
           <div>
             <label htmlFor="segmento-nicho">Nicho</label>
-            <select id="segmento-nicho" value={category} onChange={(e) => setCategory(e.target.value)} disabled={!group}>
-              <option value="">Selecione</option>
+            <input
+              id="segmento-nicho"
+              list="segmento-nicho-options"
+              placeholder="Escolha uma opção ou digite uma nova"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              disabled={!group}
+            />
+            <datalist id="segmento-nicho-options">
               {categoryOptions.map((option) => (
-                <option key={option} value={option}>{option}</option>
+                <option key={option} value={option} />
               ))}
-            </select>
+            </datalist>
           </div>
           <div>
             <label htmlFor="segmento-especialidade">Especialidade (opcional)</label>
