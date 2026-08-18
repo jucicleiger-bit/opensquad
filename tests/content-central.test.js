@@ -2250,7 +2250,7 @@ test('generated image prompts only include layout references from the SAME segme
       brandName: 'Pizzaria Cruz', segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
     }, dir);
     const pizzaAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', dataUrl, filename: 'pizza-layout.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Layout de pizza' });
-    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'Layout de pizza', imagePath: pizzaAnalyzed.imagePath, purpose: 'creative' }, dir, new Date());
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:alimenticio/category:pizzaria', bucket: 'approved', kind: 'image', text: 'Layout de pizza', imagePath: pizzaAnalyzed.imagePath, purpose: 'creative', postType: 'offer' }, dir, new Date());
     await saveProjectOffer('pizzaria-cruz', { name: 'Pizza Grande', type: 'offer', price: 'R$ 45' }, dir);
 
     await createCentralProject({ projectId: 'casa-embalagem', name: 'Casa de Embalagem', handle: '@casaembalagem', approvalEmail: 'b@example.com' }, dir);
@@ -2258,7 +2258,7 @@ test('generated image prompts only include layout references from the SAME segme
       brandName: 'Casa de Embalagem', segmentGroup: 'Negócios locais e lojas', segmentCategory: 'Casa de embalagem', segment: 'casa de embalagem', productsOrServices: 'embalagens',
     }, dir);
     const embalagemAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', dataUrl, filename: 'embalagem-layout.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Layout de embalagem' });
-    await saveLearningEntry({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', bucket: 'approved', kind: 'image', text: 'Layout de embalagem', imagePath: embalagemAnalyzed.imagePath, purpose: 'creative' }, dir, new Date());
+    await saveLearningEntry({ scope: 'segment', groupKey: 'group:negocios-locais-e-lojas/category:casa-de-embalagem', bucket: 'approved', kind: 'image', text: 'Layout de embalagem', imagePath: embalagemAnalyzed.imagePath, purpose: 'creative', postType: 'offer' }, dir, new Date());
     await saveProjectOffer('casa-embalagem', { name: 'Papel Alumínio 100m', type: 'offer', price: 'R$ 62,40' }, dir);
 
     const pizzaBatch = await generateContentBatch('pizzaria-cruz', { days: 1, startDate: '2026-07-20', channel: 'instagram_story' }, dir);
@@ -3454,7 +3454,7 @@ test('a marketing offer with its own linked photo shows that exact real product,
     assert.match(prompt, new RegExp(`Foto selecionada: assets/references/${expectedPhoto}`));
     assert.doesNotMatch(prompt, new RegExp(`Foto selecionada: assets/references/${unexpectedPhoto}`));
     assert.doesNotMatch(prompt, /provavelmente vende serviço, não produto físico/);
-    assert.match(prompt, new RegExp(`O produto principal é ${offerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}, baseado na foto anexada`));
+    assert.match(prompt, new RegExp(`O produto principal é o item real da foto anexada: ${offerName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   });
 });
 
@@ -5441,7 +5441,7 @@ test('regenerating a card picks up a real photo attached to the offer AFTER the 
 
     const prompt = generatorCalls[0].content.image.prompt;
     assert.match(prompt, /Foto selecionada: assets\/references\/redmi-a7-pro\.jpg/);
-    assert.match(prompt, /O produto principal é Redmi A7 Pro 4\/64GB, baseado na foto anexada/);
+    assert.match(prompt, /O produto principal é o item real da foto anexada: Redmi A7 Pro 4\/64GB/);
     assert.deepEqual(generatorCalls[0].content.contentTopic.photoReferenceIds, [uploaded.metadata.id]);
   });
 });
