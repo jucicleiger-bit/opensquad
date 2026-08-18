@@ -761,6 +761,27 @@ test('saveLearningEntry tags a creative-purpose image entry with postType and sh
   });
 });
 
+test('saveLearningEntry throws instead of silently no-op succeeding when entryId matches no existing entry', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'edit-mismatch', name: 'Edit Mismatch', handle: '@editmismatch', approvalEmail: 'a@example.com' }, dir);
+    const groupKey = 'group:alimenticio/category:pizzaria';
+
+    await saveLearningEntry({
+      scope: 'segment', groupKey, bucket: 'approved', kind: 'image',
+      text: 'modelo de oferta', imagePath: 'segment/x/oferta.png',
+      purpose: 'creative', postType: 'offer', shape: 'vertical',
+    }, dir);
+
+    await assert.rejects(
+      saveLearningEntry({
+        scope: 'segment', groupKey, entryId: 'no-such-entry', bucket: 'approved', kind: 'image',
+        title: 'Nome novo', text: 'texto novo', purpose: 'creative', postType: 'offer', shape: 'vertical',
+      }, dir),
+      /Entrada não encontrada para edição\./,
+    );
+  });
+});
+
 test('buildSegmentLayoutReferences returns every approved creative image, newest first, skips avoid/text entries', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);
@@ -912,6 +933,40 @@ test('buildSegmentLayoutReferences filters creative images by postType and shape
 
     const allUnfiltered = await buildSegmentLayoutReferences(project, paths);
     assert.equal(allUnfiltered.length, 3, 'no filter passed → every creative entry comes back, matching existing callers that never asked for a filter');
+
+    // A blank-shape structure means "works for both" (mirrors the relaxed
+    // match in buildPrimaryAiImageReferences) — it must not be dropped by
+    // this filter just because a specific shape was requested.
+    const blankShapeAnalyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'offer-blank-shape.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'offer-blank-shape' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', text: 'offer-blank-shape', imagePath: blankShapeAnalyzed.imagePath, purpose: 'creative', postType: 'offer' }, dir);
+    const projectWithBlank = await loadProjectForTest('template-filter', dir);
+    const offerVerticalWithBlank = await buildSegmentLayoutReferences(projectWithBlank, paths, { postType: 'offer', shape: 'vertical' });
+    assert.deepEqual(
+      offerVerticalWithBlank.map((r) => r.relativePath).sort(),
+      [savedPaths['offer-vertical'], blankShapeAnalyzed.imagePath].sort(),
+    );
+  });
+});
+
+test('buildSegmentLayoutReferences caps an operator-supplied structure title at 80 chars before it reaches the AI prompt instruction', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'title-cap', name: 'Title Cap', handle: '@titlecap', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('title-cap', {
+      brandName: 'Title Cap', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    const paths = getCentralPaths(dir, 'title-cap');
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const longTitle = 'A'.repeat(200);
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'long-title.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'long-title' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', title: longTitle, text: 'long-title', imagePath: analyzed.imagePath, purpose: 'creative', postType: 'offer' }, dir);
+
+    const project = await loadProjectForTest('title-cap', dir);
+    const references = await buildSegmentLayoutReferences(project, paths);
+
+    assert.equal(references.length, 1);
+    assert.match(references[0].instruction, new RegExp(`Nome da estrutura: ${'A'.repeat(80)}\\.$`));
+    assert.doesNotMatch(references[0].instruction, new RegExp('A'.repeat(81)));
   });
 });
 

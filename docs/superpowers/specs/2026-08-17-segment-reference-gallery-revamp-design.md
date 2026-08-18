@@ -197,3 +197,24 @@ This design amends two specific points from
   that note (`visual_reference` and project-level `layout_model`
   references) are **not** touched by this design and remain inert, per
   that doc's explicit "leave this exactly as it is" decision for them.
+
+## Known limitations
+
+This was raised in the final whole-branch review after all tasks
+merged. It's a deliberate product decision, not a bug — documented here
+so it isn't rediscovered as a surprise. No code was written for it; it's
+intentionally left exactly as it is.
+
+**Legacy untagged image entries have no promote-to-structure path.**
+Before this branch, an image entry with no explicit `purpose` normalized
+to `purpose: 'creative'`. This branch correctly tightens that — an
+untagged image entry now stays `purpose: undefined`, matching the
+explicit-tagging design — but that means any segment-learning image
+entries saved before this branch, with no `purpose` field, are excluded
+from both the creative-structure and product-reference pools going
+forward. There is no UI action to retag a legacy entry in place (the
+frontend's edit flow is only reachable from entries already tagged
+`purpose: 'creative'`), so recovering one requires deleting and
+re-uploading it — which loses the original AI-generated description.
+Decision: accepted as-is, not fixed here. Building a "promote to
+structure" UI action is scope creep beyond this branch's plan.

@@ -4173,17 +4173,25 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
     };
     const entryId = String(input.entryId || '').trim();
     if (entryId) {
-      node.entries = node.entries.map((existing) => (
-        existing.id === entryId
-          ? normalizeSegmentLearningEntry({
-            ...existing,
-            ...entryInput,
-            id: existing.id,
-            createdAt: existing.createdAt,
-            imagePath: input.imagePath || existing.imagePath,
-          })
-          : existing
-      ));
+      // Strip undefined keys before spreading so an omitted field leaves the
+      // existing stored value alone instead of overwriting it with
+      // undefined — the one real caller always sends every field today, but
+      // any future partial-update caller would otherwise silently blank
+      // whatever it left out.
+      const definedEntryInput = Object.fromEntries(Object.entries(entryInput).filter(([, value]) => value !== undefined));
+      let matched = false;
+      node.entries = node.entries.map((existing) => {
+        if (existing.id !== entryId) return existing;
+        matched = true;
+        return normalizeSegmentLearningEntry({
+          ...existing,
+          ...definedEntryInput,
+          id: existing.id,
+          createdAt: existing.createdAt,
+          imagePath: input.imagePath || existing.imagePath,
+        });
+      });
+      if (!matched) throw new Error('Entrada não encontrada para edição.');
     } else {
       const entry = normalizeSegmentLearningEntry(entryInput);
       node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
@@ -7221,7 +7229,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
   const creativeEntries = imageEntries
     .filter((entry) => entry.purpose === 'creative')
     .filter((entry) => !options.postType || entry.postType === options.postType)
-    .filter((entry) => !options.shape || entry.shape === options.shape)
+    .filter((entry) => !options.shape || !entry.shape || entry.shape === options.shape)
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   const productEntries = imageEntries.filter((entry) => entry.purpose === 'product');
   const random = typeof options.random === 'function' ? options.random : Math.random;
@@ -7241,7 +7249,7 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
       role: 'layout_model',
       weight: 'medium',
       instruction: entry.title
-        ? `${SEGMENT_LAYOUT_REFERENCE_INSTRUCTION} Nome da estrutura: ${entry.title}.`
+        ? `${SEGMENT_LAYOUT_REFERENCE_INSTRUCTION} Nome da estrutura: ${entry.title.slice(0, 80)}.`
         : SEGMENT_LAYOUT_REFERENCE_INSTRUCTION,
       createdAt: entry.createdAt,
     });

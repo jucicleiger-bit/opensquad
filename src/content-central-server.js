@@ -1441,7 +1441,15 @@ export function selectOpenAiImageEditReferences(references, capacity = 4) {
   const primary = references.filter((reference) => reference.role !== 'layout_model');
   if (!primary.length) return primary;
   const layout = references.filter((reference) => reference.role === 'layout_model');
-  const layoutSlots = Math.min(layout.length, Math.max(capacity, 0), 2);
+  // Only take a 2nd layout_model slot (structure + the additive segment
+  // product reference) when primary still gets everything it has even
+  // after reserving both slots — the operator's own logo/product photos
+  // must never be displaced by the generic segment product reference.
+  // Capping at 1 slot here still keeps the structure reference (it's
+  // always first in `layout`, see buildSegmentLayoutReferences/
+  // buildPrimaryAiImageReferences) and only drops the product reference.
+  const maxLayoutSlots = primary.length <= Math.max(capacity - 2, 0) ? 2 : 1;
+  const layoutSlots = Math.min(layout.length, Math.max(capacity, 0), maxLayoutSlots);
   return [...primary.slice(0, Math.max(capacity - layoutSlots, 0)), ...layout.slice(0, layoutSlots)];
 }
 

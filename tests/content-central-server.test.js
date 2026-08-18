@@ -594,6 +594,34 @@ test('image reference selectors reserve two layout_model slots without allowing 
   );
 });
 
+test('selectOpenAiImageEditReferences never lets the additive segment product reference evict a real primary reference (logo + 2 real product photos survive intact)', () => {
+  const logo = { role: 'brand_asset', absolutePath: '/logo.png' };
+  const product1 = { role: 'product_photo', absolutePath: '/product1.png' };
+  const product2 = { role: 'product_photo', absolutePath: '/product2.png' };
+  const layoutCreative = { role: 'layout_model', absolutePath: '/creative.png' };
+  const layoutProduct = { role: 'layout_model', absolutePath: '/product-ref.png' };
+
+  const selected = selectOpenAiImageEditReferences([logo, product1, product2, layoutCreative, layoutProduct], 4);
+
+  assert.equal(selected.length, 4);
+  assert.ok(selected.includes(product1), 'a real product photo must never be dropped for the generic segment product reference');
+  assert.ok(selected.includes(product2), 'a real product photo must never be dropped for the generic segment product reference');
+  assert.ok(selected.includes(layoutCreative), 'the structure reference always wins the single remaining layout slot');
+  assert.ok(!selected.includes(layoutProduct), 'the generic segment product reference is the one dropped, not either real product photo');
+});
+
+test('selectOpenAiImageEditReferences at the 3-slot targeted-edit capacity keeps the real product photo and drops the segment product reference', () => {
+  const logo = { role: 'brand_asset', absolutePath: '/logo.png' };
+  const product = { role: 'product_photo', absolutePath: '/product.png' };
+  const layoutCreative = { role: 'layout_model', absolutePath: '/creative.png' };
+  const layoutProduct = { role: 'layout_model', absolutePath: '/product-ref.png' };
+
+  const selected = selectOpenAiImageEditReferences([logo, product, layoutCreative, layoutProduct], 3);
+
+  assert.equal(selected.length, 3);
+  assert.deepEqual(selected, [logo, product, layoutCreative]);
+});
+
 test('cropOpenAiImageToChannel resizes a generated buffer to the exact target aspect ratio', async () => {
   const { Jimp } = await import('jimp');
   const source = new Jimp({ width: 1024, height: 1536, color: 0xffffffff });

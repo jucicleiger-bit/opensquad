@@ -276,7 +276,7 @@ export function LearningGallery({
   function beginEditStructure(entry: SegmentLearningEntry) {
     setEditingStructureId(entry.id);
     setEditingStructure({
-      title: structureTitle(entry),
+      title: entry.title || "",
       text: entry.text,
       postType: entry.postType || "",
       shape: entry.shape || "",
@@ -299,7 +299,7 @@ export function LearningGallery({
 
   return (
     <div className="stack-md">
-      {showCreativeStructures ? (
+      {splitImagePurposes && showCreativeStructures ? (
         <section className="field-card stack-sm">
           <div>
             <h3>Estruturas de criativo</h3>

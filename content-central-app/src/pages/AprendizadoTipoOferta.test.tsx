@@ -61,4 +61,20 @@ describe("AprendizadoTipoOferta", () => {
 
     expect(await screen.findByText("Falha ao carregar aprendizados")).toBeInTheDocument();
   });
+
+  it("never renders the segment-only Estruturas de criativo section — offer-type learning entries aren't segment-scoped and would never be used by AI generation", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          types: [
+            { type: "combo", baseInstruction: "Combo: foco no produto, CTA de delivery claro.", hasOverride: false, entries: [] },
+          ],
+        },
+      },
+    ]);
+    renderPage();
+
+    expect(await screen.findByDisplayValue("Combo: foco no produto, CTA de delivery claro.")).toBeInTheDocument();
+    expect(screen.queryByText("Estruturas de criativo")).toBeNull();
+  });
 });

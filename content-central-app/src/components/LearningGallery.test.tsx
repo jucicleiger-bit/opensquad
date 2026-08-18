@@ -165,6 +165,38 @@ describe("LearningGallery - creative structure references", () => {
     });
   });
 
+  it("seeds the edit form's title field with the raw (possibly empty) title, not the 'Estrutura sem nome' display fallback", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <LearningGallery
+        scope="segment"
+        groupKey="group:x"
+        entries={[
+          {
+            id: "1",
+            bucket: "approved",
+            kind: "image",
+            title: "",
+            text: "",
+            imagePath: "segment/x/modelo.png",
+            purpose: "creative",
+            postType: "offer",
+            shape: "vertical",
+            source: "manual",
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+        ]}
+        onEntriesChange={() => {}}
+        splitImagePurposes
+      />,
+    );
+
+    expect(screen.getByText("Estrutura sem nome")).toBeInTheDocument();
+    await user.click(screen.getByText("Editar"));
+    expect(screen.getByLabelText("Nome da estrutura")).toHaveValue("");
+  });
+
   it("hides the product-reference section when showProductReferences is false", () => {
     render(
       <LearningGallery
