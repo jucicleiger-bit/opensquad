@@ -314,6 +314,46 @@ describe("Company", () => {
     expect(screen.queryByText("Pizza Grande — R$ 49,90", { exact: false })).not.toBeInTheDocument();
   });
 
+  it("shows a weight editor once 2+ content-goal buckets are active, blocks saving until it sums to 100%, and sends the resolved weights", async () => {
+    stubFetchSequence([
+      { body: projectState({ contentStrategy: { offers: [{ id: "o1", name: "Produto", type: "offer", active: true }] } }) },
+      { body: { project: {} } },
+      { body: projectState() },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    fireEvent.change(screen.getByLabelText("Setor principal"), { target: { value: "Loja" } });
+    fireEvent.change(screen.getByLabelText("Tipo de negócio / nicho"), { target: { value: "Loja de bairro" } });
+    fireEvent.change(screen.getByLabelText("Segmento detalhado"), { target: { value: "Loja" } });
+    fireEvent.change(screen.getByLabelText("O que a empresa vende/oferece"), { target: { value: "produtos variados" } });
+
+    // Toggling "Gerar autoridade" on: with an active offer, "Venda" + "Gerar
+    // autoridade" makes 2 buckets, so the weight editor appears with a 50/50
+    // default (an active offer alone, with zero goals marked, is only 1
+    // bucket and shows no editor at all).
+    await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
+
+    const vendaInput = (await screen.findByLabelText("Peso: Venda")) as HTMLInputElement;
+    const authorityInput = screen.getByLabelText("Peso: Gerar autoridade") as HTMLInputElement;
+    expect(vendaInput.value).toBe("50");
+    expect(authorityInput.value).toBe("50");
+
+    fireEvent.change(vendaInput, { target: { value: "90" } });
+    fireEvent.change(authorityInput, { target: { value: "5" } });
+    expect(screen.getByRole("button", { name: "Salvar e analisar minha marca" })).toBeDisabled();
+    expect(screen.getByText(/soma 95%/)).toBeInTheDocument();
+
+    fireEvent.change(authorityInput, { target: { value: "10" } });
+    expect(screen.getByRole("button", { name: "Salvar e analisar minha marca" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
+    await screen.findByText("Raio-X da marca gerado.");
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(JSON.parse(saveCall[1].body as string).contentGoalWeights).toEqual({ sales: 90, authority: 10 });
+  });
+
   it("imports from pasted text when the site blocks automatic access (Cloudflare, etc.)", async () => {
     stubFetchSequence([
       { body: projectState() },
