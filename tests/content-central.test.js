@@ -226,6 +226,7 @@ test('brand xray input uses simple user facts and approved four-block analysis i
       serviceRegion: '',
       mainDifferential: '',
       contentGoals: [],
+      contentGoalWeights: {},
       audience: '',
       audienceType: '',
       tone: [],
@@ -7065,5 +7066,49 @@ test('layoutStrength is strict whenever a matching creative template was found, 
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
 
     assert.equal(generatorCalls[0].content.creativeSpec.layout.strength, 'strict');
+  });
+});
+
+test('contentGoalWeights are saved when the currently-marked goals sum to 100, and a stale key for an unmarked goal is kept but excluded from that sum check', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pesos-validos', name: 'Pesos Válidos' }, dir);
+    const updated = await updateProjectBrandInput('pesos-validos', {
+      brandName: 'Pesos Válidos',
+      segment: 'loja',
+      contentGoals: ['authority', 'engagement'],
+      // brand_awareness isn't marked in contentGoals — it's a stale leftover
+      // (e.g. from a goal unchecked after weights were configured) and must
+      // NOT count against the 100% check for the goals that ARE marked.
+      contentGoalWeights: { sales: 90, authority: 5, engagement: 5, brand_awareness: 40 },
+    }, dir);
+    assert.deepEqual(updated.brandInput.contentGoalWeights, { sales: 90, authority: 5, engagement: 5, brand_awareness: 40 });
+  });
+});
+
+test('contentGoalWeights that do not sum to 100 across 2+ entries are rejected', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pesos-invalidos', name: 'Pesos Inválidos' }, dir);
+    await assert.rejects(
+      updateProjectBrandInput('pesos-invalidos', {
+        brandName: 'Pesos Inválidos',
+        segment: 'loja',
+        contentGoals: ['authority', 'engagement'],
+        contentGoalWeights: { authority: 90, engagement: 5 },
+      }, dir),
+      /precisam somar 100/,
+    );
+  });
+});
+
+test('a single contentGoalWeights entry needs no sum validation', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'peso-unico', name: 'Peso Único' }, dir);
+    const updated = await updateProjectBrandInput('peso-unico', {
+      brandName: 'Peso Único',
+      segment: 'loja',
+      contentGoals: ['authority'],
+      contentGoalWeights: { authority: 37 },
+    }, dir);
+    assert.equal(updated.brandInput.contentGoalWeights.authority, 37);
   });
 });

@@ -6240,6 +6240,7 @@ function formatCompanyFactLines(input = {}) {
 // just never wired to a writable, read path. brandInput is the schema every
 // real save/generate path actually uses, so they live here now.
 function normalizeBrandInput(input = {}) {
+  const contentGoals = normalizeContentGoalList(input?.contentGoals);
   return {
     brandName: cleanText(input?.brandName || input?.name),
     segmentGroup: cleanText(input?.segmentGroup),
@@ -6250,7 +6251,8 @@ function normalizeBrandInput(input = {}) {
     description: cleanText(input?.description),
     serviceRegion: cleanText(input?.serviceRegion || input?.location),
     mainDifferential: cleanText(input?.mainDifferential || input?.differentiators),
-    contentGoals: normalizeContentGoalList(input?.contentGoals),
+    contentGoals,
+    contentGoalWeights: normalizeContentGoalWeights(input?.contentGoalWeights, contentGoals),
     audience: cleanText(input?.audience),
     audienceType: normalizeAudienceType(input?.audienceType),
     tone: normalizeUniqueTextList(input?.tone),
@@ -6265,6 +6267,36 @@ function normalizeBrandInput(input = {}) {
 function normalizeContentGoalList(value) {
   const raw = Array.isArray(value) ? value : String(value || '').split(',');
   return [...new Set(raw.map((item) => String(item || '').trim()).filter((item) => CONTENT_GOAL_OPTIONS.has(item)))];
+}
+
+// Percentage weight per content-goal bucket (key = a contentGoals entry, or
+// the literal "sales" bucket standing in for the operator's registered
+// offers — see buildTopicPool). Only accepts keys that are either "sales"
+// or a real goal key, and only non-negative finite numbers; anything else
+// is silently dropped, same permissive style as normalizeContentGoalList.
+// `activeGoalKeys` is this same save's (already-normalized) contentGoals —
+// only entries for "sales" or a currently-marked goal count toward the
+// 100% sum check; an entry for a goal that ISN'T marked in this save is
+// stale (e.g. left over from a goal since unchecked) and is kept as-is in
+// the returned object but excluded from the check, so it can never block
+// an otherwise-valid save. When 2+ active entries survive, they must sum
+// to exactly 100 — this is the one field in normalizeBrandInput that can
+// reject a save, because an unbalanced split would otherwise generate a
+// silently wrong content mix with no error anywhere. Fewer than 2 active
+// entries needs no sum check: there's nothing to balance against.
+function normalizeContentGoalWeights(value, activeGoalKeys) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const activeKeys = new Set(['sales', ...activeGoalKeys]);
+  const entries = Object.entries(raw)
+    .filter(([key]) => key === 'sales' || CONTENT_GOAL_OPTIONS.has(key))
+    .map(([key, weight]) => [key, Number(weight)])
+    .filter(([, weight]) => Number.isFinite(weight) && weight >= 0);
+  const activeEntries = entries.filter(([key]) => activeKeys.has(key));
+  if (activeEntries.length >= 2) {
+    const sum = activeEntries.reduce((total, [, weight]) => total + weight, 0);
+    if (sum !== 100) throw new Error('Os pesos das metas de conteúdo precisam somar 100%.');
+  }
+  return Object.fromEntries(entries);
 }
 
 // Best-effort brand color identification for a logo image, so "Cores
