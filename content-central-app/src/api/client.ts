@@ -25,6 +25,7 @@ export interface BrandInput {
   serviceRegion?: string;
   mainDifferential?: string;
   contentGoals?: string[];
+  contentGoalWeights?: Record<string, number>;
   audience?: string;
   audienceType?: "" | "b2b" | "b2c" | "mixed";
   tone?: string[];
@@ -1106,6 +1107,20 @@ export const CONTENT_GOAL_LABELS: Record<string, string> = {
   show_products: "Mostrar produtos",
   education: "Educar o público",
 };
+
+// The content goals that form their own weighted bucket in generation
+// (mirrors GOAL_TOPIC_TEMPLATES keys in src/content-central.js). The other
+// 5 CONTENT_GOAL_LABELS keys are priced-intent goals — they never get their
+// own post/bucket, they just inform the AI's brand positioning text.
+export const GOAL_WEIGHT_BUCKET_KEYS = [
+  "authority",
+  "brand_awareness",
+  "relationship",
+  "engagement",
+  "education",
+  "show_products",
+  "events",
+];
 
 export const BRAND_XRAY_BLOCK_LABELS: Record<BrandXrayBlockId, string> = {
   summary: "Resumo da marca",

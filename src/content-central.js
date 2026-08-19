@@ -190,21 +190,6 @@ const DEFAULT_CONTENT_TOPICS = [
   },
 ];
 
-// Content goals with real sales/conversion intent (checked in the Raio-X
-// form). These never spawn a standalone post of their own — doing so
-// without a real registered offer would force the AI to invent a price or
-// promotion. Instead, marking one of these boosts how often real offer
-// topics show up in the rotation (see buildTopicPool) — the client's stated
-// intent still has a real, visible effect, just channeled through actual
-// offers instead of invented ones. With zero offers registered, marking
-// these has no effect at all, same as before.
-const PRICED_INTENT_GOALS = new Set(['sell_products', 'sell_services', 'promotions', 'whatsapp_orders', 'leads']);
-// How many times the offer-topic pool repeats in the interleave when a
-// priced-intent goal is marked — interleaveTopics merges proportionally by
-// relative position, so a larger pool naturally lands more slots without
-// needing a separate weighting mechanism.
-const SALES_INTENT_BOOST = 2;
-
 // One entry per non-priced content objective (the "Objetivos do conteúdo"
 // checkboxes in the Raio-X form, saved to project.brandInput.contentGoals).
 // Deliberately excludes priced-intent goals (see PRICED_INTENT_GOALS above).
@@ -573,7 +558,7 @@ export async function updateProjectBrandInput(projectId, input = {}, targetDir =
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
-  project.brandInput = normalizeBrandInput(input);
+  project.brandInput = normalizeBrandInput(input, { validateContentGoalWeights: true });
   project.companyProfile = brandInputToCompanyProfile(project.brandInput, project.companyProfile);
   project.brandXray = normalizeBrandXray({
     ...(project.brandXray || {}),
@@ -627,7 +612,7 @@ export async function analyzeProjectBrandXray(projectId, input = {}, targetDir =
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
   if (hasBrandInputFields(input)) {
-    project.brandInput = normalizeBrandInput(input);
+    project.brandInput = normalizeBrandInput(input, { validateContentGoalWeights: true });
     project.companyProfile = brandInputToCompanyProfile(project.brandInput, project.companyProfile);
   }
   const templateXray = buildSuggestedBrandXray(project, now);
@@ -4642,28 +4627,23 @@ function buildGoalContentTopic(goalKey, project) {
   return topic;
 }
 
-// Proportional zipper-merge (not concatenation) so a short batch still mixes
-// both kinds of topics instead of exhausting one array before the other
-// appears — e.g. [offer, goal, offer, goal, offer] rather than
-// [offer, offer, offer, goal, goal].
-function interleaveTopics(a, b) {
-  if (!a.length) return [...b];
-  if (!b.length) return [...a];
-  const result = [];
-  let ai = 0;
-  let bi = 0;
-  while (ai < a.length || bi < b.length) {
-    const aRatio = ai < a.length ? ai / a.length : Infinity;
-    const bRatio = bi < b.length ? bi / b.length : Infinity;
-    if (aRatio <= bRatio) {
-      result.push(a[ai]);
-      ai += 1;
-    } else {
-      result.push(b[bi]);
-      bi += 1;
-    }
-  }
-  return result;
+// Raio-X lets the operator assign a percentage weight to each active
+// content-goal bucket (project.brandInput.contentGoalWeights, validated to
+// sum to 100 in normalizeContentGoalWeights). Resolves the actual weights
+// to use for THIS generation's active buckets: trusts the saved split only
+// when every currently-active bucket has an entry and those entries still
+// sum to 100 — a goal toggled on/off, or an offer group emptying out, can
+// silently invalidate a stale saved split — otherwise splits evenly, so
+// generation never blocks on a stale/missing configuration.
+function resolveContentGoalWeights(project, bucketKeys) {
+  const saved = project.brandInput?.contentGoalWeights || {};
+  const values = bucketKeys.map((key) => Number(saved[key]));
+  const allPresent = values.every((value) => Number.isFinite(value) && value >= 0);
+  const sum = values.reduce((total, value) => total + (Number.isFinite(value) ? value : 0), 0);
+  if (allPresent && sum === 100) return values;
+  const base = Math.floor(100 / bucketKeys.length);
+  const remainder = 100 - base * bucketKeys.length;
+  return bucketKeys.map((_, index) => base + (index < remainder ? 1 : 0));
 }
 
 // Explicit rule from the operator's content briefing: never schedule two
@@ -4686,26 +4666,33 @@ function avoidConsecutiveSalesPillars(sequence) {
 
 // Smooth weighted round-robin (the same scheme load balancers use to spread
 // weighted picks evenly instead of bursting the heaviest one at the end of
-// the sequence): each pillar accumulates its weight every round, the
-// highest accumulator gets picked and drops by the total weight. Keeps the
-// requested proportions while naturally minimizing back-to-back repeats of
-// the same pillar — this sequence is what the schedule generator walks
-// (via a persisted cursor) to decide which pillar each slot represents.
-function buildPillarRotationSequence(pillars) {
-  const totalWeight = pillars.reduce((sum, pillar) => sum + pillar.weight, 0);
+// the sequence): each item accumulates its weight every round, the highest
+// accumulator gets picked and drops by the total weight. Shared by Pilares'
+// rotation (below) and the Raio-X content-goal bucket rotation
+// (buildTopicPool) — same algorithm, different weight source.
+function smoothWeightedRotation(items, weightOf) {
+  const totalWeight = items.reduce((sum, item) => sum + weightOf(item), 0);
   if (!totalWeight) return [];
-  const currentWeights = pillars.map(() => 0);
+  const currentWeights = items.map(() => 0);
   const sequence = [];
   for (let round = 0; round < totalWeight; round += 1) {
     let bestIndex = 0;
-    for (let i = 0; i < pillars.length; i += 1) {
-      currentWeights[i] += pillars[i].weight;
+    for (let i = 0; i < items.length; i += 1) {
+      currentWeights[i] += weightOf(items[i]);
       if (currentWeights[i] > currentWeights[bestIndex]) bestIndex = i;
     }
-    sequence.push(pillars[bestIndex]);
+    sequence.push(items[bestIndex]);
     currentWeights[bestIndex] -= totalWeight;
   }
-  return avoidConsecutiveSalesPillars(sequence);
+  return sequence;
+}
+
+// Keeps the requested pillar proportions while naturally minimizing
+// back-to-back repeats of the same pillar — this sequence is what the
+// schedule generator walks (via a persisted cursor) to decide which pillar
+// each slot represents.
+function buildPillarRotationSequence(pillars) {
+  return avoidConsecutiveSalesPillars(smoothWeightedRotation(pillars, (pillar) => pillar.weight));
 }
 
 function pillarSnapshotFrom(pillar) {
@@ -4769,10 +4756,19 @@ function selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor
 // "generate just this group, don't mix in the goal-driven topics
 // (autoridade/engajamento/etc.)" the operator asked for as a way to run a
 // batch that's 100% e.g. "Promoção fim de semana" with no institutional
-// post breaking up the run. Skips goalTopics AND the DEFAULT_CONTENT_TOPICS
+// post breaking up the run. Skips goal buckets AND the DEFAULT_CONTENT_TOPICS
 // fallback entirely — an empty result here (group has no active offers) is
 // a real error, validated by the caller before this ever runs, not
 // something to silently paper over with unrelated content.
+//
+// Below offersOnly: the (already group/weekday-filtered) offer pool forms
+// the "sales" bucket whenever it's non-empty, and each marked content goal
+// with a real template (GOAL_TOPIC_TEMPLATES) forms its own bucket. 2+
+// buckets are mixed with smoothWeightedRotation using the operator's
+// configured percentages (resolveContentGoalWeights) — see
+// docs/superpowers/specs/2026-08-18-content-goal-weighted-rotation-design.md.
+// A single active bucket needs no mixing; zero buckets falls back to
+// DEFAULT_CONTENT_TOPICS, same as always.
 async function buildTopicPool(project, options = {}, targetDir) {
   const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
   const offerTopics = await Promise.all(
@@ -4782,20 +4778,34 @@ async function buildTopicPool(project, options = {}, targetDir) {
       .map((offer) => offerToContentTopic(offer, targetDir))
   );
   if (options.offersOnly) return offerTopics;
-  const goalTopics = (project.brandInput?.contentGoals || [])
-    .map((goalKey) => buildGoalContentTopic(goalKey, project))
+
+  const goalBuckets = (project.brandInput?.contentGoals || [])
+    .map((goalKey) => {
+      const topic = buildGoalContentTopic(goalKey, project);
+      return topic ? { key: goalKey, topics: [topic] } : null;
+    })
     .filter(Boolean);
-  if (!offerTopics.length && !goalTopics.length) {
+
+  const buckets = offerTopics.length ? [{ key: 'sales', topics: offerTopics }, ...goalBuckets] : goalBuckets;
+  if (!buckets.length) {
     return DEFAULT_CONTENT_TOPICS.map((topic) => {
       const built = { ...topic, source: 'default', cta: '' };
       return { ...built, cta: salesGatedCta(built, topic.cta) };
     });
   }
-  const hasSalesIntent = (project.brandInput?.contentGoals || []).some((goalKey) => PRICED_INTENT_GOALS.has(goalKey));
-  const boostedOfferTopics = hasSalesIntent && offerTopics.length
-    ? Array.from({ length: SALES_INTENT_BOOST }, () => offerTopics).flat()
-    : offerTopics;
-  return interleaveTopics(boostedOfferTopics, goalTopics);
+  if (buckets.length === 1) return buckets[0].topics;
+
+  const weights = resolveContentGoalWeights(project, buckets.map((bucket) => bucket.key));
+  const sequence = smoothWeightedRotation(
+    buckets.map((bucket, index) => ({ bucket, weight: weights[index] })),
+    (entry) => entry.weight,
+  );
+  const cursors = Object.fromEntries(buckets.map((bucket) => [bucket.key, 0]));
+  return sequence.map(({ bucket }) => {
+    const topic = bucket.topics[cursors[bucket.key] % bucket.topics.length];
+    cursors[bucket.key] += 1;
+    return topic;
+  });
 }
 
 // A group is a publishing queue as well as an organizer. Keeping its cursor
@@ -6232,7 +6242,8 @@ function formatCompanyFactLines(input = {}) {
 // formatCompanyFactLines already format them into prompt text); they were
 // just never wired to a writable, read path. brandInput is the schema every
 // real save/generate path actually uses, so they live here now.
-function normalizeBrandInput(input = {}) {
+function normalizeBrandInput(input = {}, { validateContentGoalWeights = false } = {}) {
+  const contentGoals = normalizeContentGoalList(input?.contentGoals);
   return {
     brandName: cleanText(input?.brandName || input?.name),
     segmentGroup: cleanText(input?.segmentGroup),
@@ -6243,7 +6254,8 @@ function normalizeBrandInput(input = {}) {
     description: cleanText(input?.description),
     serviceRegion: cleanText(input?.serviceRegion || input?.location),
     mainDifferential: cleanText(input?.mainDifferential || input?.differentiators),
-    contentGoals: normalizeContentGoalList(input?.contentGoals),
+    contentGoals,
+    contentGoalWeights: normalizeContentGoalWeights(input?.contentGoalWeights, contentGoals, { validate: validateContentGoalWeights }),
     audience: cleanText(input?.audience),
     audienceType: normalizeAudienceType(input?.audienceType),
     tone: normalizeUniqueTextList(input?.tone),
@@ -6258,6 +6270,36 @@ function normalizeBrandInput(input = {}) {
 function normalizeContentGoalList(value) {
   const raw = Array.isArray(value) ? value : String(value || '').split(',');
   return [...new Set(raw.map((item) => String(item || '').trim()).filter((item) => CONTENT_GOAL_OPTIONS.has(item)))];
+}
+
+// Percentage weight per content-goal bucket (key = a contentGoals entry, or
+// the literal "sales" bucket standing in for the operator's registered
+// offers — see buildTopicPool). Only accepts keys that are either "sales"
+// or a real goal key, and only non-negative finite numbers; anything else
+// is silently dropped, same permissive style as normalizeContentGoalList.
+// `activeGoalKeys` is this same save's (already-normalized) contentGoals —
+// only entries for "sales" or a currently-marked goal count toward the
+// 100% sum check; an entry for a goal that ISN'T marked in this save is
+// stale (e.g. left over from a goal since unchecked) and is kept as-is in
+// the returned object but excluded from the check, so it can never block
+// an otherwise-valid save. When 2+ active entries survive, they must sum
+// to exactly 100 — this is the one field in normalizeBrandInput that can
+// reject a save, because an unbalanced split would otherwise generate a
+// silently wrong content mix with no error anywhere. Fewer than 2 active
+// entries needs no sum check: there's nothing to balance against.
+function normalizeContentGoalWeights(value, activeGoalKeys, { validate = false } = {}) {
+  const raw = value && typeof value === 'object' ? value : {};
+  const activeKeys = new Set(['sales', ...activeGoalKeys]);
+  const entries = Object.entries(raw)
+    .filter(([key]) => key === 'sales' || CONTENT_GOAL_OPTIONS.has(key))
+    .map(([key, weight]) => [key, Number(weight)])
+    .filter(([, weight]) => Number.isFinite(weight) && weight >= 0);
+  const activeEntries = entries.filter(([key]) => activeKeys.has(key));
+  if (validate && activeEntries.length >= 2) {
+    const sum = activeEntries.reduce((total, [, weight]) => total + weight, 0);
+    if (sum !== 100) throw new Error('Os pesos das metas de conteúdo precisam somar 100%.');
+  }
+  return Object.fromEntries(entries);
 }
 
 // Best-effort brand color identification for a logo image, so "Cores

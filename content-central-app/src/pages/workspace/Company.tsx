@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import {
@@ -6,6 +6,7 @@ import {
   BRAND_XRAY_STRATEGIC_BLOCK_IDS,
   BRAND_XRAY_BLOCK_LABELS,
   CONTENT_GOAL_LABELS,
+  GOAL_WEIGHT_BUCKET_KEYS,
   analyzeBrandXray,
   analyzeSite,
   approveBrandXray,
@@ -63,6 +64,7 @@ export function Company() {
     serviceRegion: project.brandInput?.serviceRegion || "",
     mainDifferential: project.brandInput?.mainDifferential || "",
     contentGoals: project.brandInput?.contentGoals || ([] as string[]),
+    contentGoalWeights: project.brandInput?.contentGoalWeights || ({} as Record<string, number>),
     audience: project.brandInput?.audience || "",
     audienceType: (project.brandInput?.audienceType || "") as "" | "b2b" | "b2c" | "mixed",
     tone: project.brandInput?.tone || ([] as string[]),
@@ -118,6 +120,52 @@ export function Company() {
       contentGoals: f.contentGoals.includes(id) ? f.contentGoals.filter((g) => g !== id) : [...f.contentGoals, id],
     }));
   }
+
+  function evenSplit(count: number): number[] {
+    const base = Math.floor(100 / count);
+    const remainder = 100 - base * count;
+    return Array.from({ length: count }, (_, i) => base + (i < remainder ? 1 : 0));
+  }
+
+  function activeGoalWeightBuckets(): string[] {
+    const hasActiveOffers = (project.contentStrategy?.offers || []).some((offer) => offer.active);
+    const goalBucketKeys = form.contentGoals.filter((id) => GOAL_WEIGHT_BUCKET_KEYS.includes(id));
+    return hasActiveOffers ? ["sales", ...goalBucketKeys] : goalBucketKeys;
+  }
+
+  function resolvedGoalWeights(bucketKeys: string[]): Record<string, number> {
+    // Once every bucket has an entered value, show/save it as-is (even when
+    // it doesn't sum to 100 — that's what lets the UI display and block on
+    // an imbalance). Only fall back to an even split while some bucket has
+    // never been touched yet.
+    const known = bucketKeys.filter((key) => Number.isFinite(form.contentGoalWeights[key]));
+    if (known.length === bucketKeys.length) return form.contentGoalWeights;
+    const defaults = evenSplit(bucketKeys.length);
+    return Object.fromEntries(bucketKeys.map((key, i) => [key, defaults[i]]));
+  }
+
+  function setGoalWeight(bucketKeys: string[], key: string, value: number) {
+    const resolved = resolvedGoalWeights(bucketKeys);
+    setForm((f) => ({ ...f, contentGoalWeights: { ...resolved, [key]: value } }));
+  }
+
+  // resolvedGoalWeights trusts whatever is stored once every current bucket
+  // has a value — including an invalid sum, so Save can disable on it. But
+  // that means it can't tell "same buckets, user typed a bad sum" apart from
+  // "the bucket set itself just changed" (a goal was toggled on/off). Only
+  // the latter should force a fresh even split, per spec ("toggling a goal
+  // off... rebalances the remaining sum back to a valid default"). Track the
+  // previous bucket-key set and reset only when it actually changes.
+  const bucketKeysKey = activeGoalWeightBuckets().join(",");
+  const prevBucketKeysKeyRef = useRef(bucketKeysKey);
+  useEffect(() => {
+    if (bucketKeysKey === prevBucketKeysKeyRef.current) return;
+    prevBucketKeysKeyRef.current = bucketKeysKey;
+    if (!bucketKeysKey) return;
+    const bucketKeys = bucketKeysKey.split(",");
+    const defaults = evenSplit(bucketKeys.length);
+    setForm((f) => ({ ...f, contentGoalWeights: Object.fromEntries(bucketKeys.map((key, i) => [key, defaults[i]])) }));
+  }, [bucketKeysKey]);
 
   function toggleOfferSelected(index: number) {
     setSelectedOffers((prev) => {
@@ -206,7 +254,7 @@ export function Company() {
     setError(null);
     setMessage(null);
     try {
-      await analyzeBrandXray(project.projectId, form);
+      await analyzeBrandXray(project.projectId, brandPayload);
       await refreshProject();
       setMessage("Raio-X da marca gerado.");
     } catch (err) {
@@ -310,7 +358,7 @@ export function Company() {
     setError(null);
     setMessage(null);
     try {
-      await analyzeBrandXray(project.projectId, form);
+      await analyzeBrandXray(project.projectId, brandPayload);
       await refreshProject();
       setMessage("Sugestões salvas e Raio-X atualizado.");
     } catch (err) {
@@ -325,6 +373,17 @@ export function Company() {
   const visibleSuggestions = (project.brandXray?.fieldSuggestions || [])
     .filter(isSafeFieldSuggestion)
     .filter((suggestion) => !ignoredSuggestionFields.has(suggestion.field));
+
+  // Single source of truth for the goal-weight derivation, reused by both
+  // save paths (handleAnalyze and handleSaveSuggestions) and both render
+  // spots (the weight editor and the two Save buttons' disabled state) —
+  // used to independently recompute this in 4 places, which let
+  // handleSaveSuggestions drift and send raw, unvalidated form.contentGoalWeights.
+  const weightBuckets = activeGoalWeightBuckets();
+  const weightValues = resolvedGoalWeights(weightBuckets);
+  const weightSum = weightBuckets.reduce((total, key) => total + (weightValues[key] || 0), 0);
+  const weightsInvalid = weightBuckets.length >= 2 && weightSum !== 100;
+  const brandPayload = { ...form, contentGoalWeights: weightBuckets.length >= 2 ? weightValues : {} };
 
   return (
     <div>
@@ -598,7 +657,47 @@ export function Company() {
           ))}
         </div>
 
-        <Button className="full-width" style={{ marginTop: 18 }} disabled={analyzing} onClick={handleAnalyze}>
+        {weightBuckets.length >= 2 ? (
+          <div className="field-card" style={{ marginTop: 14 }}>
+            <b>Peso de cada meta na geração de conteúdo</b>
+            <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
+              Controla a proporção entre venda e as demais metas em toda geração (inclusive por grupo de ofertas),
+              exceto quando "gerar apenas esse grupo" estiver marcado.
+            </p>
+            <div style={{ display: "grid", gap: 8 }}>
+              {weightBuckets.map((key) => (
+                <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <label htmlFor={`goal-weight-${key}`} style={{ flex: 1 }}>
+                    {key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}
+                  </label>
+                  <input
+                    id={`goal-weight-${key}`}
+                    aria-label={`Peso: ${key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}`}
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={weightValues[key] || 0}
+                    onChange={(e) => setGoalWeight(weightBuckets, key, Number(e.target.value) || 0)}
+                    style={{ width: 80 }}
+                  />
+                  <span className="muted">%</span>
+                </div>
+              ))}
+            </div>
+            {weightSum !== 100 ? (
+              <div className="pill bad" style={{ marginTop: 10 }}>
+                O total dos pesos soma {weightSum}%. Ajuste até fechar 100%.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        <Button
+          className="full-width"
+          style={{ marginTop: 18 }}
+          disabled={analyzing || weightsInvalid}
+          onClick={handleAnalyze}
+        >
           {analyzing ? "Salvando e analisando..." : "Salvar e analisar minha marca"}
         </Button>
         {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
@@ -672,7 +771,7 @@ export function Company() {
                   type="button"
                   className="full-width"
                   style={{ marginTop: 12 }}
-                  disabled={savingSuggestions}
+                  disabled={savingSuggestions || weightsInvalid}
                   onClick={handleSaveSuggestions}
                 >
                   {savingSuggestions
