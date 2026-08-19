@@ -10,12 +10,16 @@ import {
   calculateTokenDaysRemaining,
   createCentralProject,
   deleteCommercialCatalogItem,
+  deleteCommercialProposal,
   duplicateCentralProject,
   getCommercialAgency,
+  getCommercialProposal,
   listCommercialCatalogItems,
+  listCommercialProposals,
   saveCommercialAgency,
   saveCommercialAgencyLogo,
   saveCommercialCatalogItem,
+  saveCommercialProposal,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
   deleteAdCreative,
@@ -321,6 +325,81 @@ test('saveCommercialAgency stores name/contact, saveCommercialAgencyLogo stores 
     agency = await saveCommercialAgency({ name: 'King Assessoria de Mkt', contactPhone: '(65) 98888-1111', contactInstagram: '@kingassessoria' }, dir);
     assert.equal(agency.logoPath, 'logo.png', 'a plain settings save must never wipe the previously uploaded logo');
     assert.equal(agency.contactPhone, '(65) 98888-1111');
+  });
+});
+
+test('saveCommercialProposal stores a full proposal with mixed single/comparison sections, listCommercialProposals summarizes newest-first, getCommercialProposal reopens it in full', async () => {
+  await withTempProject(async (dir) => {
+    const input = {
+      clientName: 'Arthur Frios',
+      clientLogoDataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      sections: [
+        {
+          category: 'Criação de Conteúdo',
+          mode: 'comparison',
+          items: [
+            { name: 'Essencial', billingType: 'mensal', price: 297 },
+            { name: 'Profissional', billingType: 'mensal', price: 497 },
+          ],
+        },
+        {
+          category: 'Tráfego Pago',
+          mode: 'single',
+          items: [
+            { catalogItemId: 'trafego-basico', name: 'Gestão Básica', billingType: 'unica', fullPrice: 250, discountedPrice: 0 },
+          ],
+        },
+      ],
+    };
+
+    const saved = await saveCommercialProposal(input, dir);
+    assert.ok(saved.id.startsWith('prop-'));
+    assert.equal(saved.clientName, 'Arthur Frios');
+    assert.equal(saved.sections.length, 2);
+    assert.equal(saved.sections[0].items.length, 2);
+    assert.equal(saved.sections[1].items[0].discountedPrice, 0);
+
+    const list = await listCommercialProposals(dir);
+    assert.equal(list.length, 1);
+    assert.equal(list[0].clientName, 'Arthur Frios');
+    assert.deepEqual(list[0].categories, ['Criação de Conteúdo', 'Tráfego Pago']);
+
+    const reopened = await getCommercialProposal(saved.id, dir);
+    assert.deepEqual(reopened, saved);
+  });
+});
+
+test('saveCommercialProposal rejects a comparison-mode section masquerading as single, and a section with zero items', async () => {
+  await withTempProject(async (dir) => {
+    await assert.rejects(
+      () => saveCommercialProposal({
+        clientName: 'Teste',
+        sections: [{ category: 'X', mode: 'single', items: [{ name: 'A', price: 1 }, { name: 'B', price: 2 }] }],
+      }, dir),
+      /modo único só pode ter 1 item/,
+    );
+    await assert.rejects(
+      () => saveCommercialProposal({ clientName: 'Teste', sections: [{ category: 'X', mode: 'single', items: [] }] }, dir),
+      /precisa de ao menos um item/,
+    );
+    await assert.rejects(
+      () => saveCommercialProposal({ clientName: 'Teste', sections: [] }, dir),
+      /ao menos uma seção/,
+    );
+  });
+});
+
+test('deleteCommercialProposal removes only the targeted proposal, getCommercialProposal then rejects it', async () => {
+  await withTempProject(async (dir) => {
+    const a = await saveCommercialProposal({ clientName: 'A', sections: [{ category: 'X', mode: 'single', items: [{ name: 'Item', price: 1 }] }] }, dir);
+    const b = await saveCommercialProposal({ clientName: 'B', sections: [{ category: 'X', mode: 'single', items: [{ name: 'Item', price: 1 }] }] }, dir);
+
+    const result = await deleteCommercialProposal(a.id, dir);
+    assert.deepEqual(result, { id: a.id, deleted: true });
+
+    await assert.rejects(() => getCommercialProposal(a.id, dir), /Proposta não encontrada/);
+    const stillThere = await getCommercialProposal(b.id, dir);
+    assert.equal(stillThere.clientName, 'B');
   });
 });
 

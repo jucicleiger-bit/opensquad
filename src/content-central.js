@@ -642,6 +642,99 @@ export async function saveCommercialAgencyLogo(assetInput, targetDir = process.c
   });
 }
 
+const COMMERCIAL_PROPOSAL_MODES = new Set(['single', 'comparison']);
+
+function normalizeCommercialProposalItem(input) {
+  const name = String(input?.name || '').trim();
+  if (!name) throw new Error('Nome do item da proposta é obrigatório');
+  const billingType = COMMERCIAL_BILLING_TYPES.has(input?.billingType) ? input.billingType : 'mensal';
+  return {
+    catalogItemId: input?.catalogItemId ? String(input.catalogItemId) : null,
+    name,
+    description: String(input?.description || '').trim(),
+    whatWeDeliver: normalizeRuleList(input?.whatWeDeliver || []),
+    whatClientProvides: normalizeRuleList(input?.whatClientProvides || []),
+    billingType,
+    price: billingType === 'mensal' ? Math.max(0, Number(input?.price) || 0) : 0,
+    fullPrice: billingType === 'unica' ? Math.max(0, Number(input?.fullPrice) || 0) : 0,
+    discountedPrice: billingType === 'unica' ? Math.max(0, Number(input?.discountedPrice) || 0) : 0,
+  };
+}
+
+function normalizeCommercialProposalSection(input) {
+  const category = String(input?.category || '').trim();
+  if (!category) throw new Error('Categoria da seção é obrigatória');
+  const mode = COMMERCIAL_PROPOSAL_MODES.has(input?.mode) ? input.mode : 'single';
+  const items = Array.isArray(input?.items) ? input.items.map((item) => normalizeCommercialProposalItem(item)) : [];
+  if (!items.length) throw new Error(`Seção "${category}" precisa de ao menos um item`);
+  if (mode === 'single' && items.length > 1) throw new Error(`Seção "${category}" no modo único só pode ter 1 item`);
+  return { category, mode, items };
+}
+
+function normalizeCommercialProposal(input, now = new Date()) {
+  const clientName = String(input?.clientName || '').trim();
+  if (!clientName) throw new Error('Nome do cliente é obrigatório');
+  const sections = Array.isArray(input?.sections) ? input.sections.map((section) => normalizeCommercialProposalSection(section)) : [];
+  if (!sections.length) throw new Error('Proposta precisa de ao menos uma seção');
+  return {
+    id: input?.id || `prop-${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`,
+    clientName,
+    clientLogoDataUrl: input?.clientLogoDataUrl ? String(input.clientLogoDataUrl) : null,
+    sections,
+    createdAt: input?.createdAt || now.toISOString(),
+  };
+}
+
+export async function listCommercialProposals(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  let files;
+  try {
+    files = await readdir(paths.commercialProposalsDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const proposals = await Promise.all(
+    files
+      .filter((file) => file.endsWith('.json'))
+      .map((file) => readJson(join(paths.commercialProposalsDir, file), null)),
+  );
+  return proposals
+    .filter(Boolean)
+    .map((proposal) => ({
+      id: proposal.id,
+      clientName: proposal.clientName,
+      categories: (proposal.sections || []).map((section) => section.category),
+      createdAt: proposal.createdAt,
+    }))
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+}
+
+export async function getCommercialProposal(id, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const proposal = await readJson(join(paths.commercialProposalsDir, `${id}.json`), null);
+  if (!proposal) throw new Error(`Proposta não encontrada: ${id}`);
+  return proposal;
+}
+
+export async function saveCommercialProposal(input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const proposal = normalizeCommercialProposal(input, now);
+    await mkdir(paths.commercialProposalsDir, { recursive: true });
+    await writeJson(join(paths.commercialProposalsDir, `${proposal.id}.json`), proposal);
+    return proposal;
+  });
+}
+
+export async function deleteCommercialProposal(id, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    await rm(join(paths.commercialProposalsDir, `${id}.json`), { force: true });
+    return { id, deleted: true };
+  });
+}
+
 export async function saveProjectToken(projectId, tokenInput, targetDir = process.cwd(), now = new Date()) {
   if (!tokenInput?.token) throw new Error('Token is required');
   const paths = getCentralPaths(targetDir, projectId);
