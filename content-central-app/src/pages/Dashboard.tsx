@@ -7,6 +7,7 @@ import {
   createProject,
   createProspectFromScreenshot,
   deleteProject,
+  duplicateProject,
   fileToDataUrl,
   getState,
   improveBio,
@@ -19,6 +20,7 @@ import {
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import { Dialog } from "@/components/Dialog";
 import { EmptyState } from "@/components/EmptyState";
 import { InstagramMockup } from "@/components/InstagramMockup";
 import { SegmentGridTile, DEFAULT_BRAND_COLOR } from "@/components/SegmentGridTile";
@@ -34,6 +36,7 @@ const PROSPECTING_ENABLED = false;
 const DEFAULT_HIGHLIGHT_LABELS = ["Produtos", "Pedidos", "Sobre"];
 
 const EMPTY_FORM = { projectId: "", name: "", handle: "", approvalEmail: "", mode: "semi_automatic", projectType: "marketing" };
+const EMPTY_DUPLICATE_FORM = { projectId: "", name: "" };
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -46,6 +49,10 @@ export function Dashboard() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [duplicatingProject, setDuplicatingProject] = useState<ProjectSummary | null>(null);
+  const [duplicateForm, setDuplicateForm] = useState(EMPTY_DUPLICATE_FORM);
+  const [duplicating, setDuplicating] = useState(false);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
 
   // "Prospecção": upload a screenshot of a prospect's real Instagram profile
   // -> AI reads it -> instant, live-editable preview (InstagramMockup, no
@@ -120,6 +127,37 @@ export function Dashboard() {
       setDeleteError((err as Error).message);
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  function openDuplicate(event: MouseEvent, project: ProjectSummary) {
+    event.preventDefault();
+    event.stopPropagation();
+    setDuplicatingProject(project);
+    setDuplicateForm(EMPTY_DUPLICATE_FORM);
+    setDuplicateError(null);
+  }
+
+  function closeDuplicate() {
+    setDuplicatingProject(null);
+  }
+
+  async function handleDuplicateSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!duplicatingProject) return;
+    if (!duplicateForm.name.trim()) {
+      setDuplicateError("Nome do projeto é obrigatório.");
+      return;
+    }
+    setDuplicating(true);
+    setDuplicateError(null);
+    try {
+      const res = await duplicateProject(duplicatingProject.projectId, duplicateForm);
+      navigate(`/projects/${res.project.projectId}`);
+    } catch (err) {
+      setDuplicateError((err as Error).message);
+    } finally {
+      setDuplicating(false);
     }
   }
 
@@ -531,8 +569,28 @@ export function Dashboard() {
       ) : (
         <div className={styles.grid}>
           {clientProjects.map((project) => (
-            <Link key={project.projectId} to={`/projects/${project.projectId}`} className={styles.projectCard}>
-              <Card style={{ padding: "var(--space-lg)", position: "relative" }}>
+            <Card
+              key={project.projectId}
+              className={styles.projectCard}
+              style={{ padding: "var(--space-lg)", position: "relative", cursor: "pointer" }}
+              role="link"
+              tabIndex={0}
+              onClick={() => navigate(`/projects/${project.projectId}`)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") navigate(`/projects/${project.projectId}`);
+              }}
+            >
+              <div className={styles.cardActions}>
+                {project.projectType !== "catalog" ? (
+                  <button
+                    type="button"
+                    className={styles.duplicateButton}
+                    onClick={(event) => openDuplicate(event, project)}
+                    title="Duplicar projeto"
+                  >
+                    Duplicar
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className={styles.deleteButton}
@@ -542,20 +600,20 @@ export function Dashboard() {
                 >
                   {deletingId === project.projectId ? "Apagando..." : "Apagar"}
                 </button>
-                <div className={styles.projectName}>{project.name}</div>
-                <div className={styles.projectId}>{project.projectId}</div>
-                <div className={styles.pills}>
-                  <span className={`pill ${tokenExpiryMeta(project.token).tone}`}>{tokenExpiryMeta(project.token).label}</span>
-                  {project.projectType === "catalog" ? (
-                    <span className="pill">Catálogo de produtos</span>
-                  ) : project.brandXray?.status === "approved" ? (
-                    <span className="pill ok">Raio-X ok</span>
-                  ) : (
-                    <span className="pill">Raio-X pendente</span>
-                  )}
-                </div>
-              </Card>
-            </Link>
+              </div>
+              <div className={styles.projectName}>{project.name}</div>
+              <div className={styles.projectId}>{project.projectId}</div>
+              <div className={styles.pills}>
+                <span className={`pill ${tokenExpiryMeta(project.token).tone}`}>{tokenExpiryMeta(project.token).label}</span>
+                {project.projectType === "catalog" ? (
+                  <span className="pill">Catálogo de produtos</span>
+                ) : project.brandXray?.status === "approved" ? (
+                  <span className="pill ok">Raio-X ok</span>
+                ) : (
+                  <span className="pill">Raio-X pendente</span>
+                )}
+              </div>
+            </Card>
           ))}
         </div>
       )}
@@ -598,6 +656,49 @@ export function Dashboard() {
       ) : null}
 
       {deleteError ? <div className="pill bad" style={{ marginTop: "var(--space-md)" }}>{deleteError}</div> : null}
+
+      {duplicatingProject ? (
+        <Dialog
+          onClose={closeDuplicate}
+          titleId="duplicate-project-title"
+          overlayClassName={styles.duplicateDialogOverlay}
+          contentClassName={styles.duplicateDialogContent}
+        >
+          <Card style={{ padding: "var(--space-lg)" }}>
+            <h2 id="duplicate-project-title" style={{ marginTop: 0 }}>
+              Duplicar "{duplicatingProject.name}"
+            </h2>
+            <p className="muted" style={{ marginTop: "var(--space-2xs)" }}>
+              Cria um projeto novo com o mesmo Raio-X, ofertas e pilares — sem token, Instagram nem conteúdo já gerado.
+            </p>
+            <form onSubmit={handleDuplicateSubmit}>
+              <label htmlFor="duplicate-project-id">ID curto</label>
+              <input
+                id="duplicate-project-id"
+                placeholder="cliente-teste"
+                value={duplicateForm.projectId}
+                onChange={(e) => setDuplicateForm({ ...duplicateForm, projectId: e.target.value })}
+              />
+              <label htmlFor="duplicate-project-name">Nome</label>
+              <input
+                id="duplicate-project-name"
+                placeholder="Cliente Teste"
+                value={duplicateForm.name}
+                onChange={(e) => setDuplicateForm({ ...duplicateForm, name: e.target.value })}
+              />
+              <div style={{ display: "flex", gap: "var(--space-sm)", marginTop: "var(--space-sm)" }}>
+                <Button type="submit" disabled={duplicating}>
+                  {duplicating ? "Duplicando..." : "Duplicar projeto"}
+                </Button>
+                <Button type="button" variant="secondary" onClick={closeDuplicate}>
+                  Cancelar
+                </Button>
+              </div>
+            </form>
+            {duplicateError ? <div className="pill bad" style={{ marginTop: "var(--space-sm)" }}>{duplicateError}</div> : null}
+          </Card>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

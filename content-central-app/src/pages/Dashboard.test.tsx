@@ -243,6 +243,96 @@ describe("Dashboard", () => {
     expect(JSON.parse(createCall[1].body as string).projectType).toBe("catalog");
   });
 
+  it("duplicates a project through the real endpoint and navigates into the new project's workspace", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "approved" } }],
+          globalRules: {},
+        },
+      },
+      { body: { project: { projectId: "boss-pizzaria-zona-sul", name: "Boss Pizzaria Zona Sul" } } },
+      {
+        body: {
+          projects: [
+            { projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "approved" } },
+            {
+              projectId: "boss-pizzaria-zona-sul",
+              name: "Boss Pizzaria Zona Sul",
+              token: {},
+              brandXray: { status: "approved", blocks: {} },
+            },
+          ],
+          globalRules: {},
+        },
+      },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Boss Pizzaria");
+    await userEvent.click(screen.getByRole("button", { name: "Duplicar" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Boss Pizzaria Zona Sul");
+    await userEvent.type(screen.getByLabelText("ID curto"), "boss-pizzaria-zona-sul");
+    await userEvent.click(screen.getByRole("button", { name: "Duplicar projeto" }));
+
+    expect(await screen.findByRole("heading", { name: "Boss Pizzaria Zona Sul" })).toBeInTheDocument();
+
+    const duplicateCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(duplicateCall[0]).toBe("/api/projects/boss-pizzaria/duplicate");
+    expect(duplicateCall[1].method).toBe("POST");
+    expect(JSON.parse(duplicateCall[1].body as string)).toEqual({
+      projectId: "boss-pizzaria-zona-sul",
+      name: "Boss Pizzaria Zona Sul",
+    });
+  });
+
+  it("shows the duplicate error inline without closing the dialog", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "approved" } }],
+          globalRules: {},
+        },
+      },
+      { body: { error: "Project already exists: boss-pizzaria" }, ok: false },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Boss Pizzaria");
+    await userEvent.click(screen.getByRole("button", { name: "Duplicar" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Boss Pizzaria");
+    await userEvent.click(screen.getByRole("button", { name: "Duplicar projeto" }));
+
+    expect(await screen.findByText("Project already exists: boss-pizzaria")).toBeInTheDocument();
+    expect(screen.getByLabelText("Nome")).toBeInTheDocument();
+  });
+
+  it("has no Duplicar button on a catalog project card", async () => {
+    stubFetch({
+      projects: [{ projectId: "loja-celulares", name: "Loja de Celulares", token: {}, projectType: "catalog", brandXray: { status: "empty" } }],
+      globalRules: {},
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Loja de Celulares");
+    expect(screen.queryByRole("button", { name: "Duplicar" })).not.toBeInTheDocument();
+  });
+
   it("keeps a prospect project out of the main grid and shows it in a separate Prospecção section, with no such section when there are no prospects", async () => {
     stubFetch({
       projects: [

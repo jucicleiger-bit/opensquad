@@ -51,11 +51,16 @@
   flex-wrap: wrap;
 }
 
-.deleteButton {
+.cardActions {
   position: absolute;
   top: 14px;
   right: 14px;
-  min-height: 30px;
+  display: flex;
+  gap: 8px;
+}
+
+.deleteButton {
+  min-height: 44px;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: transparent;
@@ -67,7 +72,7 @@
 }
 
 .deleteButton:hover {
-  color: #fecaca;
+  color: var(--bad-soft);
   border-color: rgba(239, 68, 68, 0.5);
   background: rgba(239, 68, 68, 0.1);
 }
@@ -75,6 +80,33 @@
 .deleteButton:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.duplicateButton {
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.duplicateButton:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.duplicateDialogOverlay {
+  background: rgba(0, 0, 0, 0.72);
+  padding: 24px;
+}
+
+.duplicateDialogContent {
+  width: min(92vw, 420px);
 }
 
 .reviewSplit {

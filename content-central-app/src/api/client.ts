@@ -403,6 +403,16 @@ export function deleteProject(projectId: string): Promise<{ projectId: string; d
   });
 }
 
+export function duplicateProject(
+  sourceProjectId: string,
+  input: { projectId: string; name: string },
+): Promise<{ project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(sourceProjectId)}/duplicate`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 // What the AI read off the prospect's screenshot — always editable before
 // generating anything, since a vision read can get a detail wrong. `null`
 // fields mean "couldn't read this," never a guess.
