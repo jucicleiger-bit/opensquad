@@ -558,7 +558,7 @@ export async function updateProjectBrandInput(projectId, input = {}, targetDir =
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
-  project.brandInput = normalizeBrandInput(input);
+  project.brandInput = normalizeBrandInput(input, { validateContentGoalWeights: true });
   project.companyProfile = brandInputToCompanyProfile(project.brandInput, project.companyProfile);
   project.brandXray = normalizeBrandXray({
     ...(project.brandXray || {}),
@@ -612,7 +612,7 @@ export async function analyzeProjectBrandXray(projectId, input = {}, targetDir =
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
   if (hasBrandInputFields(input)) {
-    project.brandInput = normalizeBrandInput(input);
+    project.brandInput = normalizeBrandInput(input, { validateContentGoalWeights: true });
     project.companyProfile = brandInputToCompanyProfile(project.brandInput, project.companyProfile);
   }
   const templateXray = buildSuggestedBrandXray(project, now);
@@ -6242,7 +6242,7 @@ function formatCompanyFactLines(input = {}) {
 // formatCompanyFactLines already format them into prompt text); they were
 // just never wired to a writable, read path. brandInput is the schema every
 // real save/generate path actually uses, so they live here now.
-function normalizeBrandInput(input = {}) {
+function normalizeBrandInput(input = {}, { validateContentGoalWeights = false } = {}) {
   const contentGoals = normalizeContentGoalList(input?.contentGoals);
   return {
     brandName: cleanText(input?.brandName || input?.name),
@@ -6255,7 +6255,7 @@ function normalizeBrandInput(input = {}) {
     serviceRegion: cleanText(input?.serviceRegion || input?.location),
     mainDifferential: cleanText(input?.mainDifferential || input?.differentiators),
     contentGoals,
-    contentGoalWeights: normalizeContentGoalWeights(input?.contentGoalWeights, contentGoals),
+    contentGoalWeights: normalizeContentGoalWeights(input?.contentGoalWeights, contentGoals, { validate: validateContentGoalWeights }),
     audience: cleanText(input?.audience),
     audienceType: normalizeAudienceType(input?.audienceType),
     tone: normalizeUniqueTextList(input?.tone),
@@ -6287,7 +6287,7 @@ function normalizeContentGoalList(value) {
 // reject a save, because an unbalanced split would otherwise generate a
 // silently wrong content mix with no error anywhere. Fewer than 2 active
 // entries needs no sum check: there's nothing to balance against.
-function normalizeContentGoalWeights(value, activeGoalKeys) {
+function normalizeContentGoalWeights(value, activeGoalKeys, { validate = false } = {}) {
   const raw = value && typeof value === 'object' ? value : {};
   const activeKeys = new Set(['sales', ...activeGoalKeys]);
   const entries = Object.entries(raw)
@@ -6295,7 +6295,7 @@ function normalizeContentGoalWeights(value, activeGoalKeys) {
     .map(([key, weight]) => [key, Number(weight)])
     .filter(([, weight]) => Number.isFinite(weight) && weight >= 0);
   const activeEntries = entries.filter(([key]) => activeKeys.has(key));
-  if (activeEntries.length >= 2) {
+  if (validate && activeEntries.length >= 2) {
     const sum = activeEntries.reduce((total, [, weight]) => total + weight, 0);
     if (sum !== 100) throw new Error('Os pesos das metas de conteúdo precisam somar 100%.');
   }

@@ -254,9 +254,7 @@ export function Company() {
     setError(null);
     setMessage(null);
     try {
-      const bucketKeys = activeGoalWeightBuckets();
-      const payload = { ...form, contentGoalWeights: bucketKeys.length >= 2 ? resolvedGoalWeights(bucketKeys) : {} };
-      await analyzeBrandXray(project.projectId, payload);
+      await analyzeBrandXray(project.projectId, brandPayload);
       await refreshProject();
       setMessage("Raio-X da marca gerado.");
     } catch (err) {
@@ -360,7 +358,7 @@ export function Company() {
     setError(null);
     setMessage(null);
     try {
-      await analyzeBrandXray(project.projectId, form);
+      await analyzeBrandXray(project.projectId, brandPayload);
       await refreshProject();
       setMessage("Sugestões salvas e Raio-X atualizado.");
     } catch (err) {
@@ -375,6 +373,17 @@ export function Company() {
   const visibleSuggestions = (project.brandXray?.fieldSuggestions || [])
     .filter(isSafeFieldSuggestion)
     .filter((suggestion) => !ignoredSuggestionFields.has(suggestion.field));
+
+  // Single source of truth for the goal-weight derivation, reused by both
+  // save paths (handleAnalyze and handleSaveSuggestions) and both render
+  // spots (the weight editor and the two Save buttons' disabled state) —
+  // used to independently recompute this in 4 places, which let
+  // handleSaveSuggestions drift and send raw, unvalidated form.contentGoalWeights.
+  const weightBuckets = activeGoalWeightBuckets();
+  const weightValues = resolvedGoalWeights(weightBuckets);
+  const weightSum = weightBuckets.reduce((total, key) => total + (weightValues[key] || 0), 0);
+  const weightsInvalid = weightBuckets.length >= 2 && weightSum !== 100;
+  const brandPayload = { ...form, contentGoalWeights: weightBuckets.length >= 2 ? weightValues : {} };
 
   return (
     <div>
@@ -648,56 +657,45 @@ export function Company() {
           ))}
         </div>
 
-        {(() => {
-          const bucketKeys = activeGoalWeightBuckets();
-          if (bucketKeys.length < 2) return null;
-          const weights = resolvedGoalWeights(bucketKeys);
-          const sum = bucketKeys.reduce((total, key) => total + (weights[key] || 0), 0);
-          return (
-            <div className="field-card" style={{ marginTop: 14 }}>
-              <b>Peso de cada meta na geração de conteúdo</b>
-              <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
-                Controla a proporção entre venda e as demais metas em toda geração (inclusive por grupo de ofertas),
-                exceto quando "gerar apenas esse grupo" estiver marcado.
-              </p>
-              <div style={{ display: "grid", gap: 8 }}>
-                {bucketKeys.map((key) => (
-                  <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <label htmlFor={`goal-weight-${key}`} style={{ flex: 1 }}>
-                      {key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}
-                    </label>
-                    <input
-                      id={`goal-weight-${key}`}
-                      aria-label={`Peso: ${key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}`}
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={weights[key] || 0}
-                      onChange={(e) => setGoalWeight(bucketKeys, key, Number(e.target.value) || 0)}
-                      style={{ width: 80 }}
-                    />
-                    <span className="muted">%</span>
-                  </div>
-                ))}
-              </div>
-              {sum !== 100 ? (
-                <div className="pill bad" style={{ marginTop: 10 }}>
-                  O total dos pesos soma {sum}%. Ajuste até fechar 100%.
+        {weightBuckets.length >= 2 ? (
+          <div className="field-card" style={{ marginTop: 14 }}>
+            <b>Peso de cada meta na geração de conteúdo</b>
+            <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
+              Controla a proporção entre venda e as demais metas em toda geração (inclusive por grupo de ofertas),
+              exceto quando "gerar apenas esse grupo" estiver marcado.
+            </p>
+            <div style={{ display: "grid", gap: 8 }}>
+              {weightBuckets.map((key) => (
+                <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <label htmlFor={`goal-weight-${key}`} style={{ flex: 1 }}>
+                    {key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}
+                  </label>
+                  <input
+                    id={`goal-weight-${key}`}
+                    aria-label={`Peso: ${key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}`}
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={weightValues[key] || 0}
+                    onChange={(e) => setGoalWeight(weightBuckets, key, Number(e.target.value) || 0)}
+                    style={{ width: 80 }}
+                  />
+                  <span className="muted">%</span>
                 </div>
-              ) : null}
+              ))}
             </div>
-          );
-        })()}
+            {weightSum !== 100 ? (
+              <div className="pill bad" style={{ marginTop: 10 }}>
+                O total dos pesos soma {weightSum}%. Ajuste até fechar 100%.
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <Button
           className="full-width"
           style={{ marginTop: 18 }}
-          disabled={analyzing || (() => {
-            const bucketKeys = activeGoalWeightBuckets();
-            if (bucketKeys.length < 2) return false;
-            const weights = resolvedGoalWeights(bucketKeys);
-            return bucketKeys.reduce((total, key) => total + (weights[key] || 0), 0) !== 100;
-          })()}
+          disabled={analyzing || weightsInvalid}
           onClick={handleAnalyze}
         >
           {analyzing ? "Salvando e analisando..." : "Salvar e analisar minha marca"}
@@ -773,7 +771,7 @@ export function Company() {
                   type="button"
                   className="full-width"
                   style={{ marginTop: 12 }}
-                  disabled={savingSuggestions}
+                  disabled={savingSuggestions || weightsInvalid}
                   onClick={handleSaveSuggestions}
                 >
                   {savingSuggestions

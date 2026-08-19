@@ -354,6 +354,54 @@ describe("Company", () => {
     expect(JSON.parse(saveCall[1].body as string).contentGoalWeights).toEqual({ sales: 90, authority: 10 });
   });
 
+  it("also disables the second save button (handleSaveSuggestions) when the weight sum is invalid, and re-enables it once the sum is fixed", async () => {
+    const brandInput = {
+      brandName: "Boss Pizzaria",
+      segment: "Pizzaria",
+      productsOrServices: "Rodízio e delivery de pizzas",
+      audience: "",
+    };
+    const brandXray = {
+      status: "generated",
+      blocks: FILLED_BLOCKS,
+      generatedAt: "2026-07-23T12:00:00Z",
+      fieldSuggestions: [
+        {
+          field: "audience",
+          label: "Público-alvo sugerido",
+          value: "Famílias da região",
+          reason: "Hipótese para confirmação.",
+        },
+      ],
+    };
+    stubFetchSequence([
+      {
+        body: projectState({
+          brandInput,
+          brandXray,
+          contentStrategy: { offers: [{ id: "o1", name: "Produto", type: "offer", active: true }] },
+        }),
+      },
+    ]);
+    renderCompany();
+
+    await screen.findByLabelText("Público-alvo sugerido");
+    await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
+
+    const vendaInput = (await screen.findByLabelText("Peso: Venda")) as HTMLInputElement;
+    const authorityInput = screen.getByLabelText("Peso: Gerar autoridade") as HTMLInputElement;
+    fireEvent.change(vendaInput, { target: { value: "90" } });
+    fireEvent.change(authorityInput, { target: { value: "5" } });
+    expect(screen.getByText(/soma 95%/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Usar sugestão de Público-alvo sugerido" }));
+    const saveSuggestionsButton = screen.getByRole("button", { name: /Salvar sugestões escolhidas/ });
+    expect(saveSuggestionsButton).toBeDisabled();
+
+    fireEvent.change(authorityInput, { target: { value: "10" } });
+    expect(saveSuggestionsButton).toBeEnabled();
+  });
+
   it("rebalances the remaining weights to a fresh even split when a goal is toggled off", async () => {
     stubFetchSequence([
       { body: projectState({ contentStrategy: { offers: [{ id: "o1", name: "Produto", type: "offer", active: true }] } }) },

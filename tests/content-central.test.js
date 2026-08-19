@@ -7195,3 +7195,30 @@ test('a single contentGoalWeights entry needs no sum validation', async () => {
     assert.equal(updated.brandInput.contentGoalWeights.authority, 37);
   });
 });
+
+// No reachable write path can produce a stored contentGoalWeights that no
+// longer sums to 100 — updateProjectBrandInput/analyzeProjectBrandXray both
+// validate before writing. But a read path (listCentralProjects → every
+// project's toProjectSummary, which GET /api/state runs for ALL projects)
+// must still tolerate one if it ever shows up (hand-edited JSON, a restored
+// backup, a future direct-write helper) instead of throwing and taking down
+// the whole endpoint for every other project too. Simulate that by writing
+// an unbalanced sum straight to disk, bypassing every validated writer.
+test('listCentralProjects (a read path) does not throw on an already-stored, unbalanced contentGoalWeights', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pesos-corrompidos', name: 'Pesos Corrompidos' }, dir);
+    const paths = getCentralPaths(dir, 'pesos-corrompidos');
+    const raw = JSON.parse(await readFile(paths.projectPath, 'utf-8'));
+    raw.brandInput = {
+      ...raw.brandInput,
+      contentGoals: ['authority', 'engagement'],
+      contentGoalWeights: { authority: 90, engagement: 5 },
+    };
+    await writeFile(paths.projectPath, JSON.stringify(raw, null, 2), 'utf-8');
+
+    const projects = await listCentralProjects(dir);
+    const found = projects.find((project) => project.projectId === 'pesos-corrompidos');
+    assert.ok(found);
+    assert.deepEqual(found.brandInput.contentGoalWeights, { authority: 90, engagement: 5 });
+  });
+});
