@@ -598,6 +598,50 @@ export async function deleteCommercialCatalogItem(id, targetDir = process.cwd())
   });
 }
 
+function normalizeCommercialAgency(input = {}) {
+  return {
+    name: String(input?.name || '').trim(),
+    logoPath: input?.logoPath ? String(input.logoPath).trim() : '',
+    contactPhone: String(input?.contactPhone || '').trim(),
+    contactInstagram: String(input?.contactInstagram || '').trim(),
+    updatedAt: input?.updatedAt || null,
+  };
+}
+
+export async function getCommercialAgency(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const stored = await readJson(paths.commercialAgencyPath, null);
+  return normalizeCommercialAgency(stored || {});
+}
+
+export async function saveCommercialAgency(input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const stored = await readJson(paths.commercialAgencyPath, null);
+    const merged = normalizeCommercialAgency({ ...stored, ...input, logoPath: stored?.logoPath || '' });
+    merged.updatedAt = now.toISOString();
+    await writeJson(paths.commercialAgencyPath, merged);
+    return merged;
+  });
+}
+
+export async function saveCommercialAgencyLogo(assetInput, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const filename = sanitizeFilename(assetInput?.filename || 'logo.png');
+    const ext = (extname(filename) || '.png').toLowerCase();
+    const buffer = decodeDataUrl(assetInput?.dataUrl);
+    const relativePath = `logo${ext}`;
+    await mkdir(paths.commercialAssetsDir, { recursive: true });
+    await writeFile(join(paths.commercialAssetsDir, relativePath), buffer);
+    const stored = await readJson(paths.commercialAgencyPath, null);
+    const merged = normalizeCommercialAgency({ ...stored, logoPath: relativePath });
+    merged.updatedAt = now.toISOString();
+    await writeJson(paths.commercialAgencyPath, merged);
+    return merged;
+  });
+}
+
 export async function saveProjectToken(projectId, tokenInput, targetDir = process.cwd(), now = new Date()) {
   if (!tokenInput?.token) throw new Error('Token is required');
   const paths = getCentralPaths(targetDir, projectId);

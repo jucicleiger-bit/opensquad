@@ -11,7 +11,10 @@ import {
   createCentralProject,
   deleteCommercialCatalogItem,
   duplicateCentralProject,
+  getCommercialAgency,
   listCommercialCatalogItems,
+  saveCommercialAgency,
+  saveCommercialAgencyLogo,
   saveCommercialCatalogItem,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
@@ -295,6 +298,29 @@ test('deleteCommercialCatalogItem removes only the targeted item', async () => {
     const items = await listCommercialCatalogItems(dir);
     assert.equal(items.length, 1);
     assert.equal(items[0].id, 'avancado');
+  });
+});
+
+test('saveCommercialAgency stores name/contact, saveCommercialAgencyLogo stores the file and never gets wiped by a later saveCommercialAgency call', async () => {
+  await withTempProject(async (dir) => {
+    let agency = await getCommercialAgency(dir);
+    assert.deepEqual(agency, { name: '', logoPath: '', contactPhone: '', contactInstagram: '', updatedAt: null });
+
+    agency = await saveCommercialAgency({ name: 'King Assessoria de Mkt', contactPhone: '(65) 99999-0000', contactInstagram: '@kingassessoria' }, dir);
+    assert.equal(agency.name, 'King Assessoria de Mkt');
+    assert.equal(agency.logoPath, '');
+
+    const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    agency = await saveCommercialAgencyLogo({ filename: 'minha-logo.PNG', dataUrl: pngDataUrl }, dir);
+    assert.equal(agency.logoPath, 'logo.png');
+    assert.equal(agency.name, 'King Assessoria de Mkt', 'uploading the logo must not lose the name already saved');
+
+    const paths = getCentralPaths(dir);
+    await stat(join(paths.commercialAssetsDir, 'logo.png'));
+
+    agency = await saveCommercialAgency({ name: 'King Assessoria de Mkt', contactPhone: '(65) 98888-1111', contactInstagram: '@kingassessoria' }, dir);
+    assert.equal(agency.logoPath, 'logo.png', 'a plain settings save must never wipe the previously uploaded logo');
+    assert.equal(agency.contactPhone, '(65) 98888-1111');
   });
 });
 
