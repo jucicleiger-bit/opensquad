@@ -9,6 +9,7 @@ import {
   buildApprovalPayload,
   calculateTokenDaysRemaining,
   createCentralProject,
+  duplicateCentralProject,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
   deleteAdCreative,
@@ -126,6 +127,106 @@ test('createCentralProject creates isolated project files with global and projec
 
     const globalRules = JSON.parse(await readFile(paths.globalRulesPath, 'utf-8'));
     assert.ok(globalRules.rules.some((rule) => rule.text.includes('Não publicar sem aprovação')));
+  });
+});
+
+test('duplicateCentralProject copies Raio-X text fields into a new project and resets what must stay per-project', async () => {
+  await withTempProject(async (dir) => {
+    const source = await createCentralProject({
+      projectId: 'boss-pizzaria',
+      name: 'Boss Pizzaria',
+      handle: '@bosspizzaria',
+      approvalEmail: 'aprovacao@example.com',
+      mode: 'semi_automatic',
+      voice: 'Tom direto, informal e apetitoso.',
+      visualStyle: 'Fundo claro, fotografia realista.',
+      imageRules: ['Preservar a aparência real dos produtos.'],
+      projectRules: ['Usar vermelho e branco'],
+    }, dir);
+    assert.equal(source.projectId, 'boss-pizzaria');
+
+    await updateProjectCompanyProfile('boss-pizzaria', {
+      segment: 'Pizzaria',
+      description: 'Pizzaria de bairro com rodízio e delivery.',
+      productsOrServices: 'rodízio de pizzas, delivery',
+    }, dir);
+
+    const analyzed = await analyzeProjectBrandXray('boss-pizzaria', {}, dir, new Date('2026-08-19T12:00:00.000Z'));
+    assert.equal(analyzed.project.brandXray.status, 'generated');
+    const approved = await approveProjectBrandXray('boss-pizzaria', { edits: {} }, dir, new Date('2026-08-19T12:05:00.000Z'));
+    assert.equal(approved.project.brandXray.status, 'approved');
+
+    await saveProjectOffer('boss-pizzaria', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    await saveProjectPillar('boss-pizzaria', { name: 'Ensina', role: 'ensina', weight: 1 }, dir);
+    await saveProjectOfferGroup('boss-pizzaria', { name: 'Fim de semana' }, dir);
+    await saveProjectToken('boss-pizzaria', { token: 'fake-token', expiresAt: '2026-12-01T00:00:00.000Z' }, dir, new Date('2026-08-19T12:10:00.000Z'));
+
+    const sourceProject = await loadProjectForTest('boss-pizzaria', dir);
+
+    const duplicated = await duplicateCentralProject('boss-pizzaria', {
+      projectId: 'boss-pizzaria-zona-sul',
+      name: 'Boss Pizzaria Zona Sul',
+    }, dir);
+
+    assert.equal(duplicated.projectId, 'boss-pizzaria-zona-sul');
+    assert.equal(duplicated.name, 'Boss Pizzaria Zona Sul');
+    assert.equal(duplicated.mode, 'semi_automatic');
+    assert.equal(duplicated.projectType, 'marketing');
+
+    assert.deepEqual(duplicated.companyProfile, sourceProject.companyProfile);
+    assert.deepEqual(duplicated.brandInput, sourceProject.brandInput);
+    assert.equal(duplicated.brandXray.status, 'approved');
+    assert.deepEqual(duplicated.brandXray.blocks, sourceProject.brandXray.blocks);
+    assert.equal(duplicated.brand.voice, 'Tom direto, informal e apetitoso.');
+    assert.equal(duplicated.brand.visualStyle, 'Fundo claro, fotografia realista.');
+    assert.deepEqual(duplicated.brand.imageRules, ['Preservar a aparência real dos produtos.']);
+    assert.deepEqual(duplicated.rules.project, ['Usar vermelho e branco']);
+    assert.equal(duplicated.contentStrategy.offers.length, 1);
+    assert.equal(duplicated.contentStrategy.offers[0].name, 'Pizza Grande');
+    assert.equal(duplicated.contentStrategy.pillars.length, 1);
+    assert.equal(duplicated.contentStrategy.pillars[0].name, 'Ensina');
+    assert.equal(duplicated.contentStrategy.offerGroups.length, 1);
+    assert.equal(duplicated.contentStrategy.offerGroups[0].name, 'Fim de semana');
+
+    assert.equal(duplicated.instagram.handle, '');
+    assert.equal(duplicated.approvalEmail, '');
+    assert.equal(duplicated.token.configured, false);
+    assert.equal(duplicated.brand.logoPath, 'assets/logo.png');
+    assert.deepEqual(duplicated.brand.references, []);
+    assert.equal(duplicated.isProspect, false);
+    assert.equal(duplicated.prospectSource, null);
+    assert.deepEqual(duplicated.learnings, { approved: [], avoid: [] });
+
+    const sourceAfter = await loadProjectForTest('boss-pizzaria', dir);
+    assert.equal(sourceAfter.instagram.handle, '@bosspizzaria');
+    assert.equal(sourceAfter.token.configured, true);
+    assert.equal(sourceAfter.contentStrategy.offers.length, 1);
+
+    const paths = getCentralPaths(dir, 'boss-pizzaria-zona-sul');
+    const manual = await readFile(paths.manualPath, 'utf-8');
+    assert.match(manual, /Pizza Grande/);
+    assert.match(manual, /Ensina/);
+  });
+});
+
+test('duplicateCentralProject rejects a target id that already exists', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'origem', name: 'Origem' }, dir);
+    await createCentralProject({ projectId: 'ja-existe', name: 'Já Existe' }, dir);
+
+    await assert.rejects(
+      () => duplicateCentralProject('origem', { projectId: 'ja-existe', name: 'Outro Nome' }, dir),
+      /Project already exists: ja-existe/,
+    );
+  });
+});
+
+test('duplicateCentralProject rejects a missing source project', async () => {
+  await withTempProject(async (dir) => {
+    await assert.rejects(
+      () => duplicateCentralProject('nao-existe', { projectId: 'novo', name: 'Novo' }, dir),
+      /Project not found: nao-existe/,
+    );
   });
 });
 

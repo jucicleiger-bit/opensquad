@@ -479,6 +479,52 @@ export async function deleteCentralProject(projectId, targetDir = process.cwd())
   return { projectId, deleted: true };
 }
 
+// Copies a marketing project's Raio-X (brand profile, offers, pillars,
+// rules) into a brand-new project so a similar client doesn't start from a
+// blank form. Deliberately narrow: no token, Instagram handle, approval
+// email, learnings, or asset files (logo/references) carry over — those are
+// per-project facts, not reusable strategy. createCentralProject does the
+// actual creation (id/name validation, folder scaffolding, manual-vivo.md)
+// so this only adds the one thing it doesn't accept as an option:
+// contentStrategy (offers/pillars/offerGroups always start empty there).
+export async function duplicateCentralProject(sourceProjectId, options, targetDir = process.cwd()) {
+  const sourcePaths = getCentralPaths(targetDir, sourceProjectId);
+  const source = await loadProject(sourcePaths);
+
+  const project = await createCentralProject({
+    projectId: options?.projectId,
+    name: options?.name,
+    mode: source.mode,
+    projectType: 'marketing',
+    companyProfile: source.companyProfile,
+    brandInput: source.brandInput,
+    brandXray: source.brandXray,
+    brandBriefing: source.brandBriefing,
+    technicalBase: source.technicalBase,
+    voice: source.brand?.voice,
+    visualStyle: source.brand?.visualStyle,
+    imageRules: source.brand?.imageRules,
+    defaultDaysToGenerate: source.contentSettings?.defaultDaysToGenerate,
+    defaultPostTime: source.contentSettings?.defaultPostTime,
+    channels: source.contentSettings?.channels,
+    projectRules: source.rules?.project,
+  }, targetDir);
+
+  const newPaths = getCentralPaths(targetDir, project.projectId);
+  return withProjectLock(targetDir, project.projectId, async () => {
+    const current = await readJson(newPaths.projectPath, null);
+    current.contentStrategy = {
+      offers: JSON.parse(JSON.stringify(source.contentStrategy.offers)),
+      pillars: JSON.parse(JSON.stringify(source.contentStrategy.pillars)),
+      offerGroups: JSON.parse(JSON.stringify(source.contentStrategy.offerGroups)),
+    };
+    current.updatedAt = new Date().toISOString();
+    await writeJson(newPaths.projectPath, current);
+    await writeFile(newPaths.manualPath, buildManual(current), 'utf-8');
+    return current;
+  });
+}
+
 export async function saveProjectToken(projectId, tokenInput, targetDir = process.cwd(), now = new Date()) {
   if (!tokenInput?.token) throw new Error('Token is required');
   const paths = getCentralPaths(targetDir, projectId);
