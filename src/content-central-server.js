@@ -34,7 +34,17 @@ import {
   createCentralProject,
   creativeShapeGroupForChannel,
   deleteCentralProject,
+  deleteCommercialCatalogItem,
+  deleteCommercialProposal,
   duplicateCentralProject,
+  getCommercialAgency,
+  getCommercialProposal,
+  listCommercialCatalogItems,
+  listCommercialProposals,
+  saveCommercialAgency,
+  saveCommercialAgencyLogo,
+  saveCommercialCatalogItem,
+  saveCommercialProposal,
   deleteProjectContent,
   deleteProjectOffer,
   deleteProjectPillar,
@@ -521,6 +531,64 @@ async function handleRequest(req, res, targetDir, context = {}) {
     }
 
     return sendJson(res, 201, { project, extracted });
+  }
+
+  if (method === 'GET' && route === '/api/commercial/catalog') {
+    return sendJson(res, 200, { items: await listCommercialCatalogItems(targetDir) });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/catalog') {
+    const body = await readBody(req);
+    const item = await saveCommercialCatalogItem(body, targetDir);
+    return sendJson(res, 200, { item });
+  }
+
+  if (method === 'POST' && route.startsWith('/api/commercial/catalog/') && route.endsWith('/delete')) {
+    const id = decodeURIComponent(route.slice('/api/commercial/catalog/'.length, -'/delete'.length));
+    const result = await deleteCommercialCatalogItem(id, targetDir);
+    return sendJson(res, 200, result);
+  }
+
+  if (method === 'GET' && route === '/api/commercial/agency') {
+    return sendJson(res, 200, { agency: await getCommercialAgency(targetDir) });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/agency') {
+    const body = await readBody(req);
+    const agency = await saveCommercialAgency(body, targetDir);
+    return sendJson(res, 200, { agency });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/agency/logo') {
+    const body = await readBody(req);
+    const agency = await saveCommercialAgencyLogo(body, targetDir);
+    return sendJson(res, 200, { agency });
+  }
+
+  if (method === 'GET' && route.startsWith('/api/commercial/assets/')) {
+    return sendCommercialAsset(res, targetDir, route.slice('/api/commercial/assets/'.length));
+  }
+
+  if (method === 'GET' && route === '/api/commercial/proposals') {
+    return sendJson(res, 200, { proposals: await listCommercialProposals(targetDir) });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/proposals') {
+    const body = await readBody(req);
+    const proposal = await saveCommercialProposal(body, targetDir);
+    return sendJson(res, 201, { proposal });
+  }
+
+  if (method === 'GET' && route.startsWith('/api/commercial/proposals/') && !route.endsWith('/delete')) {
+    const id = decodeURIComponent(route.slice('/api/commercial/proposals/'.length));
+    const proposal = await getCommercialProposal(id, targetDir);
+    return sendJson(res, 200, { proposal });
+  }
+
+  if (method === 'POST' && route.startsWith('/api/commercial/proposals/') && route.endsWith('/delete')) {
+    const id = decodeURIComponent(route.slice('/api/commercial/proposals/'.length, -'/delete'.length));
+    const result = await deleteCommercialProposal(id, targetDir);
+    return sendJson(res, 200, result);
   }
 
   const parts = route.split('/').filter(Boolean).map(decodeURIComponent);
@@ -1187,6 +1255,21 @@ async function sendProjectAsset(res, targetDir, projectId, relativePath) {
   const { filePath } = resolveSafeAssetPath(targetDir, projectId, relativePath);
   if (!filePath) return sendJson(res, 400, { error: 'Asset inválido' });
   const body = await readFile(filePath);
+  res.writeHead(200, { 'content-type': assetContentType(filePath), 'cache-control': 'no-store' });
+  res.end(body);
+}
+
+async function sendCommercialAsset(res, targetDir, filename) {
+  const paths = getCentralPaths(targetDir);
+  const safeFile = basename(String(filename || ''));
+  if (!safeFile) return sendJson(res, 400, { error: 'Asset inválido' });
+  const filePath = join(paths.commercialAssetsDir, safeFile);
+  let body;
+  try {
+    body = await readFile(filePath);
+  } catch {
+    return sendJson(res, 404, { error: 'Not found' });
+  }
   res.writeHead(200, { 'content-type': assetContentType(filePath), 'cache-control': 'no-store' });
   res.end(body);
 }

@@ -1120,6 +1120,79 @@ test('POST /api/projects/:id/duplicate creates a new project with the source Rai
   });
 });
 
+test('commercial catalog routes: create, list, and delete a catalog item through the real endpoints', async () => {
+  await withServer(async (dir, server) => {
+    const { response: createResponse, body: created } = await request(server, '/api/commercial/catalog', {
+      method: 'POST',
+      body: JSON.stringify({ category: 'Criação de Conteúdo', name: 'Profissional', billingType: 'mensal', price: 497 }),
+    });
+    assert.equal(createResponse.status, 200);
+    assert.equal(created.item.id, 'profissional');
+
+    const { body: listed } = await request(server, '/api/commercial/catalog');
+    assert.equal(listed.items.length, 1);
+
+    const { response: deleteResponse, body: deleted } = await request(server, '/api/commercial/catalog/profissional/delete', { method: 'POST' });
+    assert.equal(deleteResponse.status, 200);
+    assert.deepEqual(deleted, { id: 'profissional', deleted: true });
+
+    const { body: listedAfter } = await request(server, '/api/commercial/catalog');
+    assert.equal(listedAfter.items.length, 0);
+  });
+});
+
+test('commercial agency routes: save identity, upload logo, and serve it back through /api/commercial/assets', async () => {
+  await withServer(async (dir, server) => {
+    const { body: saved } = await request(server, '/api/commercial/agency', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'King Assessoria de Mkt', contactPhone: '', contactInstagram: '@king' }),
+    });
+    assert.equal(saved.agency.name, 'King Assessoria de Mkt');
+
+    const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const { body: withLogo } = await request(server, '/api/commercial/agency/logo', {
+      method: 'POST',
+      body: JSON.stringify({ filename: 'logo.png', dataUrl: pngDataUrl }),
+    });
+    assert.equal(withLogo.agency.logoPath, 'logo.png');
+
+    const assetResponse = await fetch(`${server.url}/api/commercial/assets/logo.png`);
+    assert.equal(assetResponse.status, 200);
+    assert.equal(assetResponse.headers.get('content-type'), 'image/png');
+
+    const { body: fetched } = await request(server, '/api/commercial/agency');
+    assert.equal(fetched.agency.name, 'King Assessoria de Mkt');
+    assert.equal(fetched.agency.logoPath, 'logo.png');
+  });
+});
+
+test('commercial proposal routes: save, list, reopen, and delete a proposal through the real endpoints', async () => {
+  await withServer(async (dir, server) => {
+    const { response: createResponse, body: created } = await request(server, '/api/commercial/proposals', {
+      method: 'POST',
+      body: JSON.stringify({
+        clientName: 'Arthur Frios',
+        sections: [{ category: 'Criação de Conteúdo', mode: 'single', items: [{ name: 'Profissional', billingType: 'mensal', price: 497 }] }],
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    assert.ok(created.proposal.id.startsWith('prop-'));
+
+    const { body: listed } = await request(server, '/api/commercial/proposals');
+    assert.equal(listed.proposals.length, 1);
+    assert.equal(listed.proposals[0].clientName, 'Arthur Frios');
+
+    const { body: fetched } = await request(server, `/api/commercial/proposals/${created.proposal.id}`);
+    assert.equal(fetched.proposal.clientName, 'Arthur Frios');
+
+    const { body: deleted } = await request(server, `/api/commercial/proposals/${created.proposal.id}/delete`, { method: 'POST' });
+    assert.deepEqual(deleted, { id: created.proposal.id, deleted: true });
+
+    const { body: listedAfter } = await request(server, '/api/commercial/proposals');
+    assert.equal(listedAfter.proposals.length, 0);
+  });
+});
+
 test('GET prospect-mockup never fabricates a stat it does not have — shows "—" instead of 0 when the vision read came back empty, and never shows a broken-image avatar when no crop was saved', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
