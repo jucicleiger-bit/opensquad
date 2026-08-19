@@ -1103,6 +1103,112 @@ export function fileToDataUrl(file: File): Promise<string> {
   });
 }
 
+export interface CommercialCatalogItem {
+  id: string;
+  category: string;
+  name: string;
+  description: string;
+  whatWeDeliver: string[];
+  whatClientProvides: string[];
+  billingType: "mensal" | "unica";
+  price: number;
+  fullPrice: number;
+  discountedPrice: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommercialAgency {
+  name: string;
+  logoPath: string;
+  contactPhone: string;
+  contactInstagram: string;
+  updatedAt: string | null;
+}
+
+export interface CommercialProposalItem {
+  catalogItemId: string | null;
+  name: string;
+  description: string;
+  whatWeDeliver: string[];
+  whatClientProvides: string[];
+  billingType: "mensal" | "unica";
+  price: number;
+  fullPrice: number;
+  discountedPrice: number;
+}
+
+export interface CommercialProposalSection {
+  category: string;
+  mode: "single" | "comparison";
+  items: CommercialProposalItem[];
+}
+
+export interface CommercialProposal {
+  id: string;
+  clientName: string;
+  clientLogoDataUrl: string | null;
+  sections: CommercialProposalSection[];
+  createdAt: string;
+}
+
+export interface CommercialProposalSummary {
+  id: string;
+  clientName: string;
+  categories: string[];
+  createdAt: string;
+}
+
+export function listCommercialCatalog(): Promise<{ items: CommercialCatalogItem[] }> {
+  return api("/api/commercial/catalog");
+}
+
+export function saveCommercialCatalogItem(input: Partial<CommercialCatalogItem>): Promise<{ item: CommercialCatalogItem }> {
+  return api("/api/commercial/catalog", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function deleteCommercialCatalogItem(id: string): Promise<{ id: string; deleted: boolean }> {
+  return api(`/api/commercial/catalog/${encodeURIComponent(id)}/delete`, { method: "POST" });
+}
+
+export function getCommercialAgency(): Promise<{ agency: CommercialAgency }> {
+  return api("/api/commercial/agency");
+}
+
+export function saveCommercialAgency(input: {
+  name: string;
+  contactPhone: string;
+  contactInstagram: string;
+}): Promise<{ agency: CommercialAgency }> {
+  return api("/api/commercial/agency", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function saveCommercialAgencyLogo(input: { filename: string; dataUrl: string }): Promise<{ agency: CommercialAgency }> {
+  return api("/api/commercial/agency/logo", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function commercialAssetUrl(filename: string): string {
+  return `/api/commercial/assets/${encodeURIComponent(filename)}`;
+}
+
+export function listCommercialProposals(): Promise<{ proposals: CommercialProposalSummary[] }> {
+  return api("/api/commercial/proposals");
+}
+
+export function getCommercialProposal(id: string): Promise<{ proposal: CommercialProposal }> {
+  return api(`/api/commercial/proposals/${encodeURIComponent(id)}`);
+}
+
+export function saveCommercialProposal(
+  input: Omit<CommercialProposal, "id" | "createdAt"> & { id?: string },
+): Promise<{ proposal: CommercialProposal }> {
+  return api("/api/commercial/proposals", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function deleteCommercialProposal(id: string): Promise<{ id: string; deleted: boolean }> {
+  return api(`/api/commercial/proposals/${encodeURIComponent(id)}/delete`, { method: "POST" });
+}
+
 export const CONTENT_GOAL_LABELS: Record<string, string> = {
   sell_products: "Vender produtos",
   sell_services: "Vender serviços",
