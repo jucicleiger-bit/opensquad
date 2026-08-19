@@ -4169,26 +4169,109 @@ test('schedule generation mixes registered offers with selected content goals in
   });
 });
 
-test('marking a priced-intent goal (e.g. "Divulgar promoções") boosts how often real offer topics appear, instead of doing nothing', async () => {
+test('with no contentGoalWeights configured, active buckets split evenly by default', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'boost-sem-intencao', name: 'Boost Sem Intencao' }, dir);
-    await updateProjectBrandInput('boost-sem-intencao', { brandName: 'Boost', segment: 'loja', contentGoals: ['engagement'] }, dir);
-    await saveProjectOffer('boost-sem-intencao', { name: 'Produto X', price: 'R$99' }, dir);
-    // Pool without sales intent: interleave([offer], [engagement]) = 2 slots, 1 offer + 1 goal.
-    const baseline = await generateContentBatch('boost-sem-intencao', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
-    const baselineOfferCount = baseline.items.filter((item) => item.contentTopic.source === 'offer').length;
-    assert.equal(baselineOfferCount, 1);
+    await createCentralProject({ projectId: 'split-padrao', name: 'Split Padrão' }, dir);
+    await updateProjectBrandInput('split-padrao', { brandName: 'Split', segment: 'loja', contentGoals: ['engagement'] }, dir);
+    await saveProjectOffer('split-padrao', { name: 'Produto X', price: 'R$99' }, dir);
 
-    await createCentralProject({ projectId: 'boost-com-intencao', name: 'Boost Com Intencao' }, dir);
-    await updateProjectBrandInput('boost-com-intencao', { brandName: 'Boost', segment: 'loja', contentGoals: ['engagement', 'promotions'] }, dir);
-    await saveProjectOffer('boost-com-intencao', { name: 'Produto X', price: 'R$99' }, dir);
-    // Pool with sales intent: interleave([offer, offer], [engagement]) = 3 slots, 2 offer + 1 goal —
-    // "Divulgar promoções" never spawns its own post (no template), but it
-    // makes the real offer show up twice as often relative to goal posts.
-    const boosted = await generateContentBatch('boost-com-intencao', { days: 3, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
-    const boostedOfferCount = boosted.items.filter((item) => item.contentTopic.source === 'offer').length;
-    assert.equal(boostedOfferCount, 2);
-    assert.ok(boosted.items.every((item) => item.contentTopic.type !== 'promotions'), 'promotions goal must never spawn its own topic type');
+    // 2 buckets (sales + engagement), no weights saved => 50/50 default.
+    // smoothWeightedRotation([sales:50, engagement:50]) alternates
+    // deterministically, so the first 4 slots are exactly 2 offer + 2 goal.
+    const batch = await generateContentBatch('split-padrao', { days: 4, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const offerCount = batch.items.filter((item) => item.contentTopic.source === 'offer').length;
+    const goalCount = batch.items.filter((item) => item.contentTopic.source === 'goal').length;
+    assert.equal(offerCount, 2);
+    assert.equal(goalCount, 2);
+  });
+});
+
+test('marking a priced-intent goal (e.g. "Divulgar promoções") has no special boosting effect anymore — only configured weight does', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sem-boost-especial', name: 'Sem Boost Especial' }, dir);
+    await updateProjectBrandInput('sem-boost-especial', { brandName: 'Sem Boost', segment: 'loja', contentGoals: ['engagement', 'promotions'] }, dir);
+    await saveProjectOffer('sem-boost-especial', { name: 'Produto X', price: 'R$99' }, dir);
+
+    const batch = await generateContentBatch('sem-boost-especial', { days: 4, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const offerCount = batch.items.filter((item) => item.contentTopic.source === 'offer').length;
+    // Still the plain 50/50 default split — "promotions" contributes no
+    // bucket of its own (no template) and no longer duplicates the offer pool.
+    assert.equal(offerCount, 2);
+    assert.ok(batch.items.every((item) => item.contentTopic.type !== 'promotions'), 'promotions goal must never spawn its own topic type');
+  });
+});
+
+test('a configured content-goal weight actually shifts generation toward the heavier bucket', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'peso-configurado', name: 'Peso Configurado' }, dir);
+    await updateProjectBrandInput('peso-configurado', {
+      brandName: 'Peso Configurado',
+      segment: 'loja',
+      contentGoals: ['brand_awareness'],
+      contentGoalWeights: { sales: 90, brand_awareness: 10 },
+    }, dir);
+    await saveProjectOffer('peso-configurado', { name: 'Produto X', price: 'R$99' }, dir);
+
+    // 10 slots, 90/10 split => exactly 9 offer + 1 goal, spread out (not clustered).
+    const batch = await generateContentBatch('peso-configurado', { days: 10, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const offerCount = batch.items.filter((item) => item.contentTopic.source === 'offer').length;
+    const goalCount = batch.items.filter((item) => item.contentTopic.source === 'goal').length;
+    assert.equal(offerCount, 9);
+    assert.equal(goalCount, 1);
+  });
+});
+
+test('the "sales" bucket exists whenever there are active offers, even with no priced-intent goal marked at all', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'venda-sem-meta', name: 'Venda Sem Meta' }, dir);
+    await updateProjectBrandInput('venda-sem-meta', { brandName: 'Venda Sem Meta', segment: 'loja', contentGoals: ['engagement'] }, dir);
+    await saveProjectOffer('venda-sem-meta', { name: 'Produto X', price: 'R$99' }, dir);
+
+    const batch = await generateContentBatch('venda-sem-meta', { days: 4, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    assert.ok(batch.items.some((item) => item.contentTopic.source === 'offer'), 'the offer pool must still compete for slots');
+  });
+});
+
+test('offersOnly still overrides any configured content-goal weight', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'override-offers-only', name: 'Override OffersOnly' }, dir);
+    await updateProjectBrandInput('override-offers-only', {
+      brandName: 'Override',
+      segment: 'loja',
+      contentGoals: ['authority'],
+      contentGoalWeights: { sales: 10, authority: 90 },
+    }, dir);
+    const { group } = await saveProjectOfferGroup('override-offers-only', { name: 'Fim de semana' }, dir);
+    await saveProjectOffer('override-offers-only', { name: 'Combo', price: 'R$29', groupId: group.id }, dir);
+
+    const batch = await generateContentBatch('override-offers-only', {
+      days: 5,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+    assert.ok(batch.items.every((item) => item.contentTopic.source === 'offer' && item.contentTopic.offerName === 'Combo'), 'offersOnly must win over the 90% authority weight');
+  });
+});
+
+test('a stale saved weight that no longer covers the active buckets falls back to an even split instead of failing', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'peso-desatualizado', name: 'Peso Desatualizado' }, dir);
+    // Weight only covers "sales" + "authority", but the goal actually
+    // marked below is "engagement" — the saved split no longer matches the
+    // active bucket set, so generation must not throw or silently misweight.
+    await updateProjectBrandInput('peso-desatualizado', {
+      brandName: 'Peso Desatualizado',
+      segment: 'loja',
+      contentGoals: ['engagement'],
+      contentGoalWeights: { sales: 80, authority: 20 },
+    }, dir);
+    await saveProjectOffer('peso-desatualizado', { name: 'Produto X', price: 'R$99' }, dir);
+
+    const batch = await generateContentBatch('peso-desatualizado', { days: 4, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const offerCount = batch.items.filter((item) => item.contentTopic.source === 'offer').length;
+    assert.equal(offerCount, 2, 'falls back to the 50/50 even split between the 2 actually-active buckets');
   });
 });
 
