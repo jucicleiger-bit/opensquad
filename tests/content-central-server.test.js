@@ -1098,6 +1098,28 @@ test('POST /api/projects/:id/adapt-segment-template rejects a missing segmentId 
   });
 });
 
+test('POST /api/projects/:id/duplicate creates a new project with the source Raio-X through the real endpoint', async () => {
+  await withServer(async (dir, server) => {
+    const { body: created } = await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'origem-dup', name: 'Origem Dup', handle: '@origemdup' }),
+    });
+    await updateProjectBrandInput(created.project.projectId, { segmentGroup: 'Alimentício' }, dir);
+    await saveProjectOffer(created.project.projectId, { name: 'Combo Família', type: 'offer', price: 'R$ 79,90' }, dir);
+
+    const { response, body } = await request(server, `/api/projects/${created.project.projectId}/duplicate`, {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'copia-dup', name: 'Cópia Dup' }),
+    });
+
+    assert.equal(response.status, 201);
+    assert.equal(body.project.projectId, 'copia-dup');
+    assert.equal(body.project.name, 'Cópia Dup');
+    assert.equal(body.project.instagram.handle, '');
+    assert.equal(body.project.contentStrategy.offers[0].name, 'Combo Família');
+  });
+});
+
 test('GET prospect-mockup never fabricates a stat it does not have — shows "—" instead of 0 when the vision read came back empty, and never shows a broken-image avatar when no crop was saved', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {

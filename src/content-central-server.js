@@ -34,6 +34,7 @@ import {
   createCentralProject,
   creativeShapeGroupForChannel,
   deleteCentralProject,
+  duplicateCentralProject,
   deleteProjectContent,
   deleteProjectOffer,
   deleteProjectPillar,
@@ -582,6 +583,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
   if (parts.length === 3) {
     const result = await deleteCentralProject(projectId, targetDir);
     return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 4 && parts[3] === 'duplicate') {
+    const body = await readBody(req);
+    const project = await duplicateCentralProject(projectId, body, targetDir);
+    return sendJson(res, 201, { project });
   }
 
   if (parts.length === 4 && parts[3] === 'token') {
