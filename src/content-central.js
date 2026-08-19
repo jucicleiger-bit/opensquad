@@ -315,6 +315,10 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     segmentLearningsPath: join(root, 'segment-learnings.json'),
     offerTypeLearningsPath: join(root, 'offer-type-learnings.json'),
     globalRulesPath: join(root, 'global-rules.json'),
+    commercialCatalogPath: join(root, 'commercial-catalog.json'),
+    commercialAgencyPath: join(root, 'commercial-agency.json'),
+    commercialAssetsDir: join(root, 'commercial-assets'),
+    commercialProposalsDir: join(root, 'commercial-proposals'),
   };
 
   if (!projectId) return paths;
@@ -522,6 +526,75 @@ export async function duplicateCentralProject(sourceProjectId, options, targetDi
     await writeJson(newPaths.projectPath, current);
     await writeFile(newPaths.manualPath, buildManual(current), 'utf-8');
     return current;
+  });
+}
+
+const COMMERCIAL_LOCK_ID = '__commercial__';
+const COMMERCIAL_BILLING_TYPES = new Set(['mensal', 'unica']);
+
+function uniqueCommercialCatalogItemId(name, existingItems = []) {
+  const base = normalizeProjectId(name);
+  const ids = new Set(existingItems.map((item) => item.id));
+  if (!ids.has(base)) return base;
+  let index = 2;
+  while (ids.has(`${base}-${index}`)) index += 1;
+  return `${base}-${index}`;
+}
+
+function normalizeCommercialCatalogItem(input, now = new Date(), existingItems = []) {
+  const name = String(input?.name || '').trim();
+  if (!name) throw new Error('Nome do item é obrigatório');
+  const category = String(input?.category || '').trim();
+  if (!category) throw new Error('Categoria é obrigatória');
+  const id = String(input?.id || uniqueCommercialCatalogItemId(name, existingItems)).trim();
+  const billingType = COMMERCIAL_BILLING_TYPES.has(input?.billingType) ? input.billingType : 'mensal';
+  const createdAt = input?.createdAt || now.toISOString();
+  return {
+    id,
+    category,
+    name,
+    description: String(input?.description || '').trim(),
+    whatWeDeliver: normalizeRuleList(input?.whatWeDeliver || []),
+    whatClientProvides: normalizeRuleList(input?.whatClientProvides || []),
+    billingType,
+    price: billingType === 'mensal' ? Math.max(0, Number(input?.price) || 0) : 0,
+    fullPrice: billingType === 'unica' ? Math.max(0, Number(input?.fullPrice) || 0) : 0,
+    discountedPrice: billingType === 'unica' ? Math.max(0, Number(input?.discountedPrice) || 0) : 0,
+    createdAt,
+    updatedAt: now.toISOString(),
+  };
+}
+
+export async function listCommercialCatalogItems(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readJson(paths.commercialCatalogPath, { items: [] });
+  return (store.items || []).map((item) =>
+    normalizeCommercialCatalogItem(item, new Date(item.updatedAt || item.createdAt || Date.now()), []),
+  );
+}
+
+export async function saveCommercialCatalogItem(input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const store = await readJson(paths.commercialCatalogPath, { items: [] });
+    const currentItems = (store.items || []).map((item) =>
+      normalizeCommercialCatalogItem(item, new Date(item.updatedAt || item.createdAt || Date.now()), []),
+    );
+    const item = normalizeCommercialCatalogItem(input, now, currentItems);
+    const byId = new Map(currentItems.map((entry) => [entry.id, entry]));
+    byId.set(item.id, item);
+    await writeJson(paths.commercialCatalogPath, { items: [...byId.values()] });
+    return item;
+  });
+}
+
+export async function deleteCommercialCatalogItem(id, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const store = await readJson(paths.commercialCatalogPath, { items: [] });
+    const remaining = (store.items || []).filter((item) => item.id !== id);
+    await writeJson(paths.commercialCatalogPath, { items: remaining });
+    return { id, deleted: true };
   });
 }
 

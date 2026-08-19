@@ -9,7 +9,10 @@ import {
   buildApprovalPayload,
   calculateTokenDaysRemaining,
   createCentralProject,
+  deleteCommercialCatalogItem,
   duplicateCentralProject,
+  listCommercialCatalogItems,
+  saveCommercialCatalogItem,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
   deleteAdCreative,
@@ -227,6 +230,71 @@ test('duplicateCentralProject rejects a missing source project', async () => {
       () => duplicateCentralProject('nao-existe', { projectId: 'novo', name: 'Novo' }, dir),
       /Project not found: nao-existe/,
     );
+  });
+});
+
+test('saveCommercialCatalogItem creates and updates catalog items, listCommercialCatalogItems returns them normalized', async () => {
+  await withTempProject(async (dir) => {
+    const created = await saveCommercialCatalogItem({
+      category: 'Criação de Conteúdo',
+      name: 'Profissional',
+      description: '3 artes por dia, 2 feed por semana.',
+      whatWeDeliver: ['3 artes/dia', '2 feed/semana'],
+      whatClientProvides: ['Fotos quando pedido'],
+      billingType: 'mensal',
+      price: 497,
+    }, dir);
+
+    assert.equal(created.id, 'profissional');
+    assert.equal(created.category, 'Criação de Conteúdo');
+    assert.equal(created.billingType, 'mensal');
+    assert.equal(created.price, 497);
+    assert.equal(created.fullPrice, 0);
+    assert.deepEqual(created.whatWeDeliver, ['3 artes/dia', '2 feed/semana']);
+
+    const setupFee = await saveCommercialCatalogItem({
+      category: 'Criação de Conteúdo',
+      name: 'Configuração inicial',
+      billingType: 'unica',
+      fullPrice: 250,
+      discountedPrice: 0,
+    }, dir);
+    assert.equal(setupFee.billingType, 'unica');
+    assert.equal(setupFee.fullPrice, 250);
+    assert.equal(setupFee.discountedPrice, 0);
+    assert.equal(setupFee.price, 0);
+
+    let items = await listCommercialCatalogItems(dir);
+    assert.equal(items.length, 2);
+    assert.deepEqual(items.map((item) => item.id).sort(), ['configuracao-inicial', 'profissional']);
+
+    const updated = await saveCommercialCatalogItem({ id: 'profissional', category: 'Criação de Conteúdo', name: 'Profissional', price: 597, billingType: 'mensal' }, dir);
+    assert.equal(updated.price, 597);
+
+    items = await listCommercialCatalogItems(dir);
+    assert.equal(items.length, 2, 'updating an existing id must not create a duplicate entry');
+    assert.equal(items.find((item) => item.id === 'profissional').price, 597);
+  });
+});
+
+test('saveCommercialCatalogItem rejects a missing name or category', async () => {
+  await withTempProject(async (dir) => {
+    await assert.rejects(() => saveCommercialCatalogItem({ category: 'X' }, dir), /Nome do item é obrigatório/);
+    await assert.rejects(() => saveCommercialCatalogItem({ name: 'X' }, dir), /Categoria é obrigatória/);
+  });
+});
+
+test('deleteCommercialCatalogItem removes only the targeted item', async () => {
+  await withTempProject(async (dir) => {
+    await saveCommercialCatalogItem({ category: 'Tráfego Pago', name: 'Básico', billingType: 'unica', fullPrice: 250, discountedPrice: 0 }, dir);
+    await saveCommercialCatalogItem({ category: 'Tráfego Pago', name: 'Avançado', billingType: 'unica', fullPrice: 400, discountedPrice: 0 }, dir);
+
+    const result = await deleteCommercialCatalogItem('basico', dir);
+    assert.deepEqual(result, { id: 'basico', deleted: true });
+
+    const items = await listCommercialCatalogItems(dir);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].id, 'avancado');
   });
 });
 
