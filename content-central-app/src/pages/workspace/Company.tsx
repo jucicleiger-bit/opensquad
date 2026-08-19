@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import {
@@ -148,6 +148,24 @@ export function Company() {
     const resolved = resolvedGoalWeights(bucketKeys);
     setForm((f) => ({ ...f, contentGoalWeights: { ...resolved, [key]: value } }));
   }
+
+  // resolvedGoalWeights trusts whatever is stored once every current bucket
+  // has a value — including an invalid sum, so Save can disable on it. But
+  // that means it can't tell "same buckets, user typed a bad sum" apart from
+  // "the bucket set itself just changed" (a goal was toggled on/off). Only
+  // the latter should force a fresh even split, per spec ("toggling a goal
+  // off... rebalances the remaining sum back to a valid default"). Track the
+  // previous bucket-key set and reset only when it actually changes.
+  const bucketKeysKey = activeGoalWeightBuckets().join(",");
+  const prevBucketKeysKeyRef = useRef(bucketKeysKey);
+  useEffect(() => {
+    if (bucketKeysKey === prevBucketKeysKeyRef.current) return;
+    prevBucketKeysKeyRef.current = bucketKeysKey;
+    if (!bucketKeysKey) return;
+    const bucketKeys = bucketKeysKey.split(",");
+    const defaults = evenSplit(bucketKeys.length);
+    setForm((f) => ({ ...f, contentGoalWeights: Object.fromEntries(bucketKeys.map((key, i) => [key, defaults[i]])) }));
+  }, [bucketKeysKey]);
 
   function toggleOfferSelected(index: number) {
     setSelectedOffers((prev) => {

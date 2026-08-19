@@ -354,6 +354,33 @@ describe("Company", () => {
     expect(JSON.parse(saveCall[1].body as string).contentGoalWeights).toEqual({ sales: 90, authority: 10 });
   });
 
+  it("rebalances the remaining weights to a fresh even split when a goal is toggled off", async () => {
+    stubFetchSequence([
+      { body: projectState({ contentStrategy: { offers: [{ id: "o1", name: "Produto", type: "offer", active: true }] } }) },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
+    await userEvent.click(screen.getByRole("button", { name: "Aumentar engajamento" }));
+
+    const vendaInput = (await screen.findByLabelText("Peso: Venda")) as HTMLInputElement;
+    const authorityInput = screen.getByLabelText("Peso: Gerar autoridade") as HTMLInputElement;
+    const engagementInput = screen.getByLabelText("Peso: Aumentar engajamento") as HTMLInputElement;
+
+    fireEvent.change(vendaInput, { target: { value: "40" } });
+    fireEvent.change(authorityInput, { target: { value: "30" } });
+    fireEvent.change(engagementInput, { target: { value: "30" } });
+    expect(screen.getByRole("button", { name: "Salvar e analisar minha marca" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Aumentar engajamento" }));
+
+    expect(screen.queryByLabelText("Peso: Aumentar engajamento")).not.toBeInTheDocument();
+    expect(vendaInput.value).toBe("50");
+    expect(authorityInput.value).toBe("50");
+    expect(screen.getByRole("button", { name: "Salvar e analisar minha marca" })).toBeEnabled();
+  });
+
   it("imports from pasted text when the site blocks automatic access (Cloudflare, etc.)", async () => {
     stubFetchSequence([
       { body: projectState() },
