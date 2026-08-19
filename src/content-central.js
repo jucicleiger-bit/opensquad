@@ -4686,26 +4686,33 @@ function avoidConsecutiveSalesPillars(sequence) {
 
 // Smooth weighted round-robin (the same scheme load balancers use to spread
 // weighted picks evenly instead of bursting the heaviest one at the end of
-// the sequence): each pillar accumulates its weight every round, the
-// highest accumulator gets picked and drops by the total weight. Keeps the
-// requested proportions while naturally minimizing back-to-back repeats of
-// the same pillar — this sequence is what the schedule generator walks
-// (via a persisted cursor) to decide which pillar each slot represents.
-function buildPillarRotationSequence(pillars) {
-  const totalWeight = pillars.reduce((sum, pillar) => sum + pillar.weight, 0);
+// the sequence): each item accumulates its weight every round, the highest
+// accumulator gets picked and drops by the total weight. Shared by Pilares'
+// rotation (below) and the Raio-X content-goal bucket rotation
+// (buildTopicPool) — same algorithm, different weight source.
+function smoothWeightedRotation(items, weightOf) {
+  const totalWeight = items.reduce((sum, item) => sum + weightOf(item), 0);
   if (!totalWeight) return [];
-  const currentWeights = pillars.map(() => 0);
+  const currentWeights = items.map(() => 0);
   const sequence = [];
   for (let round = 0; round < totalWeight; round += 1) {
     let bestIndex = 0;
-    for (let i = 0; i < pillars.length; i += 1) {
-      currentWeights[i] += pillars[i].weight;
+    for (let i = 0; i < items.length; i += 1) {
+      currentWeights[i] += weightOf(items[i]);
       if (currentWeights[i] > currentWeights[bestIndex]) bestIndex = i;
     }
-    sequence.push(pillars[bestIndex]);
+    sequence.push(items[bestIndex]);
     currentWeights[bestIndex] -= totalWeight;
   }
-  return avoidConsecutiveSalesPillars(sequence);
+  return sequence;
+}
+
+// Keeps the requested pillar proportions while naturally minimizing
+// back-to-back repeats of the same pillar — this sequence is what the
+// schedule generator walks (via a persisted cursor) to decide which pillar
+// each slot represents.
+function buildPillarRotationSequence(pillars) {
+  return avoidConsecutiveSalesPillars(smoothWeightedRotation(pillars, (pillar) => pillar.weight));
 }
 
 function pillarSnapshotFrom(pillar) {
