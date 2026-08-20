@@ -35,15 +35,20 @@ import {
   creativeShapeGroupForChannel,
   deleteCentralProject,
   deleteCommercialCatalogItem,
+  deleteCommercialPortfolioItem,
   deleteCommercialProposal,
   duplicateCentralProject,
   getCommercialAgency,
   getCommercialProposal,
   listCommercialCatalogItems,
+  listCommercialPortfolioItems,
+  listCommercialProcesses,
   listCommercialProposals,
   saveCommercialAgency,
   saveCommercialAgencyLogo,
   saveCommercialCatalogItem,
+  saveCommercialPortfolioItem,
+  saveCommercialProcess,
   saveCommercialProposal,
   deleteProjectContent,
   deleteProjectOffer,
@@ -574,6 +579,32 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (method === 'GET' && route.startsWith('/api/commercial/assets/')) {
     return sendCommercialAsset(res, targetDir, route.slice('/api/commercial/assets/'.length));
+  }
+
+  if (method === 'GET' && route === '/api/commercial/processes') {
+    return sendJson(res, 200, { processes: await listCommercialProcesses(targetDir) });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/processes') {
+    const body = await readBody(req);
+    const process_ = await saveCommercialProcess(body, targetDir);
+    return sendJson(res, 200, { process: process_ });
+  }
+
+  if (method === 'GET' && route === '/api/commercial/portfolio') {
+    return sendJson(res, 200, { items: await listCommercialPortfolioItems(targetDir) });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/portfolio') {
+    const body = await readBody(req);
+    const item = await saveCommercialPortfolioItem(body, targetDir);
+    return sendJson(res, 201, { item });
+  }
+
+  if (method === 'POST' && route.startsWith('/api/commercial/portfolio/') && route.endsWith('/delete')) {
+    const id = decodeURIComponent(route.slice('/api/commercial/portfolio/'.length, -'/delete'.length));
+    const result = await deleteCommercialPortfolioItem(id, targetDir);
+    return sendJson(res, 200, result);
   }
 
   if (method === 'GET' && route === '/api/commercial/proposals') {

@@ -1193,6 +1193,45 @@ test('commercial proposal routes: save, list, reopen, and delete a proposal thro
   });
 });
 
+test('commercial process routes: save and list a process text per category through the real endpoints', async () => {
+  await withServer(async (dir, server) => {
+    const { response: createResponse, body: created } = await request(server, '/api/commercial/processes', {
+      method: 'POST',
+      body: JSON.stringify({ category: 'Criação de Conteúdo', text: 'Cada peça sob medida.' }),
+    });
+    assert.equal(createResponse.status, 200);
+    assert.equal(created.process.category, 'Criação de Conteúdo');
+
+    const { body: listed } = await request(server, '/api/commercial/processes');
+    assert.equal(listed.processes.length, 1);
+    assert.equal(listed.processes[0].text, 'Cada peça sob medida.');
+  });
+});
+
+test('commercial portfolio routes: create, list, and delete an item through the real endpoints', async () => {
+  await withServer(async (dir, server) => {
+    const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const { response: createResponse, body: created } = await request(server, '/api/commercial/portfolio', {
+      method: 'POST',
+      body: JSON.stringify({ category: 'Criação de Conteúdo', caption: 'Post de lançamento', filename: 'arte.png', dataUrl: pngDataUrl }),
+    });
+    assert.equal(createResponse.status, 201);
+    assert.ok(created.item.id);
+
+    const assetResponse = await fetch(`${server.url}/api/commercial/assets/${created.item.imagePath}`);
+    assert.equal(assetResponse.status, 200);
+
+    const { body: listed } = await request(server, '/api/commercial/portfolio');
+    assert.equal(listed.items.length, 1);
+
+    const { body: deleted } = await request(server, `/api/commercial/portfolio/${created.item.id}/delete`, { method: 'POST' });
+    assert.deepEqual(deleted, { id: created.item.id, deleted: true });
+
+    const { body: listedAfter } = await request(server, '/api/commercial/portfolio');
+    assert.equal(listedAfter.items.length, 0);
+  });
+});
+
 test('GET prospect-mockup never fabricates a stat it does not have — shows "—" instead of 0 when the vision read came back empty, and never shows a broken-image avatar when no crop was saved', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
