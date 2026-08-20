@@ -118,6 +118,14 @@ export function ComercialPropostaImprimir() {
       });
     });
 
+  // Nothing is committed yet when every section is still "comparison" — no
+  // real total exists to show. A blank gold box reads as broken rather than
+  // "not decided yet", so fall back to the range of what's on the table.
+  const comparisonMonthlyPrices = proposal.sections
+    .filter((section) => section.mode === "comparison")
+    .flatMap((section) => section.items.filter((item) => item.billingType === "mensal").map((item) => item.price));
+  const comparisonFrom = comparisonMonthlyPrices.length ? Math.min(...comparisonMonthlyPrices) : null;
+
   const subtitle = [...new Set(proposal.sections.map((section) => categoryBenefit(section.category)))].join(" + ");
   const validUntil = new Date(new Date(proposal.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000);
   const cards = proposal.sections.flatMap((section) =>
@@ -241,7 +249,11 @@ export function ComercialPropostaImprimir() {
 
         <div className={styles.investment}>
           <span className={styles.investmentLabel}>Investimento mensal</span>
-          {totalMonthly > 0 ? <p className={styles.investmentTotal}>R$ {totalMonthly}<span className={styles.priceUnit}>/mês</span></p> : null}
+          {totalMonthly > 0 ? (
+            <p className={styles.investmentTotal}>R$ {totalMonthly}<span className={styles.priceUnit}>/mês</span></p>
+          ) : comparisonFrom !== null ? (
+            <p className={styles.investmentTotal}>A partir de R$ {comparisonFrom}<span className={styles.priceUnit}>/mês</span></p>
+          ) : null}
           {hasOneTime ? <p className={styles.discount}>Investimento em mídia paga: não incluso nesta taxa</p> : null}
           {totalDiscount > 0 ? <p className={styles.discount}>Desconto de adesão: <b>R$ {totalDiscount}</b></p> : null}
         </div>

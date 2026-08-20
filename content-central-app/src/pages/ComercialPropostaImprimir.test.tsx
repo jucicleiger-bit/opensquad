@@ -108,6 +108,44 @@ describe("ComercialPropostaImprimir", () => {
     expect(container.textContent).not.toContain("R$ 2191");
   });
 
+  it("shows 'a partir de' the lowest comparison price instead of a blank box when nothing is single-mode yet", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          proposal: {
+            id: "prop-1",
+            clientName: "Arthur Frios",
+            clientLogoDataUrl: null,
+            createdAt: "2026-08-19T12:00:00.000Z",
+            sections: [
+              {
+                category: "Criação de Conteúdo",
+                mode: "comparison",
+                items: [
+                  { catalogItemId: "essencial", name: "Essencial", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 297, fullPrice: 0, discountedPrice: 0 },
+                  { catalogItemId: "profissional", name: "Profissional", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 497, fullPrice: 0, discountedPrice: 0 },
+                  { catalogItemId: "atacado", name: "Atacado", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 897, fullPrice: 0, discountedPrice: 0 },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      { body: { agency: { name: "King", logoPath: "", contactPhone: "", contactInstagram: "", updatedAt: null } } },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/comercial/propostas/prop-1/imprimir"]}>
+        <Routes>
+          <Route path="/comercial/propostas/:id/imprimir" element={<ComercialPropostaImprimir />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Investimento mensal");
+    expect(screen.getByText("A partir de R$ 297", { exact: false })).toBeInTheDocument();
+  });
+
   it("calls window.print when the print button is clicked", async () => {
     const printSpy = vi.spyOn(window, "print").mockImplementation(() => {});
     stubFetchSequence([
