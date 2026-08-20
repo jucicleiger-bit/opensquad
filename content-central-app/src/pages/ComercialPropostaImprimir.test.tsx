@@ -51,6 +51,7 @@ describe("ComercialPropostaImprimir", () => {
     expect(await screen.findByText("King Assessoria de Mkt")).toBeInTheDocument();
     expect(screen.getByText("Arthur Frios")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Proposta Comercial" })).toBeInTheDocument();
+    expect(screen.getByText("Presença digital constante + crescimento real no Instagram")).toBeInTheDocument();
     expect(screen.getByText("Profissional")).toBeInTheDocument();
     expect(container.textContent).toContain("R$ 497");
     expect(container.textContent).toContain("/mês");

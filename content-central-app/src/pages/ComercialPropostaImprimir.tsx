@@ -61,6 +61,17 @@ function categoryIcon(category: string) {
   return IconContent;
 }
 
+// The subtitle reads as a promise ("presença digital") rather than a raw
+// category name ("Criação de Conteúdo") for the two categories this system
+// ships with today — any other category name falls back to itself, so a
+// custom category never renders blank or broken.
+function categoryBenefit(category: string) {
+  const key = category.toLowerCase();
+  if (key.includes("conteúdo") || key.includes("conteudo")) return "Presença digital constante";
+  if (key.includes("tráfego") || key.includes("trafego") || key.includes("anúncio") || key.includes("anuncio")) return "crescimento real no Instagram";
+  return category;
+}
+
 function IconBadge({ icon: Icon, size = 52 }: { icon: (props: SVGProps<SVGSVGElement>) => ReactNode; size?: number }) {
   return (
     <span className={styles.iconBadge} style={{ width: size, height: size }}>
@@ -101,7 +112,7 @@ export function ComercialPropostaImprimir() {
     });
   });
 
-  const categoryNames = proposal.sections.map((section) => section.category);
+  const subtitle = [...new Set(proposal.sections.map((section) => categoryBenefit(section.category)))].join(" + ");
   const validUntil = new Date(new Date(proposal.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000);
   const cards = proposal.sections.flatMap((section) =>
     section.items.map((item, index) => ({ item, category: section.category, key: `${section.category}-${index}` })),
@@ -146,7 +157,7 @@ export function ComercialPropostaImprimir() {
         </header>
 
         <h1 className={styles.title}>Proposta Comercial</h1>
-        <p className={styles.subtitle}>{categoryNames.join(" + ")}</p>
+        <p className={styles.subtitle}>{subtitle}</p>
         <p className={styles.intro}>
           Uma proposta pensada pra manter a {proposal.clientName} ativa e em crescimento nas redes sociais — sem
           complicação e sem letra miúda.
