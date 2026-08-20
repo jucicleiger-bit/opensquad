@@ -102,4 +102,24 @@ describe("ComercialCatalogo", () => {
     expect(confirmSpy).toHaveBeenCalled();
     expect(await screen.findByText("Catálogo vazio")).toBeInTheDocument();
   });
+
+  it("saves the per-category process text through the real endpoint", async () => {
+    stubFetchSequence([
+      { body: { items: [PROFISSIONAL_ITEM] } },
+      { body: { processes: [] } },
+      { body: { process: { category: "Criação de Conteúdo", text: "Cada peça sob medida." } } },
+    ]);
+    render(
+      <MemoryRouter>
+        <ComercialCatalogo />
+      </MemoryRouter>,
+    );
+    await screen.findByText("Profissional");
+    await userEvent.type(screen.getByLabelText("Como trabalhamos em Criação de Conteúdo"), "Cada peça sob medida.");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar processo" }));
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    expect(saveCall[0]).toBe("/api/commercial/processes");
+    expect(JSON.parse(saveCall[1].body as string)).toEqual({ category: "Criação de Conteúdo", text: "Cada peça sob medida." });
+  });
 });

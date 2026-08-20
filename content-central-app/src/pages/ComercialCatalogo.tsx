@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { deleteCommercialCatalogItem, listCommercialCatalog, saveCommercialCatalogItem, type CommercialCatalogItem } from "@/api/client";
+import { deleteCommercialCatalogItem, listCommercialCatalog, listCommercialProcesses, saveCommercialCatalogItem, saveCommercialProcess, type CommercialCatalogItem } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { ComercialTabs } from "@/components/ComercialTabs";
@@ -28,6 +28,9 @@ export function ComercialCatalogo() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [processes, setProcesses] = useState<Record<string, string>>({});
+  const [processDrafts, setProcessDrafts] = useState<Record<string, string>>({});
+  const [savingProcess, setSavingProcess] = useState<string | null>(null);
 
   function load() {
     listCommercialCatalog()
@@ -37,6 +40,18 @@ export function ComercialCatalogo() {
 
   useEffect(() => {
     load();
+  }, []);
+
+  useEffect(() => {
+    listCommercialProcesses()
+      .then((res) => {
+        const map: Record<string, string> = {};
+        res.processes.forEach((entry) => {
+          map[entry.category] = entry.text;
+        });
+        setProcesses(map);
+      })
+      .catch(() => {});
   }, []);
 
   function startCreate() {
@@ -102,6 +117,19 @@ export function ComercialCatalogo() {
       setError((err as Error).message);
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  async function saveProcess(category: string) {
+    const text = processDrafts[category] ?? processes[category] ?? "";
+    setSavingProcess(category);
+    try {
+      await saveCommercialProcess({ category, text });
+      setProcesses((current) => ({ ...current, [category]: text }));
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSavingProcess(null);
     }
   }
 
@@ -188,6 +216,18 @@ export function ComercialCatalogo() {
           {[...grouped.entries()].map(([category, categoryItems]) => (
             <div key={category}>
               <h2 className={styles.categoryTitle}>{category}</h2>
+              <Card style={{ padding: "var(--space-md)", marginBottom: "var(--space-sm)" }}>
+                <label htmlFor={`process-${category}`}>Como trabalhamos em {category}</label>
+                <textarea
+                  id={`process-${category}`}
+                  placeholder="Texto usado na Apresentação institucional pra essa categoria."
+                  value={processDrafts[category] ?? processes[category] ?? ""}
+                  onChange={(e) => setProcessDrafts((current) => ({ ...current, [category]: e.target.value }))}
+                />
+                <Button type="button" variant="secondary" disabled={savingProcess === category} onClick={() => saveProcess(category)}>
+                  {savingProcess === category ? "Salvando..." : "Salvar processo"}
+                </Button>
+              </Card>
               <div className={styles.grid}>
                 {categoryItems.map((item) => (
                   <Card key={item.id} style={{ padding: "var(--space-lg)" }}>
