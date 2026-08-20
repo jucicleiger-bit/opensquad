@@ -84,6 +84,54 @@ describe("ComercialPropostaNova", () => {
     expect(screen.getAllByLabelText("Nome")).toHaveLength(2);
   });
 
+  it("prefills from an existing proposal in edit mode and saves over the same id", async () => {
+    stubFetchSequence([
+      { body: { items: [ESSENCIAL, PROFISSIONAL] } },
+      {
+        body: {
+          proposal: {
+            id: "prop-1",
+            clientName: "Arthur Frios",
+            clientLogoDataUrl: null,
+            createdAt: "2026-08-19T00:00:00.000Z",
+            sections: [
+              {
+                category: "Criação de Conteúdo",
+                mode: "single",
+                items: [{ catalogItemId: "essencial", name: "Essencial", description: "Plano básico", whatWeDeliver: ["2 artes/dia"], whatClientProvides: [], billingType: "mensal", price: 297, fullPrice: 0, discountedPrice: 0 }],
+              },
+            ],
+          },
+        },
+      },
+      { body: { proposal: { id: "prop-1", clientName: "Arthur Frios", clientLogoDataUrl: null, sections: [], createdAt: "2026-08-19T00:00:00.000Z" } } },
+    ]);
+
+    render(
+      <MemoryRouter initialEntries={["/comercial/propostas/prop-1/editar"]}>
+        <Routes>
+          <Route path="/comercial/propostas/:id/editar" element={<ComercialPropostaNova />} />
+          <Route path="/comercial/propostas/:id" element={<div>Proposta atualizada</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Editar proposta" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Nome do cliente")).toHaveValue("Arthur Frios");
+    expect(screen.getByLabelText("O que incluir")).toHaveValue("single");
+    expect(screen.getByLabelText("Item")).toHaveValue("essencial");
+    expect(screen.getByLabelText("Nome")).toHaveValue("Essencial");
+
+    await userEvent.click(screen.getByRole("button", { name: "Salvar alterações" }));
+
+    expect(await screen.findByText("Proposta atualizada")).toBeInTheDocument();
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    expect(saveCall[0]).toBe("/api/commercial/proposals");
+    const sentBody = JSON.parse(saveCall[1].body as string);
+    expect(sentBody.id).toBe("prop-1");
+  });
+
   it("requires a client name and at least one included category before saving", async () => {
     stubFetch({ items: [ESSENCIAL] });
     render(

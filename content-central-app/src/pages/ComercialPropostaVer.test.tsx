@@ -44,6 +44,7 @@ describe("ComercialPropostaVer", () => {
     expect(screen.getByText("Profissional")).toBeInTheDocument();
     expect(screen.getByText("R$ 497/mês")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Imprimir / Baixar PDF" })).toHaveAttribute("href", "/comercial/propostas/prop-1/imprimir");
+    expect(screen.getByRole("link", { name: "Editar" })).toHaveAttribute("href", "/comercial/propostas/prop-1/editar");
   });
 
   it("deletes the proposal through the real endpoint after confirmation and navigates back to the list", async () => {

@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   fileToDataUrl,
+  getCommercialProposal,
   listCommercialCatalog,
   saveCommercialProposal,
   type CommercialCatalogItem,
@@ -31,6 +32,8 @@ function toProposalItem(item: CommercialCatalogItem): CommercialProposalItem {
 
 export function ComercialPropostaNova() {
   const navigate = useNavigate();
+  const { id: editId } = useParams<{ id?: string }>();
+  const isEditing = Boolean(editId);
   const [catalog, setCatalog] = useState<CommercialCatalogItem[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [clientName, setClientName] = useState("");
@@ -42,10 +45,29 @@ export function ComercialPropostaNova() {
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    listCommercialCatalog()
-      .then((res) => setCatalog(res.items))
+    Promise.all([listCommercialCatalog(), editId ? getCommercialProposal(editId) : Promise.resolve(null)])
+      .then(([catalogRes, proposalRes]) => {
+        setCatalog(catalogRes.items);
+        if (!proposalRes) return;
+        const proposal = proposalRes.proposal;
+        setClientName(proposal.clientName);
+        setClientLogoDataUrl(proposal.clientLogoDataUrl);
+        const modes: Record<string, Mode> = {};
+        const singleIds: Record<string, string> = {};
+        const items: Record<string, CommercialProposalItem[]> = {};
+        proposal.sections.forEach((section) => {
+          modes[section.category] = section.mode;
+          items[section.category] = section.items;
+          if (section.mode === "single" && section.items[0]?.catalogItemId) {
+            singleIds[section.category] = section.items[0].catalogItemId;
+          }
+        });
+        setCategoryModes(modes);
+        setCategorySingleId(singleIds);
+        setSectionItems(items);
+      })
       .catch((err: Error) => setLoadError(err.message));
-  }, []);
+  }, [editId]);
 
   const categories = useMemo(() => {
     const seen: string[] = [];
@@ -112,7 +134,7 @@ export function ComercialPropostaNova() {
     setSaving(true);
     setSaveError(null);
     try {
-      const res = await saveCommercialProposal({ clientName, clientLogoDataUrl, sections });
+      const res = await saveCommercialProposal({ id: editId, clientName, clientLogoDataUrl, sections });
       navigate(`/comercial/propostas/${res.proposal.id}`);
     } catch (err) {
       setSaveError((err as Error).message);
@@ -126,7 +148,7 @@ export function ComercialPropostaNova() {
       <ComercialTabs />
       <div className="page-head">
         <div>
-          <h1>Nova proposta</h1>
+          <h1>{isEditing ? "Editar proposta" : "Nova proposta"}</h1>
           <p>Escolha o que entra pra esse cliente — comparação de planos, item fechado, ou os dois combinados.</p>
         </div>
       </div>
@@ -206,7 +228,7 @@ export function ComercialPropostaNova() {
         })}
 
         <Button type="submit" className="full-width" disabled={saving || !categories.length}>
-          {saving ? "Salvando..." : "Salvar proposta"}
+          {saving ? "Salvando..." : isEditing ? "Salvar alterações" : "Salvar proposta"}
         </Button>
         {saveError ? <div className="pill bad">{saveError}</div> : null}
       </form>

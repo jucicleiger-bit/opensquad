@@ -35,6 +35,7 @@ export function App() {
         <Route path="/comercial/agencia" element={<ComercialAgencia />} />
         <Route path="/comercial/propostas" element={<ComercialPropostas />} />
         <Route path="/comercial/propostas/nova" element={<ComercialPropostaNova />} />
+        <Route path="/comercial/propostas/:id/editar" element={<ComercialPropostaNova />} />
         <Route path="/comercial/propostas/:id" element={<ComercialPropostaVer />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspaceLayout />}>
           <Route index element={<Navigate to="visao-geral" replace />} />
