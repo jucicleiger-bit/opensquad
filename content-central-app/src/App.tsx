@@ -15,6 +15,7 @@ import { Calendar } from "@/pages/workspace/Calendar";
 import { Account } from "@/pages/workspace/Account";
 import { AprendizadoSegmento } from "@/pages/AprendizadoSegmento";
 import { AprendizadoTipoOferta } from "@/pages/AprendizadoTipoOferta";
+import { ComercialCatalogo } from "@/pages/ComercialCatalogo";
 
 export function App() {
   return (
@@ -23,6 +24,8 @@ export function App() {
         <Route path="/" element={<Dashboard />} />
         <Route path="/aprendizado-segmento" element={<AprendizadoSegmento />} />
         <Route path="/aprendizado-tipo-oferta" element={<AprendizadoTipoOferta />} />
+        <Route path="/comercial" element={<Navigate to="/comercial/catalogo" replace />} />
+        <Route path="/comercial/catalogo" element={<ComercialCatalogo />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspaceLayout />}>
           <Route index element={<Navigate to="visao-geral" replace />} />
           <Route path="visao-geral" element={<Overview />} />

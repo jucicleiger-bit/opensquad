@@ -270,6 +270,11 @@ export function Dashboard() {
               Aprendizado por tipo de oferta
             </Button>
           </Link>
+          <Link to="/comercial">
+            <Button type="button" variant="secondary">
+              Comercial
+            </Button>
+          </Link>
           <Button variant={showCreateForm ? "secondary" : "primary"} onClick={() => setShowCreateForm((v) => !v)}>
             {showCreateForm ? "Cancelar" : "+ Novo projeto"}
           </Button>
