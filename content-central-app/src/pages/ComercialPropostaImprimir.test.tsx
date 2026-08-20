@@ -50,12 +50,11 @@ describe("ComercialPropostaImprimir", () => {
 
     expect(await screen.findByText("King Assessoria de Mkt")).toBeInTheDocument();
     expect(screen.getByText("Arthur Frios")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Proposta para Arthur Frios" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Proposta Comercial" })).toBeInTheDocument();
     expect(screen.getByText("Profissional")).toBeInTheDocument();
     expect(container.textContent).toContain("R$ 497");
     expect(container.textContent).toContain("/mês");
-    expect(screen.getByText("Investimento")).toBeInTheDocument();
-    expect(container.textContent).toContain("R$ 497");
+    expect(screen.getByText("Investimento mensal")).toBeInTheDocument();
     expect(screen.getByText("Desconto de adesão:")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Por que a King Assessoria de Mkt/ })).toBeInTheDocument();
   });
