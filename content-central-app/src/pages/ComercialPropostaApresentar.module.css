@@ -47,3 +47,212 @@
   margin-top: 4px;
   text-align: center;
 }
+
+.printSection {
+  margin-bottom: 40px;
+}
+
+.printSection:last-child {
+  margin-bottom: 0;
+}
+
+@media print {
+  .printSection {
+    break-after: page;
+    margin-bottom: 0;
+  }
+
+  .printSection:last-child {
+    break-after: auto;
+  }
+}
+
+.cover {
+  min-height: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.coverBrand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.coverLogo {
+  height: 64px;
+  width: 64px;
+  object-fit: contain;
+  border-radius: 14px;
+}
+
+.coverName {
+  font-family: "Playfair Display", serif;
+  font-weight: 800;
+  font-size: 34px;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.coverTagline {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gold-text);
+  margin: 0 0 4px;
+}
+
+.coverServices {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+  margin: 0 0 40px;
+}
+
+.coverFooter {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.coverFooterLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--gold-text);
+}
+
+.coverClientName {
+  font-family: "Playfair Display", serif;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.pageTitle {
+  font-family: "Playfair Display", serif;
+  font-size: 24px;
+  font-weight: 800;
+  margin: 0 0 8px;
+  letter-spacing: -0.01em;
+}
+
+.pageIntro {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 65ch;
+  margin: 0 0 22px;
+}
+
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.miniCard {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.miniCardTitle {
+  font-family: "Playfair Display", serif;
+  font-size: 15px;
+  font-weight: 700;
+  margin: 8px 0 4px;
+}
+
+.miniCardText {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  margin: 0;
+}
+
+.flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.flowStep {
+  flex: 1 1 150px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
+
+.flowNumber {
+  font-family: "Playfair Display", serif;
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--gold-text);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.flowTitle {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 4px;
+}
+
+.flowText {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  margin: 0;
+}
+
+.flowArrow {
+  display: flex;
+  align-items: center;
+  color: var(--gold-text);
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.note {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: -8px 0 22px;
+}
+
+.divider {
+  min-height: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.dividerTitle {
+  font-family: "Playfair Display", serif;
+  font-size: 26px;
+  font-weight: 800;
+  max-width: 32ch;
+  margin: 0 0 10px;
+}
+
+.dividerText {
+  font-size: 14px;
+  color: var(--muted);
+  max-width: 40ch;
+  margin: 0;
+}
