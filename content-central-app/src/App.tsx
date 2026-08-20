@@ -17,6 +17,7 @@ import { AprendizadoSegmento } from "@/pages/AprendizadoSegmento";
 import { AprendizadoTipoOferta } from "@/pages/AprendizadoTipoOferta";
 import { ComercialAgencia } from "@/pages/ComercialAgencia";
 import { ComercialCatalogo } from "@/pages/ComercialCatalogo";
+import { ComercialPropostaImprimir } from "@/pages/ComercialPropostaImprimir";
 import { ComercialPropostaNova } from "@/pages/ComercialPropostaNova";
 import { ComercialPropostaVer } from "@/pages/ComercialPropostaVer";
 import { ComercialPropostas } from "@/pages/ComercialPropostas";
@@ -24,6 +25,7 @@ import { ComercialPropostas } from "@/pages/ComercialPropostas";
 export function App() {
   return (
     <Routes>
+      <Route path="/comercial/propostas/:id/imprimir" element={<ComercialPropostaImprimir />} />
       <Route element={<RootLayout />}>
         <Route path="/" element={<Dashboard />} />
         <Route path="/aprendizado-segmento" element={<AprendizadoSegmento />} />
