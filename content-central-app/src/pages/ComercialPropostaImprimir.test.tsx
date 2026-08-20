@@ -40,7 +40,7 @@ describe("ComercialPropostaImprimir", () => {
       { body: { agency: { name: "King Assessoria de Mkt", logoPath: "logo.png", contactPhone: "(65) 99999-0000", contactInstagram: "@king", updatedAt: null } } },
     ]);
 
-    render(
+    const { container } = render(
       <MemoryRouter initialEntries={["/comercial/propostas/prop-1/imprimir"]}>
         <Routes>
           <Route path="/comercial/propostas/:id/imprimir" element={<ComercialPropostaImprimir />} />
@@ -50,10 +50,14 @@ describe("ComercialPropostaImprimir", () => {
 
     expect(await screen.findByText("King Assessoria de Mkt")).toBeInTheDocument();
     expect(screen.getByText("Arthur Frios")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Proposta para Arthur Frios" })).toBeInTheDocument();
     expect(screen.getByText("Profissional")).toBeInTheDocument();
-    expect(screen.getByText("R$ 497/mês")).toBeInTheDocument();
-    expect(screen.getByText("Total mensal:")).toBeInTheDocument();
+    expect(container.textContent).toContain("R$ 497");
+    expect(container.textContent).toContain("/mês");
+    expect(screen.getByText("Investimento")).toBeInTheDocument();
+    expect(container.textContent).toContain("R$ 497");
     expect(screen.getByText("Desconto de adesão:")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Por que a King Assessoria de Mkt/ })).toBeInTheDocument();
   });
 
   it("calls window.print when the print button is clicked", async () => {

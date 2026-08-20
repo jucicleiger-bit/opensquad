@@ -48,7 +48,13 @@ export function ComercialPropostaImprimir() {
         </div>
       </header>
 
-      <h1 className={styles.title}>Proposta comercial</h1>
+      <h1 className={styles.title}>Proposta para {proposal.clientName}</h1>
+      <p className={styles.intro}>
+        Preparamos essa proposta pensando no que faz diferença no dia a dia da {proposal.clientName}
+        {": "}
+        {proposal.sections.map((section) => section.category.toLowerCase()).join(" e ")}, sem complicação e sem letra
+        miúda. Dá uma olhada no que a gente entrega em cada parte.
+      </p>
 
       {proposal.sections.map((section) => (
         <section key={section.category} className={styles.section}>
@@ -56,26 +62,28 @@ export function ComercialPropostaImprimir() {
           <div className={section.mode === "comparison" ? styles.comparisonGrid : styles.singleGrid}>
             {section.items.map((item, index) => (
               <article key={index} className={styles.plan}>
-                <h3>{item.name}</h3>
-                {item.description ? <p className={styles.description}>{item.description}</p> : null}
-                {item.whatWeDeliver.length ? (
-                  <ul className={styles.list}>
-                    {item.whatWeDeliver.map((line, i) => <li key={i}>{line}</li>)}
-                  </ul>
-                ) : null}
-                {item.whatClientProvides.length ? (
-                  <div className={styles.dependsOn}>
-                    <b>Depende de você:</b>
+                <div className={styles.planBody}>
+                  <h3>{item.name}</h3>
+                  {item.description ? <p className={styles.description}>{item.description}</p> : null}
+                  {item.whatWeDeliver.length ? (
                     <ul className={styles.list}>
-                      {item.whatClientProvides.map((line, i) => <li key={i}>{line}</li>)}
+                      {item.whatWeDeliver.map((line, i) => <li key={i}>{line}</li>)}
                     </ul>
-                  </div>
-                ) : null}
+                  ) : null}
+                  {item.whatClientProvides.length ? (
+                    <div className={styles.dependsOn}>
+                      <b>Depende de você:</b>
+                      <ul className={styles.list}>
+                        {item.whatClientProvides.map((line, i) => <li key={i}>{line}</li>)}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
                 <p className={styles.price}>
                   {item.billingType === "mensal" ? (
-                    `R$ ${item.price}/mês`
+                    <>R$ {item.price}<span className={styles.priceUnit}>/mês</span></>
                   ) : item.discountedPrice < item.fullPrice ? (
-                    <>De <s>R$ {item.fullPrice}</s> por <b>R$ {item.discountedPrice}</b></>
+                    <>De <s>R$ {item.fullPrice}</s> por R$ {item.discountedPrice}</>
                   ) : (
                     `R$ ${item.fullPrice}`
                   )}
@@ -86,10 +94,24 @@ export function ComercialPropostaImprimir() {
         </section>
       ))}
 
-      <footer className={styles.summary}>
-        {totalMonthly > 0 ? <p>Total mensal: <b>R$ {totalMonthly}</b></p> : null}
+      <section className={styles.why}>
+        <h2 className={styles.sectionTitle}>Por que a {agency.name}</h2>
+        <ul className={styles.whyList}>
+          <li>Conteúdo novo todo santo dia, sem você precisar lembrar de postar</li>
+          <li>Criativos feitos com IA e revisão antes de qualquer coisa ir pro ar</li>
+          <li>Você acompanha tudo, sem depender de reunião pra saber o que tá rolando</li>
+        </ul>
+      </section>
+
+      <div className={styles.investment}>
+        <span className={styles.investmentLabel}>Investimento</span>
+        {totalMonthly > 0 ? <p className={styles.investmentTotal}>R$ {totalMonthly}<span className={styles.priceUnit}>/mês</span></p> : null}
         {totalDiscount > 0 ? <p className={styles.discount}>Desconto de adesão: <b>R$ {totalDiscount}</b></p> : null}
-        <p className={styles.contact}>{agency.contactPhone} {agency.contactInstagram}</p>
+      </div>
+
+      <footer className={styles.summary}>
+        <p className={styles.cta}>Vamos começar?</p>
+        <p className={styles.contact}>{agency.contactPhone} · {agency.contactInstagram}</p>
       </footer>
     </div>
   );
