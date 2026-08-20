@@ -1,0 +1,13 @@
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 24px 60px;
+}
+
+.itemCard {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: var(--space-md);
+  margin-top: var(--space-sm);
+  background: rgba(255, 255, 255, 0.02);
+}
