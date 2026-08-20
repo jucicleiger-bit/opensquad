@@ -604,6 +604,7 @@ function normalizeCommercialAgency(input = {}) {
     logoPath: input?.logoPath ? String(input.logoPath).trim() : '',
     contactPhone: String(input?.contactPhone || '').trim(),
     contactInstagram: String(input?.contactInstagram || '').trim(),
+    about: String(input?.about || '').trim(),
     updatedAt: input?.updatedAt || null,
   };
 }

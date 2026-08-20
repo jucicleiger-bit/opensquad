@@ -308,10 +308,11 @@ test('deleteCommercialCatalogItem removes only the targeted item', async () => {
 test('saveCommercialAgency stores name/contact, saveCommercialAgencyLogo stores the file and never gets wiped by a later saveCommercialAgency call', async () => {
   await withTempProject(async (dir) => {
     let agency = await getCommercialAgency(dir);
-    assert.deepEqual(agency, { name: '', logoPath: '', contactPhone: '', contactInstagram: '', updatedAt: null });
+    assert.deepEqual(agency, { name: '', logoPath: '', contactPhone: '', contactInstagram: '', about: '', updatedAt: null });
 
-    agency = await saveCommercialAgency({ name: 'King Assessoria de Mkt', contactPhone: '(65) 99999-0000', contactInstagram: '@kingassessoria' }, dir);
+    agency = await saveCommercialAgency({ name: 'King Assessoria de Mkt', contactPhone: '(65) 99999-0000', contactInstagram: '@kingassessoria', about: 'Agência de marketing digital.' }, dir);
     assert.equal(agency.name, 'King Assessoria de Mkt');
+    assert.equal(agency.about, 'Agência de marketing digital.');
     assert.equal(agency.logoPath, '');
 
     const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
