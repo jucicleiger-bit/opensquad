@@ -55,17 +55,6 @@ function IconCheck(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function IconCrown(props: SVGProps<SVGSVGElement>) {
-  return (
-    <svg viewBox="0 0 24 16" fill="currentColor" {...props}>
-      <path d="M2 14.5h20l1.4-9-5.4 4-6-7-6 7-5.4-4z" />
-      <circle cx="2" cy="4" r="1.6" />
-      <circle cx="12" cy="1.6" r="1.6" />
-      <circle cx="22" cy="4" r="1.6" />
-    </svg>
-  );
-}
-
 function categoryIcon(category: string) {
   const key = category.toLowerCase();
   if (key.includes("tráfego") || key.includes("trafego") || key.includes("anúncio") || key.includes("anuncio")) return IconTarget;
@@ -114,10 +103,30 @@ export function ComercialPropostaImprimir() {
 
   const categoryNames = proposal.sections.map((section) => section.category);
   const validUntil = new Date(new Date(proposal.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000);
+  const cards = proposal.sections.flatMap((section) =>
+    section.items.map((item, index) => ({ item, category: section.category, key: `${section.category}-${index}` })),
+  );
 
   return (
     <div className={styles.page}>
-      <button type="button" className={styles.printButton} onClick={() => window.print()}>
+      <button
+        type="button"
+        className={styles.printButton}
+        onClick={() => {
+          // Playfair Display loads async (via @import) — printing before it
+          // swaps in captures the fallback font on whatever text happened
+          // to lay out first. document.fonts.ready resolves once every
+          // requested face has finished loading, so the print always fires
+          // after the swap instead of racing it. Falls back to an
+          // immediate print where the Font Loading API isn't available
+          // (older browsers, and jsdom in tests).
+          if (document.fonts?.ready) {
+            document.fonts.ready.then(() => window.print()).catch(() => window.print());
+          } else {
+            window.print();
+          }
+        }}
+      >
         Imprimir / Salvar como PDF
       </button>
 
@@ -146,68 +155,63 @@ export function ComercialPropostaImprimir() {
         <div className={styles.sectionLabel}>
           <span />
           <b>Solução proposta</b>
-          <IconCrown className={styles.sectionLabelMark} />
           <span />
         </div>
 
-        {proposal.sections.map((section) => {
-          const Icon = categoryIcon(section.category);
-          return (
-            <section key={section.category} className={styles.section}>
-              <div className={section.mode === "comparison" ? styles.comparisonGrid : styles.singleGrid}>
-                {section.items.map((item, index) => (
-                  <article key={index} className={styles.plan}>
-                    <div className={styles.planBody}>
-                      <IconBadge icon={Icon} />
-                      <p className={styles.planCategory}>{section.category}</p>
-                      <h3 className={styles.planName}>{item.name}</h3>
-                      {item.description ? <p className={styles.description}>{item.description}</p> : null}
-                      {item.whatWeDeliver.length ? (
-                        <ul className={styles.list}>
-                          {item.whatWeDeliver.map((line, i) => (
-                            <li key={i}>
-                              <IconCheck className={styles.checkMark} />
-                              {line}
-                            </li>
-                          ))}
+        <div className={styles.grid}>
+          {cards.map(({ item, category, key }) => {
+            const Icon = categoryIcon(category);
+            return (
+              <article key={key} className={styles.plan}>
+                <div className={styles.planBody}>
+                  <IconBadge icon={Icon} />
+                  <p className={styles.planCategory}>{category}</p>
+                  <h3 className={styles.planName}>{item.name}</h3>
+                  {item.description ? <p className={styles.description}>{item.description}</p> : null}
+                  {item.whatWeDeliver.length ? (
+                    <ul className={styles.list}>
+                      {item.whatWeDeliver.map((line, i) => (
+                        <li key={i}>
+                          <IconCheck className={styles.checkMark} />
+                          {line}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {item.whatClientProvides.length ? (
+                    <div className={styles.dependsOn}>
+                      <IconCamera className={styles.dependsOnIcon} />
+                      <div>
+                        <b>Para a produção</b>
+                        <ul className={styles.dependsOnList}>
+                          {item.whatClientProvides.map((line, i) => <li key={i}>{line}</li>)}
                         </ul>
-                      ) : null}
-                      {item.whatClientProvides.length ? (
-                        <div className={styles.dependsOn}>
-                          <IconCamera className={styles.dependsOnIcon} />
-                          <div>
-                            <b>Para a produção</b>
-                            <ul className={styles.dependsOnList}>
-                              {item.whatClientProvides.map((line, i) => <li key={i}>{line}</li>)}
-                            </ul>
-                          </div>
-                        </div>
-                      ) : null}
-                      {item.billingType === "unica" ? (
-                        <div className={styles.dependsOn}>
-                          <IconCoins className={styles.dependsOnIcon} />
-                          <div>
-                            <b>Investimento em mídia não incluso</b>
-                            <p className={styles.dependsOnNote}>A verba dos anúncios é paga diretamente à Meta.</p>
-                          </div>
-                        </div>
-                      ) : null}
+                      </div>
                     </div>
-                    <p className={styles.price}>
-                      {item.billingType === "mensal" ? (
-                        <>R$ {item.price}<span className={styles.priceUnit}>/mês</span></>
-                      ) : item.discountedPrice < item.fullPrice ? (
-                        <>De <s>R$ {item.fullPrice}</s> por R$ {item.discountedPrice}</>
-                      ) : (
-                        `R$ ${item.fullPrice}`
-                      )}
-                    </p>
-                  </article>
-                ))}
-              </div>
-            </section>
-          );
-        })}
+                  ) : null}
+                  {item.billingType === "unica" ? (
+                    <div className={styles.dependsOn}>
+                      <IconCoins className={styles.dependsOnIcon} />
+                      <div>
+                        <b>Investimento em mídia não incluso</b>
+                        <p className={styles.dependsOnNote}>A verba dos anúncios é paga diretamente à Meta.</p>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+                <p className={styles.price}>
+                  {item.billingType === "mensal" ? (
+                    <>R$ {item.price}<span className={styles.priceUnit}>/mês</span></>
+                  ) : item.discountedPrice < item.fullPrice ? (
+                    <>De <s>R$ {item.fullPrice}</s> por R$ {item.discountedPrice}</>
+                  ) : (
+                    `R$ ${item.fullPrice}`
+                  )}
+                </p>
+              </article>
+            );
+          })}
+        </div>
 
         <section className={styles.why}>
           <h2 className={styles.whyTitle}>Por que a {agency.name}</h2>
@@ -246,7 +250,6 @@ export function ComercialPropostaImprimir() {
         </div>
 
         <div className={styles.pageFooter}>
-          <IconCrown className={styles.pageFooterMark} />
           <span>Proposta Comercial · {agency.name}</span>
         </div>
       </div>

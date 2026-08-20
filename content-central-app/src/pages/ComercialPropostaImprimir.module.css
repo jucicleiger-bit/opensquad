@@ -35,7 +35,7 @@
 .sheet {
   max-width: 780px;
   margin: 0 auto;
-  padding: 44px 48px 36px;
+  padding: 32px 36px 24px;
   background: var(--paper);
   border: 1px solid var(--line);
   box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.35);
@@ -46,9 +46,9 @@
   justify-content: space-between;
   align-items: flex-start;
   gap: 20px;
-  padding-bottom: 20px;
+  padding-bottom: 14px;
   border-bottom: 2px solid var(--gold);
-  margin-bottom: 28px;
+  margin-bottom: 18px;
 }
 
 .brand {
@@ -105,25 +105,25 @@
 
 .title {
   font-family: "Playfair Display", serif;
-  font-size: 34px;
+  font-size: 30px;
   font-weight: 800;
   margin: 0 0 4px;
   letter-spacing: -0.02em;
 }
 
 .subtitle {
-  font-size: 16px;
+  font-size: 14.5px;
   font-weight: 700;
   color: var(--gold-text);
-  margin: 0 0 14px;
+  margin: 0 0 10px;
 }
 
 .intro {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13.5px;
+  line-height: 1.55;
   color: var(--muted);
   max-width: 60ch;
-  margin: 0 0 28px;
+  margin: 0 0 16px;
 }
 
 .sectionLabel {
@@ -131,7 +131,7 @@
   align-items: center;
   gap: 12px;
   justify-content: center;
-  margin: 0 0 18px;
+  margin: 0 0 12px;
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
@@ -145,25 +145,11 @@
   background: var(--gold);
 }
 
-.sectionLabelMark {
-  width: 18px;
-  height: 12px;
-  color: var(--gold);
-}
-
-.section {
-  margin-bottom: 22px;
-}
-
-.comparisonGrid {
+.grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 14px;
-}
-
-.singleGrid {
-  display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
 }
 
 .plan {
@@ -171,7 +157,7 @@
   flex-direction: column;
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 18px;
+  padding: 14px 16px;
   break-inside: avoid;
 }
 
@@ -186,7 +172,7 @@
   border-radius: 50%;
   background: var(--ink);
   color: var(--gold);
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .planCategory {
@@ -200,36 +186,36 @@
 
 .planName {
   font-family: "Playfair Display", serif;
-  margin: 0 0 8px;
-  font-size: 19px;
+  margin: 0 0 6px;
+  font-size: 17px;
   font-weight: 700;
 }
 
 .description {
   color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-  margin: 0 0 12px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  margin: 0 0 8px;
 }
 
 .list {
   list-style: none;
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   padding: 0;
-  font-size: 13px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.4;
 }
 
 .list li {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 6px;
+  gap: 7px;
+  margin-bottom: 4px;
 }
 
 .checkMark {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--ink);
@@ -238,12 +224,12 @@
 .dependsOn {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: 11.5px;
   background: #f7f4ea;
   border-radius: 10px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
 }
 
 .dependsOnIcon {
@@ -266,68 +252,68 @@
 }
 
 .price {
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 700;
   color: var(--muted);
-  margin: 8px 0 0;
-  padding-top: 10px;
+  margin: 6px 0 0;
+  padding-top: 8px;
   border-top: 1px solid var(--line);
 }
 
 .priceUnit {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
 .why {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
 }
 
 .whyTitle {
   font-family: "Playfair Display", serif;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 700;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
 }
 
 .whyList {
   list-style: none;
   margin: 0;
   padding: 0;
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: 12.5px;
+  line-height: 1.35;
   color: var(--ink);
 }
 
 .whyList li {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 7px;
+  margin-bottom: 5px;
 }
 
 .investment {
   background: linear-gradient(180deg, #fff7d9 0%, #fdf1c4 100%);
   border: 1px solid var(--gold);
   border-radius: 16px;
-  padding: 20px 24px;
+  padding: 14px 20px;
   text-align: center;
-  margin-bottom: 22px;
+  margin-bottom: 16px;
 }
 
 .investmentLabel {
   display: block;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--gold-text);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .investmentTotal {
   font-family: "Playfair Display", serif;
-  font-size: 40px;
+  font-size: 32px;
   font-weight: 800;
   color: var(--ink);
   margin: 0;
@@ -335,8 +321,8 @@
 
 .discount {
   color: var(--muted);
-  font-size: 12px;
-  margin: 6px 0 0;
+  font-size: 11.5px;
+  margin: 4px 0 0;
 }
 
 .discount b {
@@ -349,10 +335,10 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--ink);
-  margin-bottom: 22px;
+  margin-bottom: 16px;
 }
 
 .stepArrow {
@@ -362,20 +348,20 @@
 
 .summary {
   text-align: center;
-  padding-top: 4px;
-  margin-bottom: 20px;
+  padding-top: 2px;
+  margin-bottom: 12px;
 }
 
 .cta {
   font-family: "Playfair Display", serif;
-  font-size: 21px;
+  font-size: 19px;
   font-weight: 700;
-  margin: 0 0 6px;
+  margin: 0 0 4px;
 }
 
 .contact {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12.5px;
   margin: 0;
 }
 
@@ -384,29 +370,20 @@
   flex-wrap: wrap;
   justify-content: center;
   gap: 4px 14px;
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--muted);
   border-top: 1px solid var(--line);
-  padding-top: 12px;
-  margin-bottom: 14px;
+  padding-top: 10px;
+  margin-bottom: 10px;
 }
 
 .pageFooter {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  font-size: 10px;
+  text-align: center;
+  font-size: 9.5px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--gold-text);
-}
-
-.pageFooterMark {
-  width: 14px;
-  height: 9px;
-  color: var(--gold);
 }
 
 .error {
