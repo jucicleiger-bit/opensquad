@@ -46,6 +46,9 @@ export function ComercialPropostaVer() {
           <Link to={`/comercial/propostas/${proposal.id}/imprimir`} target="_blank" rel="noreferrer">
             <Button type="button">Imprimir / Baixar PDF</Button>
           </Link>
+          <Link to={`/comercial/propostas/${proposal.id}/apresentar`} target="_blank" rel="noreferrer">
+            <Button type="button" variant="secondary">Apresentar</Button>
+          </Link>
           <Link to={`/comercial/propostas/${proposal.id}/editar`}>
             <Button type="button" variant="secondary">Editar</Button>
           </Link>

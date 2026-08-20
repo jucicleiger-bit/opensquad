@@ -1,0 +1,49 @@
+.about {
+  margin-bottom: 24px;
+}
+
+.aboutText {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 65ch;
+  margin: 0;
+}
+
+.categorySection {
+  margin-bottom: 28px;
+}
+
+.processText {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+  max-width: 65ch;
+  margin: 0 0 14px;
+}
+
+.portfolioGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.portfolioItem {
+  margin: 0;
+  break-inside: avoid;
+}
+
+.portfolioItem img {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  aspect-ratio: 4 / 5;
+}
+
+.portfolioItem figcaption {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+  text-align: center;
+}
