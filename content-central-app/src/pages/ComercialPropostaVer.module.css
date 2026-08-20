@@ -1,0 +1,18 @@
+.wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 28px 24px 60px;
+}
+
+.itemsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-md);
+  margin-top: var(--space-sm);
+}
+
+.itemCard {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: var(--space-sm);
+}
