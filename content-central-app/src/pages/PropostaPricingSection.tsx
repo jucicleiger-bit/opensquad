@@ -5,7 +5,7 @@ import styles from "./ComercialPropostaImprimir.module.css";
 // Simple geometric line icons, authored once and reused everywhere an icon
 // is needed — matches the King mark's own black-circle/gold-glyph treatment
 // instead of standing in with emoji or a mismatched icon font.
-function IconContent(props: SVGProps<SVGSVGElement>) {
+export function IconContent(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <rect x="3.5" y="5" width="17" height="14" rx="2.2" />
@@ -15,7 +15,7 @@ function IconContent(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function IconTarget(props: SVGProps<SVGSVGElement>) {
+export function IconTarget(props: SVGProps<SVGSVGElement>) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" {...props}>
       <circle cx="12" cy="12" r="8" />
@@ -45,7 +45,7 @@ function IconCoins(props: SVGProps<SVGSVGElement>) {
   );
 }
 
-function IconCheck(props: SVGProps<SVGSVGElement>) {
+export function IconCheck(props: SVGProps<SVGSVGElement>) {
   // The circle takes its fill from currentColor (the gold badge, in both
   // themes) — the checkmark stroke stays a fixed dark ink instead of white
   // so it keeps reading against a bright gold fill either way.
@@ -63,7 +63,7 @@ function categoryIcon(category: string) {
   return IconContent;
 }
 
-function IconBadge({ icon: Icon, size = 52 }: { icon: (props: SVGProps<SVGSVGElement>) => ReactNode; size?: number }) {
+export function IconBadge({ icon: Icon, size = 52 }: { icon: (props: SVGProps<SVGSVGElement>) => ReactNode; size?: number }) {
   return (
     <span className={styles.iconBadge} style={{ width: size, height: size }}>
       <Icon width={size * 0.46} height={size * 0.46} />
@@ -71,7 +71,7 @@ function IconBadge({ icon: Icon, size = 52 }: { icon: (props: SVGProps<SVGSVGEle
   );
 }
 
-export function PropostaPricingSection({ proposal, agency }: { proposal: CommercialProposal; agency: CommercialAgency }) {
+export function PropostaPricingSection({ proposal, agency, showWhy = true }: { proposal: CommercialProposal; agency: CommercialAgency; showWhy?: boolean }) {
   let totalMonthly = 0;
   let totalDiscount = 0;
   let hasOneTime = false;
@@ -167,14 +167,16 @@ export function PropostaPricingSection({ proposal, agency }: { proposal: Commerc
         })}
       </div>
 
-      <section className={styles.why}>
-        <h2 className={styles.whyTitle}>Por que a {agency.name}</h2>
-        <ul className={styles.whyList}>
-          <li><IconCheck className={styles.checkMark} />Conteúdo novo todo santo dia, sem você precisar lembrar de postar</li>
-          <li><IconCheck className={styles.checkMark} />Conteúdo pensado para o seu negócio, criado de acordo com os produtos, ofertas e necessidades da {proposal.clientName}</li>
-          <li><IconCheck className={styles.checkMark} />Você acompanha tudo, sem depender de reunião pra saber o que tá rolando</li>
-        </ul>
-      </section>
+      {showWhy ? (
+        <section className={styles.why}>
+          <h2 className={styles.whyTitle}>Por que a {agency.name}</h2>
+          <ul className={styles.whyList}>
+            <li><IconCheck className={styles.checkMark} />Conteúdo novo todo santo dia, sem você precisar lembrar de postar</li>
+            <li><IconCheck className={styles.checkMark} />Conteúdo pensado para o seu negócio, criado de acordo com os produtos, ofertas e necessidades da {proposal.clientName}</li>
+            <li><IconCheck className={styles.checkMark} />Você acompanha tudo, sem depender de reunião pra saber o que tá rolando</li>
+          </ul>
+        </section>
+      ) : null}
 
       <div className={styles.investment}>
         <span className={styles.investmentLabel}>Investimento mensal</span>
