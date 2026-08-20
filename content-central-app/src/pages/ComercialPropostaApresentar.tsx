@@ -172,22 +172,28 @@ export function ComercialPropostaApresentar() {
       <div className={styles.sheet}>
         {/* 1. Capa */}
         <section className={`${apresentarStyles.printSection} ${apresentarStyles.cover}`}>
+          <div className={apresentarStyles.coverDepthA} />
+          <div className={apresentarStyles.coverDepthB} />
+          <div className={apresentarStyles.coverArc} />
           <div className={apresentarStyles.coverCorner} />
           <IconCrown className={apresentarStyles.coverCrown} />
           <div className={apresentarStyles.coverBrand}>
             {agency.logoPath ? <img src={commercialAssetUrl(agency.logoPath)} alt={agency.name} className={apresentarStyles.coverLogo} /> : null}
-            <span className={apresentarStyles.coverBrandName}>{agency.name}</span>
+            <div className={apresentarStyles.coverBrandNames}>
+              <span className={apresentarStyles.coverBrandName}>{agency.name.split(" ")[0]}</span>
+              <span className={apresentarStyles.coverBrandSuffix}>{agency.name.split(" ").slice(1).join(" ")}</span>
+            </div>
           </div>
           <div className={apresentarStyles.coverIconRow}>
-            <span className={apresentarStyles.coverIconCircle}><IconChat width={16} height={16} /></span>
+            <span className={apresentarStyles.coverIconCircle}><IconChat width={15} height={15} /></span>
             <span className={apresentarStyles.coverIconDivider} />
-            <span className={apresentarStyles.coverIconCircle}><IconPhone width={16} height={16} /></span>
+            <span className={apresentarStyles.coverIconCircle}><IconPhone width={15} height={15} /></span>
             <span className={apresentarStyles.coverIconDivider} />
-            <span className={apresentarStyles.coverIconCircle}><IconChart width={16} height={16} /></span>
+            <span className={apresentarStyles.coverIconCircle}><IconChart width={15} height={15} /></span>
           </div>
-          <p className={apresentarStyles.coverServices}>Conteúdo • Redes Sociais • Tráfego Pago</p>
+          <p className={apresentarStyles.coverServices}>Conteúdo <span>•</span> Redes Sociais <span>•</span> Tráfego Pago</p>
           <h1 className={apresentarStyles.coverHeadline}>
-            Marketing sem complicação para <span className={apresentarStyles.coverHeadlineAccent}>negócios locais</span>
+            Marketing sem<br />complicação para<br /><span className={apresentarStyles.coverHeadlineAccent}>negócios locais</span>
           </h1>
           <hr className={apresentarStyles.coverRule} />
           <p className={apresentarStyles.coverIntro}>
