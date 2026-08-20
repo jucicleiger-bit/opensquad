@@ -228,7 +228,7 @@ export function ComercialPropostaImprimir() {
           <h2 className={styles.whyTitle}>Por que a {agency.name}</h2>
           <ul className={styles.whyList}>
             <li><IconCheck className={styles.checkMark} />Conteúdo novo todo santo dia, sem você precisar lembrar de postar</li>
-            <li><IconCheck className={styles.checkMark} />Produção ágil com tecnologia + revisão humana antes da publicação</li>
+            <li><IconCheck className={styles.checkMark} />Conteúdo pensado para o seu negócio, criado de acordo com os produtos, ofertas e necessidades da {proposal.clientName}</li>
             <li><IconCheck className={styles.checkMark} />Você acompanha tudo, sem depender de reunião pra saber o que tá rolando</li>
           </ul>
         </section>
