@@ -1,0 +1,15 @@
+.wrap {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 28px 24px 60px;
+}
+
+.logoPreview {
+  max-width: 160px;
+  max-height: 160px;
+  object-fit: contain;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  margin-bottom: var(--space-sm);
+  background: #fff;
+}
