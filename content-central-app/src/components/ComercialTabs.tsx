@@ -4,6 +4,7 @@ import styles from "./ComercialTabs.module.css";
 const TABS = [
   { to: "/comercial/catalogo", label: "Catálogo" },
   { to: "/comercial/agencia", label: "Minha Agência" },
+  { to: "/comercial/portfolio", label: "Portfólio" },
   { to: "/comercial/propostas", label: "Propostas" },
 ];
 
