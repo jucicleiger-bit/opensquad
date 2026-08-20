@@ -319,6 +319,7 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     commercialAgencyPath: join(root, 'commercial-agency.json'),
     commercialAssetsDir: join(root, 'commercial-assets'),
     commercialProposalsDir: join(root, 'commercial-proposals'),
+    commercialProcessesPath: join(root, 'commercial-processes.json'),
   };
 
   if (!projectId) return paths;
@@ -640,6 +641,30 @@ export async function saveCommercialAgencyLogo(assetInput, targetDir = process.c
     merged.updatedAt = now.toISOString();
     await writeJson(paths.commercialAgencyPath, merged);
     return merged;
+  });
+}
+
+function normalizeCommercialProcess(input) {
+  const category = String(input?.category || '').trim();
+  if (!category) throw new Error('Categoria é obrigatória');
+  return { category, text: String(input?.text || '').trim() };
+}
+
+export async function listCommercialProcesses(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readJson(paths.commercialProcessesPath, { entries: [] });
+  return (store.entries || []).map((entry) => normalizeCommercialProcess(entry));
+}
+
+export async function saveCommercialProcess(input, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const entry = normalizeCommercialProcess(input);
+    const store = await readJson(paths.commercialProcessesPath, { entries: [] });
+    const byCategory = new Map((store.entries || []).map((existing) => [existing.category, existing]));
+    byCategory.set(entry.category, entry);
+    await writeJson(paths.commercialProcessesPath, { entries: [...byCategory.values()] });
+    return entry;
   });
 }
 

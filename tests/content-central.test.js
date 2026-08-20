@@ -15,10 +15,12 @@ import {
   getCommercialAgency,
   getCommercialProposal,
   listCommercialCatalogItems,
+  listCommercialProcesses,
   listCommercialProposals,
   saveCommercialAgency,
   saveCommercialAgencyLogo,
   saveCommercialCatalogItem,
+  saveCommercialProcess,
   saveCommercialProposal,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
@@ -326,6 +328,31 @@ test('saveCommercialAgency stores name/contact, saveCommercialAgencyLogo stores 
     agency = await saveCommercialAgency({ name: 'King Assessoria de Mkt', contactPhone: '(65) 98888-1111', contactInstagram: '@kingassessoria' }, dir);
     assert.equal(agency.logoPath, 'logo.png', 'a plain settings save must never wipe the previously uploaded logo');
     assert.equal(agency.contactPhone, '(65) 98888-1111');
+  });
+});
+
+test('saveCommercialProcess stores one process text per category, saving the same category again overwrites instead of duplicating', async () => {
+  await withTempProject(async (dir) => {
+    let list = await listCommercialProcesses(dir);
+    assert.deepEqual(list, []);
+
+    await saveCommercialProcess({ category: 'Criação de Conteúdo', text: 'Cada peça é feita sob medida pro negócio do cliente.' }, dir);
+    await saveCommercialProcess({ category: 'Tráfego Pago', text: 'Testamos públicos e criativos até achar o que converte.' }, dir);
+
+    list = await listCommercialProcesses(dir);
+    assert.equal(list.length, 2);
+    assert.deepEqual(list.find((entry) => entry.category === 'Criação de Conteúdo'), { category: 'Criação de Conteúdo', text: 'Cada peça é feita sob medida pro negócio do cliente.' });
+
+    await saveCommercialProcess({ category: 'Criação de Conteúdo', text: 'Texto atualizado.' }, dir);
+    list = await listCommercialProcesses(dir);
+    assert.equal(list.length, 2, 'saving the same category again must overwrite, not add a second entry');
+    assert.equal(list.find((entry) => entry.category === 'Criação de Conteúdo').text, 'Texto atualizado.');
+  });
+});
+
+test('saveCommercialProcess rejects a missing category', async () => {
+  await withTempProject(async (dir) => {
+    await assert.rejects(() => saveCommercialProcess({ text: 'X' }, dir), /Categoria é obrigatória/);
   });
 });
 
