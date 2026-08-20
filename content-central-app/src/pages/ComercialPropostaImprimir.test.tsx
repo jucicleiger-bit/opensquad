@@ -60,6 +60,54 @@ describe("ComercialPropostaImprimir", () => {
     expect(screen.getByRole("heading", { name: /Por que a King Assessoria de Mkt/ })).toBeInTheDocument();
   });
 
+  it("excludes a comparison section's alternative plans from the investment total — the client picks one, it isn't summed", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          proposal: {
+            id: "prop-1",
+            clientName: "Arthur Frios",
+            clientLogoDataUrl: null,
+            createdAt: "2026-08-19T12:00:00.000Z",
+            sections: [
+              {
+                category: "Criação de Conteúdo",
+                mode: "comparison",
+                items: [
+                  { catalogItemId: "essencial", name: "Essencial", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 297, fullPrice: 0, discountedPrice: 0 },
+                  { catalogItemId: "profissional", name: "Profissional", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 497, fullPrice: 0, discountedPrice: 0 },
+                  { catalogItemId: "atacado", name: "Atacado", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 897, fullPrice: 0, discountedPrice: 0 },
+                ],
+              },
+              {
+                category: "Tráfego Pago",
+                mode: "single",
+                items: [{ catalogItemId: "basico", name: "Básico", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 500, fullPrice: 0, discountedPrice: 0 }],
+              },
+            ],
+          },
+        },
+      },
+      { body: { agency: { name: "King", logoPath: "", contactPhone: "", contactInstagram: "", updatedAt: null } } },
+    ]);
+
+    const { container } = render(
+      <MemoryRouter initialEntries={["/comercial/propostas/prop-1/imprimir"]}>
+        <Routes>
+          <Route path="/comercial/propostas/:id/imprimir" element={<ComercialPropostaImprimir />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Investimento mensal");
+    // Only the single-mode "Básico" (R$ 500) should count — not the three
+    // comparison-mode alternatives (297 + 497 + 897), and never their sum
+    // (2191) or the old, actually-observed bug (297+497+897=1691 alone).
+    expect(container.textContent).toContain("R$ 500");
+    expect(container.textContent).not.toContain("R$ 1691");
+    expect(container.textContent).not.toContain("R$ 2191");
+  });
+
   it("calls window.print when the print button is clicked", async () => {
     const printSpy = vi.spyOn(window, "print").mockImplementation(() => {});
     stubFetchSequence([

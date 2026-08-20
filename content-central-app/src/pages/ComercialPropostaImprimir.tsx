@@ -102,15 +102,21 @@ export function ComercialPropostaImprimir() {
   let totalMonthly = 0;
   let totalDiscount = 0;
   let hasOneTime = false;
-  proposal.sections.forEach((section) => {
-    section.items.forEach((item) => {
-      if (item.billingType === "mensal") totalMonthly += item.price;
-      else {
-        hasOneTime = true;
-        totalDiscount += Math.max(0, item.fullPrice - item.discountedPrice);
-      }
+  // A "comparison" section shows alternative plans for the client to pick
+  // one of — it has no committed price yet, so it never enters the total.
+  // Only "single" sections (an already-decided item) count toward what the
+  // client is actually paying.
+  proposal.sections
+    .filter((section) => section.mode === "single")
+    .forEach((section) => {
+      section.items.forEach((item) => {
+        if (item.billingType === "mensal") totalMonthly += item.price;
+        else {
+          hasOneTime = true;
+          totalDiscount += Math.max(0, item.fullPrice - item.discountedPrice);
+        }
+      });
     });
-  });
 
   const subtitle = [...new Set(proposal.sections.map((section) => categoryBenefit(section.category)))].join(" + ");
   const validUntil = new Date(new Date(proposal.createdAt).getTime() + 7 * 24 * 60 * 60 * 1000);
