@@ -146,6 +146,43 @@ describe("ComercialPropostaImprimir", () => {
     expect(screen.getByText("A partir de R$ 297", { exact: false })).toBeInTheDocument();
   });
 
+  it("switches to the dark theme and back through the Claro/Escuro toggle", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          proposal: {
+            id: "prop-1",
+            clientName: "Arthur Frios",
+            clientLogoDataUrl: null,
+            createdAt: "2026-08-19T12:00:00.000Z",
+            sections: [{ category: "Tráfego Pago", mode: "single", items: [{ catalogItemId: "basico", name: "Básico", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "mensal", price: 500, fullPrice: 0, discountedPrice: 0 }] }],
+          },
+        },
+      },
+      { body: { agency: { name: "King", logoPath: "", contactPhone: "", contactInstagram: "", updatedAt: null } } },
+    ]);
+
+    const { container } = render(
+      <MemoryRouter initialEntries={["/comercial/propostas/prop-1/imprimir"]}>
+        <Routes>
+          <Route path="/comercial/propostas/:id/imprimir" element={<ComercialPropostaImprimir />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Investimento mensal");
+    const page = container.querySelector('[data-theme]');
+    expect(page).toHaveAttribute("data-theme", "light");
+
+    await userEvent.click(screen.getByRole("button", { name: "Escuro" }));
+    expect(page).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByText(/Gráficos de segundo plano/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Claro" }));
+    expect(page).toHaveAttribute("data-theme", "light");
+    expect(screen.queryByText(/Gráficos de segundo plano/)).not.toBeInTheDocument();
+  });
+
   it("calls window.print when the print button is clicked", async () => {
     const printSpy = vi.spyOn(window, "print").mockImplementation(() => {});
     stubFetchSequence([

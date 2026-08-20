@@ -1,32 +1,94 @@
 @import url("https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;800&family=Inter:wght@400;500;600;700&display=swap");
 
 /* King Assessoria de Mkt real brand marks (extracted from their own logo):
-   black #000, white #fff, gold #FFD100. Text uses a darkened gold
-   (--gold-text) to clear print-contrast; the true brand gold (--gold)
-   stays reserved for non-text fills — icon glyphs on the black badge,
-   thin rules, small ornaments — where contrast isn't a concern. */
+   black #000, white #fff, gold #FFD100. Two themes share these tokens —
+   Claro (paper/black text, default) and Escuro (black sheet/white text,
+   gold pushed to full brightness since a dark ground clears its contrast
+   on its own). --gold itself never changes; only how much of it, and
+   which text color needs darkening to stay legible, differs per theme. */
 .page {
-  --ink: #111111;
   --gold: #ffd100;
+  --page-bg: #efece3;
+  --sheet-bg: #fefcf7;
+  --sheet-border: #e7e2d3;
+  --sheet-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.35);
+  --text: #111111;
   --gold-text: #8a6a00;
-  --paper: #fefcf7;
   --muted: #5b5b5b;
   --line: #e7e2d3;
+  --depends-bg: #f7f4ea;
+  --investment-bg: linear-gradient(180deg, #fff7d9 0%, #fdf1c4 100%);
 
-  background: #efece3;
+  background: var(--page-bg);
   padding: 28px 0 48px;
   min-height: 100vh;
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: var(--ink);
+  color: var(--text);
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.page[data-theme="dark"] {
+  --page-bg: #000000;
+  --sheet-bg: #0d0d0d;
+  --sheet-border: rgba(255, 209, 0, 0.3);
+  --sheet-shadow: 0 0 0 1px rgba(255, 209, 0, 0.15);
+  --text: #f5f5f0;
+  --gold-text: #ffd100;
+  --muted: #b7b6ad;
+  --line: rgba(255, 209, 0, 0.22);
+  --depends-bg: rgba(255, 209, 0, 0.08);
+  --investment-bg: linear-gradient(180deg, rgba(255, 209, 0, 0.16) 0%, rgba(255, 209, 0, 0.04) 100%);
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 auto 28px;
+}
+
+.themeSwitch {
+  display: inline-flex;
+  border: 1px solid var(--sheet-border);
+  border-radius: 999px;
+  padding: 3px;
+  gap: 2px;
+}
+
+.themeOption,
+.themeActive {
+  border: none;
+  border-radius: 999px;
+  padding: 6px 16px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+}
+
+.themeActive {
+  background: var(--text);
+  color: var(--page-bg);
+}
+
+.themeHint {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 0;
+  text-align: center;
+  max-width: 320px;
 }
 
 .printButton {
   display: block;
-  margin: 0 auto 28px;
   padding: 12px 24px;
   border-radius: 999px;
   border: none;
-  background: var(--ink);
+  background: var(--text);
   color: var(--gold);
   font-weight: 700;
   cursor: pointer;
@@ -36,9 +98,9 @@
   max-width: 780px;
   margin: 0 auto;
   padding: 32px 36px 24px;
-  background: var(--paper);
-  border: 1px solid var(--line);
-  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.35);
+  background: var(--sheet-bg);
+  border: 1px solid var(--sheet-border);
+  box-shadow: var(--sheet-shadow);
 }
 
 .header {
@@ -136,7 +198,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.14em;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .sectionLabel span {
@@ -165,13 +227,16 @@
   flex: 1;
 }
 
+/* Badges and check bullets stay a fixed gold-circle/dark-glyph pair in
+   both themes — always visible against paper or black, and it reads as
+   one consistent "coin" motif instead of inverting per theme. */
 .iconBadge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  background: var(--ink);
-  color: var(--gold);
+  background: var(--gold);
+  color: #161616;
   margin-bottom: 8px;
 }
 
@@ -218,7 +283,7 @@
   height: 14px;
   flex: 0 0 auto;
   margin-top: 1px;
-  color: var(--ink);
+  color: var(--gold);
 }
 
 .dependsOn {
@@ -226,7 +291,7 @@
   align-items: flex-start;
   gap: 8px;
   font-size: 11.5px;
-  background: #f7f4ea;
+  background: var(--depends-bg);
   border-radius: 10px;
   padding: 8px 10px;
   margin-bottom: 8px;
@@ -282,7 +347,7 @@
   padding: 0;
   font-size: 12.5px;
   line-height: 1.35;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .whyList li {
@@ -293,7 +358,7 @@
 }
 
 .investment {
-  background: linear-gradient(180deg, #fff7d9 0%, #fdf1c4 100%);
+  background: var(--investment-bg);
   border: 1px solid var(--gold);
   border-radius: 16px;
   padding: 14px 20px;
@@ -315,7 +380,7 @@
   font-family: "Playfair Display", serif;
   font-size: 32px;
   font-weight: 800;
-  color: var(--ink);
+  color: var(--text);
   margin: 0;
 }
 
@@ -326,7 +391,7 @@
 }
 
 .discount b {
-  color: var(--ink);
+  color: var(--text);
 }
 
 .steps {
@@ -337,7 +402,7 @@
   gap: 8px;
   font-size: 11.5px;
   font-weight: 600;
-  color: var(--ink);
+  color: var(--text);
   margin-bottom: 16px;
 }
 
@@ -398,12 +463,11 @@
     margin: 10mm;
   }
 
-  .printButton {
+  .controls {
     display: none;
   }
 
   .page {
-    background: none;
     padding: 0;
   }
 

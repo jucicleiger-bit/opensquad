@@ -47,10 +47,13 @@ function IconCoins(props: SVGProps<SVGSVGElement>) {
 }
 
 function IconCheck(props: SVGProps<SVGSVGElement>) {
+  // The circle takes its fill from currentColor (the gold badge, in both
+  // themes) — the checkmark stroke stays a fixed dark ink instead of white
+  // so it keeps reading against a bright gold fill either way.
   return (
     <svg viewBox="0 0 24 24" fill="none" {...props}>
       <circle cx="12" cy="12" r="11" fill="currentColor" />
-      <path d="M7.5 12.5l3 3 6-6.5" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.5 12.5l3 3 6-6.5" stroke="#161616" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -85,6 +88,7 @@ export function ComercialPropostaImprimir() {
   const [proposal, setProposal] = useState<CommercialProposal | null>(null);
   const [agency, setAgency] = useState<CommercialAgency | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
 
   useEffect(() => {
     if (!id) return;
@@ -133,27 +137,42 @@ export function ComercialPropostaImprimir() {
   );
 
   return (
-    <div className={styles.page}>
-      <button
-        type="button"
-        className={styles.printButton}
-        onClick={() => {
-          // Playfair Display loads async (via @import) — printing before it
-          // swaps in captures the fallback font on whatever text happened
-          // to lay out first. document.fonts.ready resolves once every
-          // requested face has finished loading, so the print always fires
-          // after the swap instead of racing it. Falls back to an
-          // immediate print where the Font Loading API isn't available
-          // (older browsers, and jsdom in tests).
-          if (document.fonts?.ready) {
-            document.fonts.ready.then(() => window.print()).catch(() => window.print());
-          } else {
-            window.print();
-          }
-        }}
-      >
-        Imprimir / Salvar como PDF
-      </button>
+    <div className={styles.page} data-theme={theme}>
+      <div className={styles.controls}>
+        <div className={styles.themeSwitch}>
+          <button type="button" className={theme === "light" ? styles.themeActive : styles.themeOption} onClick={() => setTheme("light")}>
+            Claro
+          </button>
+          <button type="button" className={theme === "dark" ? styles.themeActive : styles.themeOption} onClick={() => setTheme("dark")}>
+            Escuro
+          </button>
+        </div>
+        <button
+          type="button"
+          className={styles.printButton}
+          onClick={() => {
+            // Playfair Display loads async (via @import) — printing before it
+            // swaps in captures the fallback font on whatever text happened
+            // to lay out first. document.fonts.ready resolves once every
+            // requested face has finished loading, so the print always fires
+            // after the swap instead of racing it. Falls back to an
+            // immediate print where the Font Loading API isn't available
+            // (older browsers, and jsdom in tests).
+            if (document.fonts?.ready) {
+              document.fonts.ready.then(() => window.print()).catch(() => window.print());
+            } else {
+              window.print();
+            }
+          }}
+        >
+          Imprimir / Salvar como PDF
+        </button>
+        {theme === "dark" ? (
+          <p className={styles.themeHint}>
+            No tela de impressão, ative "Gráficos de segundo plano" pra o fundo preto sair no PDF.
+          </p>
+        ) : null}
+      </div>
 
       <div className={styles.sheet}>
         <header className={styles.header}>
