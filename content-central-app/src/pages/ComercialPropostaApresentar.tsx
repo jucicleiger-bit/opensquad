@@ -11,37 +11,40 @@ import {
   type CommercialProcess,
   type CommercialProposal,
 } from "@/api/client";
-import { IconBadge, IconCheck, IconContent, IconTarget, PropostaPricingSection } from "./PropostaPricingSection";
+import { PropostaPricingSection } from "./PropostaPricingSection";
 import styles from "./ComercialPropostaImprimir.module.css";
 import apresentarStyles from "./ComercialPropostaApresentar.module.css";
 
 const FIXED_CATEGORIES = new Set(["Criação de Conteúdo", "Tráfego Pago"]);
 
-const DEFAULT_ABOUT = "A King Assessoria de Mkt ajuda empresas a manterem suas redes sociais ativas, organizadas e profissionais sem depender da rotina interna para criar, pensar e publicar conteúdo.";
+const DEFAULT_ABOUT = "A King Assessoria de Mkt ajuda negócios locais a manterem suas redes ativas, organizadas e profissionais. Criamos, publicamos e gerenciamos campanhas para que a presença digital aconteça sem depender da correria da equipe interna.";
 
 const CONTENT_FLOW = [
   { number: "01", title: "Entendemos", text: "Produtos, serviços, público, promoções e necessidades." },
   { number: "02", title: "Planejamos", text: "Definimos o que comunicar e organizamos os conteúdos." },
-  { number: "03", title: "Criamos", text: "Produzimos as artes e materiais de acordo com a identidade da empresa." },
+  { number: "03", title: "Criamos", text: "Produzimos artes e materiais alinhados à identidade da empresa." },
   { number: "04", title: "Publicamos", text: "Organizamos e programamos as publicações." },
-  { number: "05", title: "Você acompanha", text: "Você acompanha o que está acontecendo sem precisar cuidar da operação." },
 ];
 
-const TRAFFIC_FLOW = [
-  { number: "01", title: "Definimos o objetivo", text: "Seguidores, alcance, mensagens, divulgação de produto ou campanha." },
-  { number: "02", title: "Configuramos a campanha", text: "Público, região, orçamento e estratégia." },
-  { number: "03", title: "Criamos os anúncios", text: "Criativos e mensagens alinhados ao objetivo da campanha." },
-  { number: "04", title: "Acompanhamos", text: "Monitoramos o desempenho e fazemos ajustes quando necessário." },
-  { number: "05", title: "Apresentamos os resultados", text: "Você acompanha o desempenho das campanhas." },
+const TRAFFIC_STEPS = [
+  { number: "01", title: "Definimos o objetivo", text: "Seguidores, alcance, mensagens, produtos ou campanhas." },
+  { number: "02", title: "Definimos o público", text: "Região, perfil de cliente e segmentação." },
+  { number: "03", title: "Criamos a campanha", text: "Configuração, criativos e estrutura de anúncios." },
+  { number: "04", title: "Acompanhamos", text: "Monitoramento dos resultados e ajustes quando necessário." },
 ];
 
-function IconPublish(props: SVGProps<SVGSVGElement>) {
+const WHY_CARDS = [
+  { title: "Conteúdo pensado para o negócio", text: "Produtos, ofertas, campanhas e necessidades orientam o que será criado." },
+  { title: "Presença constante", text: "Sua empresa continua ativa nas redes sem depender da correria da equipe." },
+  { title: "Mais comodidade", text: "Criação, organização e publicação ficam sob nossa operação." },
+  { title: "Conteúdo e tráfego integrados", text: "Presença orgânica e mídia paga trabalhando dentro da mesma estratégia." },
+];
+
+function IconCrown(props: SVGProps<SVGSVGElement>) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <rect x="4" y="5" width="16" height="15" rx="2" />
-      <path d="M4 9.5h16" />
-      <path d="M8 3.5v3M16 3.5v3" />
-      <path d="M8.5 13.5l2 2 4-4.2" />
+    <svg viewBox="0 0 100 70" fill="none" stroke="currentColor" strokeWidth="4" strokeLinejoin="round" {...props}>
+      <path d="M6 60 L14 16 L34 38 L50 8 L66 38 L86 16 L94 60 Z" />
+      <path d="M6 60 H94" />
     </svg>
   );
 }
@@ -64,34 +67,20 @@ function PageHeader({ agency, proposal }: { agency: CommercialAgency; proposal: 
   );
 }
 
-function FlowSteps({ steps }: { steps: typeof CONTENT_FLOW }) {
-  return (
-    <div className={apresentarStyles.flow}>
-      {steps.map((step, i) => (
-        <Fragment key={step.number}>
-          <div className={apresentarStyles.flowStep}>
-            <span className={apresentarStyles.flowNumber}>{step.number}</span>
-            <p className={apresentarStyles.flowTitle}>{step.title}</p>
-            <p className={apresentarStyles.flowText}>{step.text}</p>
-          </div>
-          {i < steps.length - 1 ? <span className={apresentarStyles.flowArrow}>→</span> : null}
-        </Fragment>
-      ))}
-    </div>
-  );
-}
-
 function PortfolioGallery({ images, category }: { images: CommercialPortfolioItem[]; category: string }) {
   if (!images.length) return null;
   return (
-    <div className={apresentarStyles.portfolioGrid}>
-      {images.map((image) => (
-        <figure key={image.id} className={apresentarStyles.portfolioItem}>
-          <img src={commercialAssetUrl(image.imagePath)} alt={image.caption || category} />
-          {image.caption ? <figcaption>{image.caption}</figcaption> : null}
-        </figure>
-      ))}
-    </div>
+    <>
+      <p className={apresentarStyles.kicker}>Exemplos de conteúdo</p>
+      <div className={apresentarStyles.portfolioGrid}>
+        {images.map((image) => (
+          <figure key={image.id} className={apresentarStyles.portfolioItem}>
+            <img src={commercialAssetUrl(image.imagePath)} alt={image.caption || category} />
+            {image.caption ? <figcaption>{image.caption}</figcaption> : null}
+          </figure>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -120,9 +109,9 @@ export function ComercialPropostaApresentar() {
   if (!proposal || !agency) return null;
 
   const categories = [...new Set(proposal.sections.map((section) => section.category))];
-  const hasContent = categories.includes("Criação de Conteúdo");
-  const hasTraffic = categories.includes("Tráfego Pago");
+  const proposalHasTraffic = categories.includes("Tráfego Pago");
   const fallbackCategories = categories.filter((category) => !FIXED_CATEGORIES.has(category));
+  const contentImages = portfolio.filter((item) => item.category === "Criação de Conteúdo");
 
   return (
     <div className={styles.page} data-theme={theme}>
@@ -158,15 +147,23 @@ export function ComercialPropostaApresentar() {
       <div className={styles.sheet}>
         {/* 1. Capa */}
         <section className={`${apresentarStyles.printSection} ${apresentarStyles.cover}`}>
+          <IconCrown className={apresentarStyles.coverCrown} />
           <div className={apresentarStyles.coverBrand}>
             {agency.logoPath ? <img src={commercialAssetUrl(agency.logoPath)} alt={agency.name} className={apresentarStyles.coverLogo} /> : null}
-            <h1 className={apresentarStyles.coverName}>{agency.name}</h1>
+            <span className={apresentarStyles.coverBrandName}>{agency.name}</span>
           </div>
-          <p className={apresentarStyles.coverTagline}>Marketing sem complicação para negócios locais</p>
+          <h1 className={apresentarStyles.coverHeadline}>Marketing sem complicação para negócios locais</h1>
+          <hr className={apresentarStyles.coverRule} />
           <p className={apresentarStyles.coverServices}>Conteúdo • Redes Sociais • Tráfego Pago</p>
-          <div className={apresentarStyles.coverFooter}>
-            <span className={apresentarStyles.coverFooterLabel}>Apresentação preparada para</span>
-            <span className={apresentarStyles.coverClientName}>{proposal.clientName}</span>
+          <p className={apresentarStyles.coverIntro}>
+            Criação, publicação e mídia paga em uma operação simples para manter sua empresa presente sem transformar marketing em mais uma tarefa da rotina.
+          </p>
+          <div className={apresentarStyles.coverCard}>
+            <div>
+              <span className={apresentarStyles.coverCardLabel}>Apresentação preparada para</span>
+              <span className={apresentarStyles.coverCardClientName}>{proposal.clientName}</span>
+            </div>
+            {proposal.clientLogoDataUrl ? <img src={proposal.clientLogoDataUrl} alt={proposal.clientName} className={apresentarStyles.coverCardClientLogo} /> : null}
           </div>
         </section>
 
@@ -177,47 +174,87 @@ export function ComercialPropostaApresentar() {
           <p className={apresentarStyles.pageIntro}>{agency.about || DEFAULT_ABOUT}</p>
           <div className={apresentarStyles.cardGrid}>
             <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconContent} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Conteúdo</p>
-              <p className={apresentarStyles.miniCardText}>Criamos materiais pensados para os produtos, ofertas e necessidades do negócio.</p>
+              <span className={apresentarStyles.letterBadge}>C</span>
+              <p className={apresentarStyles.kicker}>Conteúdo</p>
+              <p className={apresentarStyles.miniCardText}>Materiais pensados para produtos, ofertas, campanhas e necessidades do negócio.</p>
+              <p className={apresentarStyles.miniCardFooter}>Conteúdo alinhado ao que você precisa comunicar.</p>
             </div>
             <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconPublish} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Publicação</p>
-              <p className={apresentarStyles.miniCardText}>Organizamos e programamos o conteúdo para manter a empresa presente constantemente.</p>
+              <span className={apresentarStyles.letterBadge}>P</span>
+              <p className={apresentarStyles.kicker}>Publicação</p>
+              <p className={apresentarStyles.miniCardText}>Organização e programação do conteúdo para manter a marca presente com frequência.</p>
+              <p className={apresentarStyles.miniCardFooter}>Menos preocupação com a rotina de postagem.</p>
             </div>
             <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconTarget} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Tráfego Pago</p>
-              <p className={apresentarStyles.miniCardText}>Criamos e gerenciamos campanhas para aumentar alcance, atrair público e gerar oportunidades.</p>
+              <span className={apresentarStyles.letterBadge}>T</span>
+              <p className={apresentarStyles.kicker}>Tráfego Pago</p>
+              <p className={apresentarStyles.miniCardText}>Campanhas para ampliar alcance, atrair público e gerar novas oportunidades.</p>
+              <p className={apresentarStyles.miniCardFooter}>Mais pessoas certas vendo sua marca.</p>
             </div>
+          </div>
+          <div className={apresentarStyles.calloutBox}>
+            <span className={apresentarStyles.calloutKicker}>O que entregamos de verdade</span>
+            <h3 className={apresentarStyles.calloutTitle}>Presença digital sem ocupar sua rotina.</h3>
+            <p className={apresentarStyles.calloutText}>A estratégia acontece com processo, frequência e acompanhamento — sem você precisar lembrar todos os dias do que publicar ou anunciar.</p>
           </div>
         </section>
 
         {/* 3. Criação de Conteúdo */}
-        {hasContent ? (
-          <section className={apresentarStyles.printSection}>
-            <PageHeader agency={agency} proposal={proposal} />
-            <h2 className={apresentarStyles.pageTitle}>Seu conteúdo sem virar mais uma tarefa pra você</h2>
-            <p className={apresentarStyles.pageIntro}>Nós cuidamos do processo de conteúdo do início à publicação.</p>
-            <FlowSteps steps={CONTENT_FLOW} />
-            <PortfolioGallery images={portfolio.filter((item) => item.category === "Criação de Conteúdo")} category="Criação de Conteúdo" />
-          </section>
-        ) : null}
+        <section className={apresentarStyles.printSection}>
+          <PageHeader agency={agency} proposal={proposal} />
+          <h2 className={apresentarStyles.pageTitle}>Seu conteúdo sem virar mais uma tarefa pra você</h2>
+          <p className={apresentarStyles.pageIntro}>Nós cuidamos do processo de conteúdo do início à publicação.</p>
+          <div className={apresentarStyles.flow}>
+            {CONTENT_FLOW.map((step, i) => (
+              <Fragment key={step.number}>
+                <div className={apresentarStyles.flowStep}>
+                  <span className={apresentarStyles.flowNumber}>{step.number}</span>
+                  <p className={apresentarStyles.flowTitle}>{step.title}</p>
+                  <p className={apresentarStyles.flowText}>{step.text}</p>
+                </div>
+                {i < CONTENT_FLOW.length - 1 ? <span className={apresentarStyles.flowArrow}>→</span> : null}
+              </Fragment>
+            ))}
+          </div>
+          <div className={apresentarStyles.flowHighlight}>
+            <span className={apresentarStyles.flowNumber}>05</span>
+            <div>
+              <p className={apresentarStyles.flowHighlightTitle}>Você acompanha</p>
+              <p className={apresentarStyles.flowHighlightText}>Clareza sobre o que está sendo produzido e publicado, sem precisar cuidar da operação.</p>
+            </div>
+          </div>
+          <PortfolioGallery images={contentImages} category="Criação de Conteúdo" />
+        </section>
 
         {/* 4. Tráfego Pago */}
-        {hasTraffic ? (
-          <section className={apresentarStyles.printSection}>
-            <PageHeader agency={agency} proposal={proposal} />
-            <h2 className={apresentarStyles.pageTitle}>Alcance as pessoas certas</h2>
-            <p className={apresentarStyles.pageIntro}>
-              Além de manter a empresa ativa organicamente, utilizamos tráfego pago para ampliar o alcance das campanhas e colocar a marca diante de novos potenciais clientes.
-            </p>
-            <FlowSteps steps={TRAFFIC_FLOW} />
-            <p className={apresentarStyles.note}>A verba utilizada nos anúncios é definida com o cliente e paga diretamente à Meta.</p>
-            <PortfolioGallery images={portfolio.filter((item) => item.category === "Tráfego Pago")} category="Tráfego Pago" />
-          </section>
-        ) : null}
+        <section className={apresentarStyles.printSection}>
+          <PageHeader agency={agency} proposal={proposal} />
+          <h2 className={apresentarStyles.pageTitle}>Tráfego pago para ampliar seu alcance</h2>
+          <p className={apresentarStyles.pageIntro}>Colocamos sua empresa na frente de novas pessoas com campanhas planejadas de acordo com o objetivo do negócio.</p>
+          <div className={apresentarStyles.trafficLayout}>
+            <div className={apresentarStyles.trafficSteps}>
+              {TRAFFIC_STEPS.map((step) => (
+                <div key={step.number} className={apresentarStyles.trafficStep}>
+                  <span className={apresentarStyles.trafficStepNumber}>{step.number}</span>
+                  <p className={apresentarStyles.trafficStepTitle}>{step.title}</p>
+                  <p className={apresentarStyles.trafficStepText}>{step.text}</p>
+                </div>
+              ))}
+            </div>
+            <div className={apresentarStyles.trafficPanels}>
+              <div className={apresentarStyles.calloutBoxDark}>
+                <span className={apresentarStyles.calloutKicker}>Mais alcance</span>
+                <h3 className={apresentarStyles.calloutTitle}>A campanha tem um objetivo claro.</h3>
+                <p className={apresentarStyles.calloutText}>Nada de anunciar por anunciar. O investimento é direcionado conforme a meta definida para cada campanha.</p>
+              </div>
+              <div className={apresentarStyles.calloutBox}>
+                <span className={apresentarStyles.calloutKicker}>Investimento em mídia</span>
+                <h3 className={apresentarStyles.calloutTitle}>Você decide quanto quer investir.</h3>
+                <p className={apresentarStyles.calloutText}>A verba dos anúncios é paga diretamente à Meta e fica separada do valor da nossa gestão.</p>
+              </div>
+            </div>
+          </div>
+        </section>
 
         {/* Fallback: dynamic per-category content for anything not fixed above */}
         {fallbackCategories.map((category) => {
@@ -229,7 +266,16 @@ export function ComercialPropostaApresentar() {
               <PageHeader agency={agency} proposal={proposal} />
               <h2 className={apresentarStyles.pageTitle}>{category}</h2>
               {process?.text ? <p className={apresentarStyles.processText}>{process.text}</p> : null}
-              <PortfolioGallery images={images} category={category} />
+              {images.length ? (
+                <div className={apresentarStyles.portfolioGrid}>
+                  {images.map((image) => (
+                    <figure key={image.id} className={apresentarStyles.portfolioItem}>
+                      <img src={commercialAssetUrl(image.imagePath)} alt={image.caption || category} />
+                      {image.caption ? <figcaption>{image.caption}</figcaption> : null}
+                    </figure>
+                  ))}
+                </div>
+              ) : null}
             </section>
           );
         })}
@@ -238,45 +284,51 @@ export function ComercialPropostaApresentar() {
         <section className={apresentarStyles.printSection}>
           <PageHeader agency={agency} proposal={proposal} />
           <h2 className={apresentarStyles.pageTitle}>Por que escolher a King?</h2>
+          <p className={apresentarStyles.pageIntro}>Uma operação pensada para manter sua empresa ativa sem aumentar a complexidade da rotina.</p>
           <div className={apresentarStyles.cardGrid}>
-            <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconCheck} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Presença constante</p>
-              <p className={apresentarStyles.miniCardText}>Sua empresa mantém uma comunicação ativa e profissional nas redes sociais.</p>
-            </div>
-            <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconCheck} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Conteúdo pensado para o seu negócio</p>
-              <p className={apresentarStyles.miniCardText}>Cada conteúdo considera os produtos, ofertas, campanhas e necessidades da {proposal.clientName}.</p>
-            </div>
-            <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconCheck} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Mais comodidade</p>
-              <p className={apresentarStyles.miniCardText}>Você não precisa parar sua operação para pensar no que publicar todos os dias.</p>
-            </div>
-            <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconCheck} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Conteúdo + tráfego no mesmo lugar</p>
-              <p className={apresentarStyles.miniCardText}>Uma estratégia integrada entre presença orgânica e mídia paga.</p>
-            </div>
-            <div className={apresentarStyles.miniCard}>
-              <IconBadge icon={IconCheck} size={40} />
-              <p className={apresentarStyles.miniCardTitle}>Acompanhamento simples</p>
-              <p className={apresentarStyles.miniCardText}>Você sabe o que está sendo produzido e publicado sem processos complicados.</p>
-            </div>
+            {WHY_CARDS.map((card, i) => (
+              <div key={card.title} className={apresentarStyles.miniCard}>
+                <span className={apresentarStyles.flowNumber}>{String(i + 1).padStart(2, "0")}</span>
+                <p className={apresentarStyles.miniCardTitle}>{card.title === "Conteúdo pensado para o negócio" ? `${card.title} da ${proposal.clientName}` : card.title}</p>
+                <p className={apresentarStyles.miniCardText}>{card.text}</p>
+              </div>
+            ))}
+          </div>
+          <div className={apresentarStyles.calloutBoxDark}>
+            <span className={apresentarStyles.calloutKicker}>O resultado esperado</span>
+            <h3 className={apresentarStyles.calloutTitle}>Uma presença digital mais organizada, consistente e fácil de acompanhar.</h3>
           </div>
         </section>
 
         {/* 6. Divisória */}
         <section className={`${apresentarStyles.printSection} ${apresentarStyles.divider}`}>
-          <h2 className={apresentarStyles.dividerTitle}>Uma estratégia pensada para a {proposal.clientName}</h2>
-          <p className={apresentarStyles.dividerText}>Agora que você conhece como trabalhamos, veja a solução que preparamos para sua empresa.</p>
+          <IconCrown className={apresentarStyles.dividerCrown} />
+          <div className={apresentarStyles.dividerBrand}>
+            {agency.logoPath ? <img src={commercialAssetUrl(agency.logoPath)} alt={agency.name} className={apresentarStyles.coverLogo} /> : null}
+            <span className={apresentarStyles.dividerBrandName}>{agency.name}</span>
+          </div>
+          <span className={apresentarStyles.dividerKicker}>Agora,</span>
+          <h2 className={apresentarStyles.dividerTitle}>a estratégia para a {proposal.clientName}.</h2>
+          <p className={apresentarStyles.dividerText}>Com base no que apresentamos, organizamos a proposta comercial com os serviços e formatos disponíveis para a operação.</p>
+          <span className={apresentarStyles.dividerBreadcrumb}>Apresentação › Proposta comercial</span>
         </section>
 
         {/* 7. Proposta */}
         <section className={apresentarStyles.printSection}>
           <PageHeader agency={agency} proposal={proposal} />
-          <PropostaPricingSection proposal={proposal} agency={agency} showWhy={false} />
+          <PropostaPricingSection
+            proposal={proposal}
+            agency={agency}
+            showWhy={false}
+            belowGrid={
+              !proposalHasTraffic ? (
+                <div className={apresentarStyles.upsellNote}>
+                  <b>Tráfego Pago</b>
+                  Pode ser incluído na proposta conforme o escopo definido para a campanha.
+                </div>
+              ) : undefined
+            }
+          />
         </section>
       </div>
     </div>

@@ -71,7 +71,7 @@ export function IconBadge({ icon: Icon, size = 52 }: { icon: (props: SVGProps<SV
   );
 }
 
-export function PropostaPricingSection({ proposal, agency, showWhy = true }: { proposal: CommercialProposal; agency: CommercialAgency; showWhy?: boolean }) {
+export function PropostaPricingSection({ proposal, agency, showWhy = true, belowGrid }: { proposal: CommercialProposal; agency: CommercialAgency; showWhy?: boolean; belowGrid?: ReactNode }) {
   let totalMonthly = 0;
   let totalDiscount = 0;
   let hasOneTime = false;
@@ -166,6 +166,8 @@ export function PropostaPricingSection({ proposal, agency, showWhy = true }: { p
           );
         })}
       </div>
+
+      {belowGrid}
 
       {showWhy ? (
         <section className={styles.why}>

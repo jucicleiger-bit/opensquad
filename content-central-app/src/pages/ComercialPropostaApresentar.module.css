@@ -67,77 +67,124 @@
   }
 }
 
+/* ---------- Capa ---------- */
+
 .cover {
-  min-height: 520px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  gap: 6px;
+  position: relative;
+  min-height: 560px;
+  padding-top: 8px;
+  overflow: hidden;
+}
+
+.coverCrown {
+  position: absolute;
+  top: 40px;
+  right: -30px;
+  width: 260px;
+  height: 260px;
+  color: var(--gold);
+  opacity: 0.16;
+  pointer-events: none;
 }
 
 .coverBrand {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 14px;
-  margin-bottom: 18px;
+  gap: 10px;
+  margin-bottom: 46px;
 }
 
 .coverLogo {
-  height: 64px;
-  width: 64px;
+  height: 40px;
+  width: 40px;
   object-fit: contain;
-  border-radius: 14px;
+  border-radius: 9px;
 }
 
-.coverName {
+.coverBrandName {
   font-family: "Playfair Display", serif;
   font-weight: 800;
-  font-size: 34px;
+  font-size: 16px;
   letter-spacing: -0.01em;
-  margin: 0;
 }
 
-.coverTagline {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--gold-text);
-  margin: 0 0 4px;
+.coverHeadline {
+  font-family: "Playfair Display", serif;
+  font-weight: 800;
+  font-size: 32px;
+  line-height: 1.15;
+  max-width: 15ch;
+  margin: 0 0 14px;
+  letter-spacing: -0.01em;
+  position: relative;
+  z-index: 1;
+}
+
+.coverRule {
+  width: 64px;
+  height: 3px;
+  background: var(--gold);
+  border: none;
+  margin: 0 0 18px;
 }
 
 .coverServices {
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--muted);
-  margin: 0 0 40px;
-}
-
-.coverFooter {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  border-top: 1px solid var(--line);
-  padding-top: 20px;
-}
-
-.coverFooterLabel {
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: var(--gold-text);
+  margin: 0 0 14px;
 }
 
-.coverClientName {
+.coverIntro {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 44ch;
+  margin: 0 0 56px;
+  position: relative;
+  z-index: 1;
+}
+
+.coverCard {
+  background: #161616;
+  color: #f5f5f0;
+  border-radius: 16px;
+  padding: 20px 22px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+.coverCardLabel {
+  display: block;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--gold);
+  margin-bottom: 6px;
+}
+
+.coverCardClientLogo {
+  height: 36px;
+  max-width: 84px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: #fff;
+  padding: 4px;
+}
+
+.coverCardClientName {
   font-family: "Playfair Display", serif;
-  font-size: 20px;
+  font-size: 19px;
   font-weight: 700;
 }
+
+/* ---------- Shared page chrome ---------- */
 
 .pageTitle {
   font-family: "Playfair Display", serif;
@@ -155,55 +202,136 @@
   margin: 0 0 22px;
 }
 
+.kicker {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--gold-text);
+  margin: 0 0 10px;
+}
+
 .cardGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 22px;
+}
+
+.letterBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #161616;
+  font-family: "Playfair Display", serif;
+  font-weight: 800;
+  font-size: 14px;
+  margin-bottom: 10px;
 }
 
 .miniCard {
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 14px 16px;
+  padding: 16px 16px 18px;
 }
 
 .miniCardTitle {
   font-family: "Playfair Display", serif;
   font-size: 15px;
   font-weight: 700;
-  margin: 8px 0 4px;
+  margin: 0 0 6px;
 }
 
 .miniCardText {
   font-size: 12px;
-  line-height: 1.4;
+  line-height: 1.45;
   color: var(--muted);
   margin: 0;
 }
+
+.miniCardFooter {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.calloutBox {
+  background: var(--investment-bg);
+  border: 1px solid var(--gold);
+  border-radius: 16px;
+  padding: 18px 22px;
+  margin-bottom: 4px;
+}
+
+.calloutBoxDark {
+  background: #161616;
+  color: #f5f5f0;
+  border-radius: 16px;
+  padding: 18px 22px;
+  margin-bottom: 4px;
+}
+
+.calloutKicker {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--gold);
+  margin: 0 0 8px;
+  display: block;
+}
+
+.calloutTitle {
+  font-family: "Playfair Display", serif;
+  font-size: 18px;
+  font-weight: 800;
+  margin: 0 0 6px;
+}
+
+.calloutText {
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0;
+  opacity: 0.85;
+}
+
+/* ---------- Fluxo (Criação de Conteúdo) ---------- */
 
 .flow {
   display: flex;
   flex-wrap: wrap;
   align-items: stretch;
   gap: 10px;
-  margin-bottom: 22px;
+  margin-bottom: 12px;
 }
 
 .flowStep {
   flex: 1 1 150px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  padding: 12px 14px;
+  padding: 14px 15px;
 }
 
 .flowNumber {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #161616;
   font-family: "Playfair Display", serif;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 800;
-  color: var(--gold-text);
-  display: block;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
 }
 
 .flowTitle {
@@ -227,32 +355,200 @@
   flex: 0 0 auto;
 }
 
-.note {
-  font-size: 11.5px;
-  color: var(--muted);
-  margin: -8px 0 22px;
+.flowHighlight {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--investment-bg);
+  border: 1px solid var(--gold);
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 22px;
 }
 
-.divider {
-  min-height: 420px;
+.flowHighlight .flowNumber {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.flowHighlightTitle {
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 2px;
+}
+
+.flowHighlightText {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ---------- Tráfego Pago (2 colunas) ---------- */
+
+.trafficLayout {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+
+.trafficSteps {
   display: flex;
   flex-direction: column;
+}
+
+.trafficStep {
+  position: relative;
+  padding: 0 0 20px 40px;
+  border-left: 2px solid var(--line);
+  margin-left: 12px;
+}
+
+.trafficStep:last-child {
+  padding-bottom: 0;
+  border-left-color: transparent;
+}
+
+.trafficStepNumber {
+  position: absolute;
+  left: -13px;
+  top: -2px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: #161616;
+  font-family: "Playfair Display", serif;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.trafficStepTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  margin: 0 0 3px;
+}
+
+.trafficStepText {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  margin: 0;
+}
+
+.trafficPanels {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ---------- Divisória (preta/dourada, fixa independente do tema Claro/Escuro) ---------- */
+
+.divider {
+  position: relative;
+  min-height: 460px;
+  background: #000;
+  color: #f5f5f0;
+  border-radius: 18px;
+  padding: 40px 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.dividerCrown {
+  position: absolute;
+  bottom: -40px;
+  right: -30px;
+  width: 260px;
+  height: 260px;
+  color: #ffd100;
+  opacity: 0.14;
+  pointer-events: none;
+}
+
+.dividerBrand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 60px;
+  position: relative;
+  z-index: 1;
+}
+
+.dividerBrandName {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ffd100;
+}
+
+.dividerKicker {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #ffd100;
+  margin: 0 0 10px;
+  position: relative;
+  z-index: 1;
 }
 
 .dividerTitle {
   font-family: "Playfair Display", serif;
-  font-size: 26px;
+  font-size: 32px;
   font-weight: 800;
-  max-width: 32ch;
-  margin: 0 0 10px;
+  max-width: 16ch;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  position: relative;
+  z-index: 1;
 }
 
 .dividerText {
-  font-size: 14px;
-  color: var(--muted);
-  max-width: 40ch;
-  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: #cfcfc7;
+  max-width: 42ch;
+  margin: 0 0 40px;
+  position: relative;
+  z-index: 1;
+}
+
+.dividerBreadcrumb {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #ffd100;
+  border-top: 1px solid rgba(255, 209, 0, 0.3);
+  padding-top: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- Nota de upsell (tráfego não incluso na proposta) ---------- */
+
+.upsellNote {
+  background: #161616;
+  color: #f5f5f0;
+  border-radius: 14px;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.upsellNote b {
+  display: block;
+  color: var(--gold);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
 }
