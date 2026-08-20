@@ -23,4 +23,15 @@ describe("PropostaPricingSection showWhy", () => {
     expect(screen.queryByRole("heading", { name: /Por que a King/ })).not.toBeInTheDocument();
     expect(screen.getByText("Investimento mensal")).toBeInTheDocument();
   });
+
+  it("does not show the media-budget note on a one-time item outside Tráfego Pago — that copy only applies to ad spend", () => {
+    const proposalWithSetupFee: CommercialProposal = {
+      ...PROPOSAL,
+      sections: [
+        { category: "Criação de Conteúdo", mode: "single", items: [{ catalogItemId: "setup", name: "Configuração inicial", description: "", whatWeDeliver: [], whatClientProvides: [], billingType: "unica", price: 0, fullPrice: 250, discountedPrice: 250 }] },
+      ],
+    };
+    render(<PropostaPricingSection proposal={proposalWithSetupFee} agency={AGENCY} />);
+    expect(screen.queryByText("Investimento em mídia não incluso")).not.toBeInTheDocument();
+  });
 });

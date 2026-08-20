@@ -143,7 +143,7 @@ export function PropostaPricingSection({ proposal, agency, showWhy = true }: { p
                     </div>
                   </div>
                 ) : null}
-                {item.billingType === "unica" ? (
+                {item.billingType === "unica" && category === "Tráfego Pago" ? (
                   <div className={styles.dependsOn}>
                     <IconCoins className={styles.dependsOnIcon} />
                     <div>
