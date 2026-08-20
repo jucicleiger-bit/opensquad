@@ -72,40 +72,91 @@
 .cover {
   position: relative;
   min-height: 560px;
-  padding-top: 8px;
+  padding: 8px 8px 4px;
   overflow: hidden;
+}
+
+.coverCorner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 220px;
+  height: 220px;
+  background: var(--gold);
+  clip-path: polygon(100% 0, 100% 100%, 0 0);
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .coverCrown {
   position: absolute;
-  top: 40px;
-  right: -30px;
-  width: 260px;
-  height: 260px;
+  bottom: -30px;
+  right: -10px;
+  width: 280px;
+  height: 280px;
   color: var(--gold);
-  opacity: 0.16;
+  opacity: 0.14;
   pointer-events: none;
 }
 
 .coverBrand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 46px;
+  gap: 12px;
+  margin-bottom: 40px;
+  position: relative;
+  z-index: 1;
 }
 
 .coverLogo {
-  height: 40px;
-  width: 40px;
+  height: 46px;
+  width: 46px;
   object-fit: contain;
-  border-radius: 9px;
+  border-radius: 10px;
 }
 
 .coverBrandName {
   font-family: "Playfair Display", serif;
   font-weight: 800;
-  font-size: 16px;
+  font-size: 19px;
   letter-spacing: -0.01em;
+}
+
+.coverIconRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+.coverIconCircle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid var(--gold);
+  color: var(--gold-text);
+}
+
+.coverIconDivider {
+  width: 1px;
+  height: 16px;
+  background: var(--line);
+}
+
+.coverServices {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--gold-text);
+  margin: 0 0 20px;
+  position: relative;
+  z-index: 1;
 }
 
 .coverHeadline {
@@ -120,21 +171,16 @@
   z-index: 1;
 }
 
+.coverHeadlineAccent {
+  color: var(--gold-text);
+}
+
 .coverRule {
   width: 64px;
   height: 3px;
   background: var(--gold);
   border: none;
   margin: 0 0 18px;
-}
-
-.coverServices {
-  font-size: 11.5px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--gold-text);
-  margin: 0 0 14px;
 }
 
 .coverIntro {
@@ -147,40 +193,59 @@
   z-index: 1;
 }
 
-.coverCard {
-  background: #161616;
-  color: #f5f5f0;
-  border-radius: 16px;
-  padding: 20px 22px;
-  display: flex;
-  align-items: center;
-  gap: 14px;
+.coverIntroAccent {
+  color: var(--gold-text);
+  font-weight: 600;
+}
+
+.coverPrepared {
   position: relative;
   z-index: 1;
 }
 
-.coverCardLabel {
-  display: block;
-  font-size: 10px;
+.coverPreparedLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 10.5px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: var(--gold);
-  margin-bottom: 6px;
+  color: var(--gold-text);
+  margin: 0 0 12px;
 }
 
-.coverCardClientLogo {
-  height: 36px;
+.coverPreparedLabel::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+.coverClientRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.coverClientLogoBox {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+}
+
+.coverClientLogoBox img {
+  height: 100%;
   max-width: 84px;
   object-fit: contain;
-  border-radius: 6px;
-  background: #fff;
-  padding: 4px;
 }
 
-.coverCardClientName {
+.coverClientName {
   font-family: "Playfair Display", serif;
-  font-size: 19px;
+  font-size: 22px;
   font-weight: 700;
 }
 

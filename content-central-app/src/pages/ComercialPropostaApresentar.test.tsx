@@ -54,7 +54,7 @@ function renderPage(proposal: unknown, agency = AGENCY, processes: unknown[] = [
 describe("ComercialPropostaApresentar", () => {
   it("shows the capa with the headline, service tags, and the client card", async () => {
     renderPage(proposalWithCategories(["Criação de Conteúdo"]));
-    expect(await screen.findByText("Marketing sem complicação para negócios locais")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Marketing sem complicação para negócios locais" })).toBeInTheDocument();
     expect(screen.getByText("Apresentação preparada para")).toBeInTheDocument();
     expect(screen.getAllByText("Arthur Frios").length).toBeGreaterThan(0);
   });

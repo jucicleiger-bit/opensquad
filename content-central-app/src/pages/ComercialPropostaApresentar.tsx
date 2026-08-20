@@ -49,6 +49,31 @@ function IconCrown(props: SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconChat(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4 5.5h16v10H9.5L5 19.5V15.5H4z" />
+    </svg>
+  );
+}
+
+function IconPhone(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <rect x="7" y="3" width="10" height="18" rx="2" />
+      <path d="M11 18h2" />
+    </svg>
+  );
+}
+
+function IconChart(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" {...props}>
+      <path d="M5 19V10M12 19V5M19 19v-6" />
+    </svg>
+  );
+}
+
 function PageHeader({ agency, proposal }: { agency: CommercialAgency; proposal: CommercialProposal }) {
   return (
     <header className={styles.header}>
@@ -147,23 +172,37 @@ export function ComercialPropostaApresentar() {
       <div className={styles.sheet}>
         {/* 1. Capa */}
         <section className={`${apresentarStyles.printSection} ${apresentarStyles.cover}`}>
+          <div className={apresentarStyles.coverCorner} />
           <IconCrown className={apresentarStyles.coverCrown} />
           <div className={apresentarStyles.coverBrand}>
             {agency.logoPath ? <img src={commercialAssetUrl(agency.logoPath)} alt={agency.name} className={apresentarStyles.coverLogo} /> : null}
             <span className={apresentarStyles.coverBrandName}>{agency.name}</span>
           </div>
-          <h1 className={apresentarStyles.coverHeadline}>Marketing sem complicação para negócios locais</h1>
-          <hr className={apresentarStyles.coverRule} />
+          <div className={apresentarStyles.coverIconRow}>
+            <span className={apresentarStyles.coverIconCircle}><IconChat width={16} height={16} /></span>
+            <span className={apresentarStyles.coverIconDivider} />
+            <span className={apresentarStyles.coverIconCircle}><IconPhone width={16} height={16} /></span>
+            <span className={apresentarStyles.coverIconDivider} />
+            <span className={apresentarStyles.coverIconCircle}><IconChart width={16} height={16} /></span>
+          </div>
           <p className={apresentarStyles.coverServices}>Conteúdo • Redes Sociais • Tráfego Pago</p>
+          <h1 className={apresentarStyles.coverHeadline}>
+            Marketing sem complicação para <span className={apresentarStyles.coverHeadlineAccent}>negócios locais</span>
+          </h1>
+          <hr className={apresentarStyles.coverRule} />
           <p className={apresentarStyles.coverIntro}>
-            Criação, publicação e mídia paga em uma operação simples para manter sua empresa presente sem transformar marketing em mais uma tarefa da rotina.
+            Criação, publicação e mídia paga em uma operação simples para manter sua empresa <span className={apresentarStyles.coverIntroAccent}>presente sem</span> transformar marketing em mais uma <span className={apresentarStyles.coverIntroAccent}>tarefa</span> da rotina.
           </p>
-          <div className={apresentarStyles.coverCard}>
-            <div>
-              <span className={apresentarStyles.coverCardLabel}>Apresentação preparada para</span>
-              <span className={apresentarStyles.coverCardClientName}>{proposal.clientName}</span>
+          <div className={apresentarStyles.coverPrepared}>
+            <p className={apresentarStyles.coverPreparedLabel}>Apresentação preparada para</p>
+            <div className={apresentarStyles.coverClientRow}>
+              {proposal.clientLogoDataUrl ? (
+                <span className={apresentarStyles.coverClientLogoBox}>
+                  <img src={proposal.clientLogoDataUrl} alt={proposal.clientName} />
+                </span>
+              ) : null}
+              <span className={apresentarStyles.coverClientName}>{proposal.clientName}</span>
             </div>
-            {proposal.clientLogoDataUrl ? <img src={proposal.clientLogoDataUrl} alt={proposal.clientName} className={apresentarStyles.coverCardClientLogo} /> : null}
           </div>
         </section>
 
