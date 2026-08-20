@@ -23,8 +23,8 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 describe("ComercialAgencia", () => {
   it("shows saved agency data and lets you update the contact info", async () => {
     stubFetchSequence([
-      { body: { agency: { name: "King Assessoria de Mkt", logoPath: "", contactPhone: "", contactInstagram: "", updatedAt: null } } },
-      { body: { agency: { name: "King Assessoria de Mkt", logoPath: "", contactPhone: "(65) 99999-0000", contactInstagram: "", updatedAt: "2026-08-19T00:00:00.000Z" } } },
+      { body: { agency: { name: "King Assessoria de Mkt", logoPath: "", contactPhone: "", contactInstagram: "", about: "", updatedAt: null } } },
+      { body: { agency: { name: "King Assessoria de Mkt", logoPath: "", contactPhone: "(65) 99999-0000", contactInstagram: "", about: "Agência de marketing digital.", updatedAt: "2026-08-19T00:00:00.000Z" } } },
     ]);
     render(
       <MemoryRouter>
@@ -33,6 +33,7 @@ describe("ComercialAgencia", () => {
     );
     expect(await screen.findByDisplayValue("King Assessoria de Mkt")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("Telefone"), "(65) 99999-0000");
+    await userEvent.type(screen.getByLabelText("Sobre a empresa"), "Agência de marketing digital.");
     await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
     expect(await screen.findByText("Dados da agência salvos.")).toBeInTheDocument();
   });

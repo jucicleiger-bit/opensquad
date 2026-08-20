@@ -7,7 +7,7 @@ import styles from "./ComercialAgencia.module.css";
 
 export function ComercialAgencia() {
   const [agency, setAgency] = useState<CommercialAgency | null>(null);
-  const [form, setForm] = useState({ name: "", contactPhone: "", contactInstagram: "" });
+  const [form, setForm] = useState({ name: "", contactPhone: "", contactInstagram: "", about: "" });
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -17,7 +17,7 @@ export function ComercialAgencia() {
     getCommercialAgency()
       .then((res) => {
         setAgency(res.agency);
-        setForm({ name: res.agency.name, contactPhone: res.agency.contactPhone, contactInstagram: res.agency.contactInstagram });
+        setForm({ name: res.agency.name, contactPhone: res.agency.contactPhone, contactInstagram: res.agency.contactInstagram, about: res.agency.about });
       })
       .catch((err: Error) => setError(err.message));
   }, []);
@@ -81,6 +81,8 @@ export function ComercialAgencia() {
           <input id="agency-phone" value={form.contactPhone} onChange={(e) => setForm({ ...form, contactPhone: e.target.value })} />
           <label htmlFor="agency-instagram">Instagram</label>
           <input id="agency-instagram" value={form.contactInstagram} onChange={(e) => setForm({ ...form, contactInstagram: e.target.value })} />
+          <label htmlFor="agency-about">Sobre a empresa</label>
+          <textarea id="agency-about" placeholder="Usado na Apresentação institucional." value={form.about} onChange={(e) => setForm({ ...form, about: e.target.value })} />
           <Button type="submit" className="full-width" style={{ marginTop: "var(--space-sm)" }} disabled={saving}>
             {saving ? "Salvando..." : "Salvar"}
           </Button>
