@@ -382,12 +382,19 @@ async function handleRequest(req, res, targetDir, context = {}) {
   const method = req.method || 'GET';
 
   // The React app (content-central-app/) is the official panel, served at "/"
-  // with clean client-side routes ("/projects/:id/..."). The old vanilla
-  // renderApp() panel stays reachable at "/classic" as a fallback for the
-  // sections not yet migrated (Referências e imagem, Agenda e geração, Teste
-  // seguro) so nobody is stranded while the rewrite is still in progress.
+  // with clean client-side routes ("/projects/:id/...", "/comercial/...").
+  // The old vanilla renderApp() panel stays reachable at "/classic" as a
+  // fallback for the sections not yet migrated (Referências e imagem,
+  // Agenda e geração, Teste seguro) so nobody is stranded while the rewrite
+  // is still in progress.
+  //
+  // Every real API endpoint lives under /api/ — so instead of allow-listing
+  // each client-side route prefix one by one (which silently 404s any new
+  // one added later on a hard navigation, e.g. opening a print view in a
+  // new tab), any other GET request falls back to the SPA shell and lets
+  // React Router match it client-side.
   if (method === 'GET' && route === '/classic') return sendHtml(res, renderApp());
-  if (method === 'GET' && (route === '/' || route.startsWith('/assets/') || route.startsWith('/stock/') || route === '/projects' || route.startsWith('/projects/'))) {
+  if (method === 'GET' && !route.startsWith('/api/')) {
     return sendReactApp(res, route === '/' ? '' : route);
   }
   if (method === 'GET' && route === '/api/state') return sendJson(res, 200, {

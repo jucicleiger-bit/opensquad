@@ -1593,6 +1593,14 @@ test('content central server serves the React app at "/" with SPA fallback on cl
     assert.equal(deepRoute.status, 200);
     assert.ok((await deepRoute.text()).includes('<div id="root">'));
 
+    // A hard navigation (e.g. opening the proposal print view in a new tab)
+    // hits the server directly for whatever client-side route it lands on —
+    // any top-level route not under /api/ must fall back to the SPA shell,
+    // not just the prefixes the server happened to allow-list explicitly.
+    const comercialRoute = await fetch(`${server.url}/comercial/propostas/prop-123/imprimir`);
+    assert.equal(comercialRoute.status, 200);
+    assert.ok((await comercialRoute.text()).includes('<div id="root">'));
+
     const asset = await fetch(`${server.url}/assets/does-not-exist.js`);
     assert.equal(asset.status, 404);
 
