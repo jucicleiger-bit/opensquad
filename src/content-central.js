@@ -320,6 +320,7 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     commercialAssetsDir: join(root, 'commercial-assets'),
     commercialProposalsDir: join(root, 'commercial-proposals'),
     commercialProcessesPath: join(root, 'commercial-processes.json'),
+    commercialPortfolioPath: join(root, 'commercial-portfolio.json'),
   };
 
   if (!projectId) return paths;
@@ -665,6 +666,56 @@ export async function saveCommercialProcess(input, targetDir = process.cwd()) {
     byCategory.set(entry.category, entry);
     await writeJson(paths.commercialProcessesPath, { entries: [...byCategory.values()] });
     return entry;
+  });
+}
+
+function normalizeCommercialPortfolioItem(input) {
+  const category = String(input?.category || '').trim();
+  if (!category) throw new Error('Categoria é obrigatória');
+  return {
+    id: String(input?.id || '').trim(),
+    category,
+    caption: String(input?.caption || '').trim(),
+    imagePath: String(input?.imagePath || '').trim(),
+    createdAt: input?.createdAt || new Date().toISOString(),
+  };
+}
+
+export async function listCommercialPortfolioItems(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readJson(paths.commercialPortfolioPath, { items: [] });
+  return (store.items || []).map((item) => normalizeCommercialPortfolioItem(item));
+}
+
+export async function saveCommercialPortfolioItem(input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const category = String(input?.category || '').trim();
+    if (!category) throw new Error('Categoria é obrigatória');
+    const id = `${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+    const filename = sanitizeFilename(input?.filename || 'arte.png');
+    const ext = (extname(filename) || '.png').toLowerCase();
+    const imagePath = `portfolio-${id}${ext}`;
+    const buffer = decodeDataUrl(input?.dataUrl);
+    await mkdir(paths.commercialAssetsDir, { recursive: true });
+    await writeFile(join(paths.commercialAssetsDir, imagePath), buffer);
+
+    const item = normalizeCommercialPortfolioItem({ id, category, caption: input?.caption, imagePath, createdAt: now.toISOString() });
+    const store = await readJson(paths.commercialPortfolioPath, { items: [] });
+    await writeJson(paths.commercialPortfolioPath, { items: [...(store.items || []), item] });
+    return item;
+  });
+}
+
+export async function deleteCommercialPortfolioItem(id, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const store = await readJson(paths.commercialPortfolioPath, { items: [] });
+    const item = (store.items || []).find((entry) => entry.id === id);
+    const remaining = (store.items || []).filter((entry) => entry.id !== id);
+    await writeJson(paths.commercialPortfolioPath, { items: remaining });
+    if (item?.imagePath) await rm(join(paths.commercialAssetsDir, item.imagePath), { force: true });
+    return { id, deleted: true };
   });
 }
 

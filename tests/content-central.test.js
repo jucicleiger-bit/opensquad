@@ -11,15 +11,18 @@ import {
   createCentralProject,
   deleteCommercialCatalogItem,
   deleteCommercialProposal,
+  deleteCommercialPortfolioItem,
   duplicateCentralProject,
   getCommercialAgency,
   getCommercialProposal,
   listCommercialCatalogItems,
+  listCommercialPortfolioItems,
   listCommercialProcesses,
   listCommercialProposals,
   saveCommercialAgency,
   saveCommercialAgencyLogo,
   saveCommercialCatalogItem,
+  saveCommercialPortfolioItem,
   saveCommercialProcess,
   saveCommercialProposal,
   buildSegmentLayoutReferences,
@@ -353,6 +356,39 @@ test('saveCommercialProcess stores one process text per category, saving the sam
 test('saveCommercialProcess rejects a missing category', async () => {
   await withTempProject(async (dir) => {
     await assert.rejects(() => saveCommercialProcess({ text: 'X' }, dir), /Categoria é obrigatória/);
+  });
+});
+
+test('saveCommercialPortfolioItem saves the image file and an entry, listCommercialPortfolioItems returns them, deleteCommercialPortfolioItem removes both', async () => {
+  await withTempProject(async (dir) => {
+    const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const created = await saveCommercialPortfolioItem({ category: 'Criação de Conteúdo', caption: 'Post de lançamento', filename: 'arte.PNG', dataUrl: pngDataUrl }, dir);
+    assert.equal(created.category, 'Criação de Conteúdo');
+    assert.equal(created.caption, 'Post de lançamento');
+    assert.ok(created.id);
+    assert.equal(created.imagePath, `portfolio-${created.id}.png`);
+
+    const paths = getCentralPaths(dir);
+    await stat(join(paths.commercialAssetsDir, created.imagePath));
+
+    let items = await listCommercialPortfolioItems(dir);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].id, created.id);
+
+    const result = await deleteCommercialPortfolioItem(created.id, dir);
+    assert.deepEqual(result, { id: created.id, deleted: true });
+
+    items = await listCommercialPortfolioItems(dir);
+    assert.equal(items.length, 0);
+    await assert.rejects(() => stat(join(paths.commercialAssetsDir, created.imagePath)));
+  });
+});
+
+test('saveCommercialPortfolioItem rejects a missing category', async () => {
+  await withTempProject(async (dir) => {
+    const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    await assert.rejects(() => saveCommercialPortfolioItem({ caption: 'X', filename: 'a.png', dataUrl: pngDataUrl }, dir), /Categoria é obrigatória/);
   });
 });
 
