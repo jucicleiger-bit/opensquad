@@ -1123,6 +1123,7 @@ export interface CommercialAgency {
   logoPath: string;
   contactPhone: string;
   contactInstagram: string;
+  about: string;
   updatedAt: string | null;
 }
 
@@ -1179,6 +1180,7 @@ export function saveCommercialAgency(input: {
   name: string;
   contactPhone: string;
   contactInstagram: string;
+  about: string;
 }): Promise<{ agency: CommercialAgency }> {
   return api("/api/commercial/agency", { method: "POST", body: JSON.stringify(input) });
 }
@@ -1207,6 +1209,44 @@ export function saveCommercialProposal(
 
 export function deleteCommercialProposal(id: string): Promise<{ id: string; deleted: boolean }> {
   return api(`/api/commercial/proposals/${encodeURIComponent(id)}/delete`, { method: "POST" });
+}
+
+export interface CommercialProcess {
+  category: string;
+  text: string;
+}
+
+export interface CommercialPortfolioItem {
+  id: string;
+  category: string;
+  caption: string;
+  imagePath: string;
+  createdAt: string;
+}
+
+export function listCommercialProcesses(): Promise<{ processes: CommercialProcess[] }> {
+  return api("/api/commercial/processes");
+}
+
+export function saveCommercialProcess(input: CommercialProcess): Promise<{ process: CommercialProcess }> {
+  return api("/api/commercial/processes", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function listCommercialPortfolio(): Promise<{ items: CommercialPortfolioItem[] }> {
+  return api("/api/commercial/portfolio");
+}
+
+export function saveCommercialPortfolioItem(input: {
+  category: string;
+  caption: string;
+  filename: string;
+  dataUrl: string;
+}): Promise<{ item: CommercialPortfolioItem }> {
+  return api("/api/commercial/portfolio", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function deleteCommercialPortfolioItem(id: string): Promise<{ id: string; deleted: boolean }> {
+  return api(`/api/commercial/portfolio/${encodeURIComponent(id)}/delete`, { method: "POST" });
 }
 
 export const CONTENT_GOAL_LABELS: Record<string, string> = {
