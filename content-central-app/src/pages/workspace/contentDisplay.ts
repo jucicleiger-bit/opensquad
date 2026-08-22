@@ -6,6 +6,7 @@ export const CHANNEL_LABELS: Record<string, string> = {
   instagram_reels: "Reels",
   facebook_feed: "FB Feed",
   facebook_story: "FB Story",
+  whatsapp_status: "Status (beta)",
 };
 
 export function channelLabel(channel: string): string {
@@ -18,6 +19,7 @@ export const CHANNEL_FULL_LABELS: Record<string, string> = {
   instagram_reels: "Instagram Reels",
   facebook_feed: "Facebook Feed",
   facebook_story: "Facebook Story",
+  whatsapp_status: "WhatsApp Status (beta)",
 };
 
 export function channelFullLabel(channel: string): string {
@@ -33,7 +35,7 @@ export function isFeedChannel(channel: string): boolean {
 // Mirrors creativeShapeGroupForChannel() in content-central.js — channels
 // that share a pixel shape end up sharing one AI-generated creative, so the
 // generation screen offers a one-click way to select a whole group at once.
-export const VERTICAL_CREATIVE_CHANNELS = ["instagram_story", "instagram_reels", "facebook_story"];
+export const VERTICAL_CREATIVE_CHANNELS = ["instagram_story", "instagram_reels", "facebook_story", "whatsapp_status"];
 export const FEED_CREATIVE_CHANNELS = ["instagram_feed", "facebook_feed"];
 
 // Mirrors imageSource() in content-central-server.js's renderApp(): a real

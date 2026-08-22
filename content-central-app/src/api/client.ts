@@ -14,6 +14,13 @@ export interface ProjectInstagram {
   pageId?: string;
 }
 
+export interface ProjectWhatsApp {
+  configured?: boolean;
+  instanceUrl?: string;
+  instanceName?: string;
+  maskedApiKey?: string;
+}
+
 export interface BrandInput {
   brandName?: string;
   segmentGroup?: string;
@@ -250,6 +257,7 @@ export interface ProjectSummary {
   brand?: ProjectBrand;
   offerAssets?: ProjectReference[];
   token?: ProjectToken | null;
+  whatsapp?: ProjectWhatsApp;
   contentSettings?: {
     catalogGeneralInfo?: string;
     catalogStoriesPerDay?: number;
@@ -774,6 +782,16 @@ export function saveToken(
   return api(`/api/projects/${encodeURIComponent(projectId)}/token`, {
     method: "POST",
     body: JSON.stringify({ token, handle }),
+  });
+}
+
+export function saveWhatsAppInstance(
+  projectId: string,
+  input: { instanceUrl: string; instanceName: string; apiKey: string },
+): Promise<{ project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
