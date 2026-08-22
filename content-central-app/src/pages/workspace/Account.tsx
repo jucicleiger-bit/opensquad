@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
-import { saveToken } from "@/api/client";
+import { saveToken, saveWhatsAppInstance } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { tokenExpiryMeta } from "./tokenDisplay";
@@ -20,7 +20,15 @@ export function Account() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
+  const [instanceUrl, setInstanceUrl] = useState("");
+  const [instanceName, setInstanceName] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [whatsappBusy, setWhatsappBusy] = useState(false);
+  const [whatsappError, setWhatsappError] = useState<string | null>(null);
+  const [whatsappMessage, setWhatsappMessage] = useState<string | null>(null);
+
   const tokenInfo = project.token;
+  const whatsappInfo = project.whatsapp;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -48,6 +56,27 @@ export function Account() {
     }
   }
 
+  async function handleWhatsAppSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!instanceUrl.trim() || !instanceName.trim() || !apiKey.trim()) {
+      setWhatsappError("Preencha URL, nome da instância e apikey antes de salvar.");
+      return;
+    }
+    setWhatsappBusy(true);
+    setWhatsappError(null);
+    setWhatsappMessage(null);
+    try {
+      await saveWhatsAppInstance(project.projectId, { instanceUrl, instanceName, apiKey });
+      setApiKey("");
+      await refreshProject();
+      setWhatsappMessage("Instância WhatsApp salva.");
+    } catch (err) {
+      setWhatsappError((err as Error).message);
+    } finally {
+      setWhatsappBusy(false);
+    }
+  }
+
   return (
     <div>
       <h2 style={{ margin: "0 0 var(--space-lg)" }}>Conta e token</h2>
@@ -69,7 +98,7 @@ export function Account() {
         </div>
       </Card>
 
-      <Card style={{ padding: 20 }}>
+      <Card style={{ padding: 20, marginBottom: 20 }}>
         <div className="notice">
           <b>Token seguro:</b>
           <br />
@@ -101,6 +130,66 @@ export function Account() {
         </form>
         {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
         {message ? <div className="pill ok" style={{ marginTop: 12 }}>{message}</div> : null}
+      </Card>
+
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>WhatsApp Status (beta)</h2>
+
+      <Card style={{ padding: 20 }}>
+        <div className="notice">
+          <b>Canal beta — leia antes de configurar:</b>
+          <br />
+          <span className="muted">
+            Publica via Evolution API (automação não-oficial do WhatsApp Web, não é a API oficial da Meta). Sem SLA — pode
+            falhar sem responder ou, em tese, levar ao banimento do número. Configure só se aceitar esse risco.
+          </span>
+        </div>
+        <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {whatsappInfo?.configured ? (
+            <>
+              <span className="pill ok">{whatsappInfo.maskedApiKey}</span>
+              <span className="pill">{whatsappInfo.instanceUrl}</span>
+            </>
+          ) : (
+            <span className="pill">Instância não configurada</span>
+          )}
+        </div>
+        <form onSubmit={handleWhatsAppSubmit}>
+          <div className="grid" style={{ marginTop: 12 }}>
+            <div>
+              <label htmlFor="whatsapp-instance-url">URL da instância Evolution</label>
+              <input
+                id="whatsapp-instance-url"
+                placeholder="https://evolution.seudominio.com"
+                value={instanceUrl}
+                onChange={(e) => setInstanceUrl(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="whatsapp-instance-name">Nome da instância</label>
+              <input
+                id="whatsapp-instance-name"
+                placeholder="nome-da-instancia"
+                value={instanceName}
+                onChange={(e) => setInstanceName(e.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="whatsapp-apikey">Apikey</label>
+              <input
+                id="whatsapp-apikey"
+                type="password"
+                placeholder="cole a apikey aqui"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+              />
+            </div>
+          </div>
+          <Button type="submit" variant="secondary" className="full-width" style={{ marginTop: 12 }} disabled={whatsappBusy}>
+            {whatsappBusy ? "Salvando..." : "Salvar instância"}
+          </Button>
+        </form>
+        {whatsappError ? <div className="pill bad" style={{ marginTop: 12 }}>{whatsappError}</div> : null}
+        {whatsappMessage ? <div className="pill ok" style={{ marginTop: 12 }}>{whatsappMessage}</div> : null}
       </Card>
     </div>
   );

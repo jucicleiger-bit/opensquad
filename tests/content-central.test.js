@@ -38,6 +38,7 @@ import {
   generateAdCreative,
   listAdCreatives,
   generateCatalogSchedulePlan,
+  creativeShapeGroupForChannel,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -75,6 +76,7 @@ import {
   suggestProjectPillars,
   saveProjectAsset,
   saveProjectToken,
+  saveProjectWhatsAppInstance,
   simulateTestPost,
   updateContentCaption,
   animateContentForReels,
@@ -2023,6 +2025,80 @@ test('saveProjectToken marks a token with no known expiration as valid instead o
     assert.equal(updated.token.expiresAt, null);
     assert.equal(updated.token.daysRemaining, null);
     assert.equal(updated.token.status, 'valido');
+  });
+});
+
+test('creativeShapeGroupForChannel treats whatsapp_status as the same vertical shape group as Story/Reels', () => {
+  assert.equal(creativeShapeGroupForChannel('whatsapp_status'), 'vertical');
+  assert.equal(creativeShapeGroupForChannel('instagram_story'), 'vertical');
+});
+
+test('WhatsApp Status generates with the same real vertical dimensions as the other Story channels', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'canal-whatsapp',
+      name: 'Canal WhatsApp',
+      handle: '@canalwhatsapp',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const batch = await generateContentBatch('canal-whatsapp', {
+      days: 1,
+      startDate: '2026-07-20',
+      channel: 'whatsapp_status',
+    }, dir);
+    const item = batch.items[0];
+    assert.equal(item.channel, 'whatsapp_status');
+    assert.equal(item.image.aspectRatio, 'portrait');
+    assert.deepEqual(item.image.dimensions, { width: 1080, height: 1920 });
+    assert.match(item.image.prompt, /WhatsApp Status 9:16 vertical real, 1080x1920/);
+  });
+});
+
+test('saveProjectWhatsAppInstance stores the apikey outside project config and records masked metadata', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'whatsapp-demo',
+      name: 'WhatsApp Demo',
+      handle: '@whatsappdemo',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const updated = await saveProjectWhatsAppInstance('whatsapp-demo', {
+      instanceUrl: 'https://evolution.example.com',
+      instanceName: 'whatsapp-demo-instance',
+      apiKey: 'evo-real-secret-1234567890',
+    }, dir, new Date('2026-08-21T12:00:00.000Z'));
+
+    assert.equal(updated.whatsapp.configured, true);
+    assert.equal(updated.whatsapp.instanceUrl, 'https://evolution.example.com');
+    assert.equal(updated.whatsapp.instanceName, 'whatsapp-demo-instance');
+    assert.equal(updated.whatsapp.maskedApiKey, '****7890');
+
+    const paths = getCentralPaths(dir, 'whatsapp-demo');
+    const configRaw = await readFile(paths.projectPath, 'utf-8');
+    assert.equal(configRaw.includes('evo-real-secret'), false);
+
+    const secretRaw = await readFile(paths.whatsappApiKeySecretPath, 'utf-8');
+    assert.equal(secretRaw, 'evo-real-secret-1234567890');
+  });
+});
+
+test('saveProjectWhatsAppInstance rejects an incomplete instance config', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'whatsapp-incompleto', name: 'WhatsApp Incompleto' }, dir);
+    await assert.rejects(
+      () => saveProjectWhatsAppInstance('whatsapp-incompleto', { instanceUrl: 'https://evolution.example.com' }, dir),
+      /required/,
+    );
+  });
+});
+
+test('a project summary always carries a whatsapp block, defaulted for projects created before this field existed', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'whatsapp-default', name: 'WhatsApp Default' }, dir);
+    const [project] = await (await import('../src/content-central.js')).listCentralProjects(dir);
+    assert.deepEqual(project.whatsapp, { configured: false, instanceUrl: '', instanceName: '', maskedApiKey: '' });
   });
 });
 

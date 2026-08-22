@@ -108,6 +108,14 @@ describe("GenerateContent", () => {
     expect(body.formats.map((f: { channel: string }) => f.channel)).toEqual(["facebook_feed"]);
   });
 
+  it("offers WhatsApp Status as a disabled-by-default beta format", async () => {
+    stubFetchSequence([{ body: projectState() }, EMPTY_COMMEMORATIVE_DATES]);
+    renderGenerate();
+
+    const whatsappCheckbox = await screen.findByRole("checkbox", { name: "WhatsApp Status (beta)" });
+    expect(whatsappCheckbox).not.toBeChecked();
+  });
+
   it("sends no groupIds by default, and only the checked group's id once one is selected", async () => {
     stubFetchSequence([
       {

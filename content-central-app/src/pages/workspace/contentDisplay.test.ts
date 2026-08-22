@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ContentItem } from "@/api/client";
-import { contentPipelineSteps } from "./contentDisplay";
+import { channelFullLabel, channelLabel, contentPipelineSteps, VERTICAL_CREATIVE_CHANNELS } from "./contentDisplay";
 
 function item(overrides: Partial<ContentItem> = {}): ContentItem {
   return {
@@ -63,5 +63,13 @@ describe("contentPipelineSteps", () => {
       detail: "Imagem falhou",
       tone: "blocked",
     });
+  });
+});
+
+describe("whatsapp_status channel", () => {
+  it("labels it as a beta channel and groups it with the other vertical Story channels", () => {
+    expect(channelLabel("whatsapp_status")).toBe("Status (beta)");
+    expect(channelFullLabel("whatsapp_status")).toBe("WhatsApp Status (beta)");
+    expect(VERTICAL_CREATIVE_CHANNELS).toContain("whatsapp_status");
   });
 });
