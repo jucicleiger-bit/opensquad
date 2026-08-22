@@ -14,8 +14,10 @@ services:
     volumes:
       - evolution_instances:/evolution/instances
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
 
   postgres:
     image: postgres:15
@@ -26,6 +28,11 @@ services:
       POSTGRES_DB: evolution
     volumes:
       - evolution_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:7

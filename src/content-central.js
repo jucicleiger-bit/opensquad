@@ -18,7 +18,7 @@ const CHANNEL_LABELS = {
   instagram_reels: 'Instagram Reels',
   facebook_feed: 'Facebook Feed',
   facebook_story: 'Facebook Story',
-  whatsapp_status: 'WhatsApp Status',
+  whatsapp_status: 'WhatsApp Status (beta)',
 };
 
 export const OFFER_TYPES = new Set([
@@ -564,6 +564,15 @@ export async function readProjectToken(projectId, targetDir = process.cwd()) {
 export async function saveProjectWhatsAppInstance(projectId, input, targetDir = process.cwd(), now = new Date()) {
   if (!input?.instanceUrl || !input?.instanceName || !input?.apiKey) {
     throw new Error('instanceUrl, instanceName and apiKey are required');
+  }
+  let parsedInstanceUrl;
+  try {
+    parsedInstanceUrl = new URL(input.instanceUrl);
+  } catch {
+    throw new Error('URL da instância Evolution inválida.');
+  }
+  if (parsedInstanceUrl.protocol !== 'http:' && parsedInstanceUrl.protocol !== 'https:') {
+    throw new Error('Use uma URL http:// ou https:// para a instância Evolution.');
   }
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
@@ -6081,7 +6090,7 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   return uniqueReferences([...brandAssets, ...productPhotos, ...layoutReferences, ...segmentProductReferences, ...visualReferences]);
 }
 
-function isVerticalStoryChannel(channel) {
+export function isVerticalStoryChannel(channel) {
   return channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story' || channel === 'whatsapp_status';
 }
 

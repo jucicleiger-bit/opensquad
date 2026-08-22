@@ -2727,6 +2727,70 @@ test('content central API accepts Facebook Feed and Story as generation channels
   });
 });
 
+test('content central API accepts whatsapp_status as a generation channel', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectId: 'api-whatsapp',
+        name: 'API WhatsApp',
+        handle: '@apiwhatsapp',
+        approvalEmail: 'aprovacao@example.com',
+      }),
+    });
+
+    const generated = await request(server, '/api/projects/api-whatsapp/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        days: 1,
+        startDate: '2026-07-20',
+        channels: ['whatsapp_status'],
+      }),
+    });
+
+    assert.equal(generated.response.status, 201);
+    assert.deepEqual(generated.body.batches.map((batch) => batch.items[0].channel), ['whatsapp_status']);
+  });
+});
+
+// Regression guard for the "Marcar todos os Stories" button: it selects
+// instagram_story, instagram_reels, facebook_story AND whatsapp_status
+// together (see VERTICAL_CREATIVE_CHANNELS in the React app) and submits
+// them as one /generate call with a `formats` array — normalizeChannels
+// used to reject whatsapp_status and 500 the whole batch, bricking the
+// pre-existing Meta-channel flow too.
+test('content central API generates a mixed instagram_story + whatsapp_status formats batch (Marcar todos os Stories)', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({
+        projectId: 'todos-stories-web',
+        name: 'Todos Stories Web',
+        handle: '@todosstories',
+        approvalEmail: 'aprovacao@example.com',
+      }),
+    });
+
+    const generated = await request(server, '/api/projects/todos-stories-web/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        days: 1,
+        startDate: '2026-07-20',
+        formats: [
+          { channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 },
+          { channel: 'whatsapp_status', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 },
+        ],
+      }),
+    });
+
+    assert.equal(generated.response.status, 201);
+    assert.deepEqual(
+      [...new Set(generated.body.batch.items.map((item) => item.channel))].sort(),
+      ['instagram_story', 'whatsapp_status'],
+    );
+  });
+});
+
 test('content central API uploads logo and reference files into project assets', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
