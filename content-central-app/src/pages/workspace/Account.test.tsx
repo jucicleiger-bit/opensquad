@@ -73,3 +73,39 @@ describe("Account", () => {
     expect(await screen.findByText("Expira em 90 dias")).toBeInTheDocument();
   });
 });
+
+describe("WhatsApp Status (beta)", () => {
+  it("shows the risk notice and an unconfigured state when no instance is saved", async () => {
+    stubFetchSequence([{ body: projectState() }]);
+    renderAccount();
+    expect(await screen.findByText("WhatsApp Status (beta)")).toBeInTheDocument();
+    expect(screen.getByText("Instância não configurada")).toBeInTheDocument();
+  });
+
+  it("shows the configured instance when whatsapp.configured is true", async () => {
+    stubFetchSequence([
+      { body: projectState({ whatsapp: { configured: true, instanceUrl: "https://evolution.example.com", instanceName: "boss-instance", maskedApiKey: "****9999" } }) },
+    ]);
+    renderAccount();
+    expect(await screen.findByText("****9999")).toBeInTheDocument();
+    expect(screen.getByText("https://evolution.example.com")).toBeInTheDocument();
+  });
+
+  it("saves a new instance through the real endpoint", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: { whatsapp: { configured: true, instanceUrl: "https://evolution.example.com", instanceName: "boss-instance", maskedApiKey: "****abcd" } } } },
+      { body: projectState({ whatsapp: { configured: true, instanceUrl: "https://evolution.example.com", instanceName: "boss-instance", maskedApiKey: "****abcd" } }) },
+    ]);
+    renderAccount();
+
+    await screen.findByText("Instância não configurada");
+    await userEvent.type(screen.getByLabelText("URL da instância Evolution"), "https://evolution.example.com");
+    await userEvent.type(screen.getByLabelText("Nome da instância"), "boss-instance");
+    await userEvent.type(screen.getByLabelText("Apikey"), "evo-secret-abcd");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar instância" }));
+
+    expect(await screen.findByText("Instância WhatsApp salva.")).toBeInTheDocument();
+    expect(await screen.findByText("****abcd")).toBeInTheDocument();
+  });
+});
