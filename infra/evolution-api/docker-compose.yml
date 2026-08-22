@@ -1,0 +1,39 @@
+# Local/dev Evolution API instance for the whatsapp_status beta channel.
+# Not wired into the app automatically — after `docker compose up -d`, create
+# the instance and scan its QR code through Evolution's own admin, then paste
+# the instance URL/name + AUTHENTICATION_API_KEY into the project's
+# "WhatsApp Status (beta)" card in Conta e token.
+services:
+  evolution-api:
+    image: atendai/evolution-api:latest
+    restart: always
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    volumes:
+      - evolution_instances:/evolution/instances
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution
+      POSTGRES_DB: evolution
+    volumes:
+      - evolution_postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: always
+    volumes:
+      - evolution_redis:/data
+
+volumes:
+  evolution_instances:
+  evolution_postgres:
+  evolution_redis:
