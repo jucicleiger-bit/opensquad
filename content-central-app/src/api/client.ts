@@ -16,7 +16,6 @@ export interface ProjectInstagram {
 
 export interface ProjectWhatsApp {
   configured?: boolean;
-  instanceUrl?: string;
   instanceName?: string;
   maskedApiKey?: string;
 }
@@ -796,14 +795,12 @@ export function saveToken(
   });
 }
 
-export function saveWhatsAppInstance(
-  projectId: string,
-  input: { instanceUrl: string; instanceName: string; apiKey: string },
-): Promise<{ project: ProjectSummary }> {
-  return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
+export function connectWhatsAppInstance(projectId: string): Promise<{ qrcode: string | null; project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance/connect`, { method: "POST" });
+}
+
+export function getWhatsAppInstanceStatus(projectId: string): Promise<{ connected: boolean; state: string }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance/status`);
 }
 
 export function saveBrandInput(projectId: string, input: BrandInput): Promise<{ project: ProjectSummary }> {
