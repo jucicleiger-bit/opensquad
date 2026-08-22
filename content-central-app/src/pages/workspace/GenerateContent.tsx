@@ -138,6 +138,7 @@ const DEFAULT_FORMATS: FormatState[] = [
   { channel: "instagram_reels", enabled: false, postsPerDay: "1", everyDays: "1", startTime: "18:00", intervalMinutes: "0" },
   { channel: "facebook_feed", enabled: false, postsPerDay: "1", everyDays: "2", startTime: "12:00", intervalMinutes: "0" },
   { channel: "facebook_story", enabled: false, postsPerDay: "1", everyDays: "1", startTime: "09:00", intervalMinutes: "240" },
+  { channel: "whatsapp_status", enabled: false, postsPerDay: "1", everyDays: "1", startTime: "09:00", intervalMinutes: "0" },
 ];
 
 // Datas comemorativas / data personalizada don't need the per-format
