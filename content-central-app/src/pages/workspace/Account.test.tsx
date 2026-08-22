@@ -75,37 +75,60 @@ describe("Account", () => {
 });
 
 describe("WhatsApp Status (beta)", () => {
-  it("shows the risk notice and an unconfigured state when no instance is saved", async () => {
+  it("shows the risk notice and a Conectar button when no instance is configured", async () => {
     stubFetchSequence([{ body: projectState() }]);
     renderAccount();
     expect(await screen.findByText("WhatsApp Status (beta)")).toBeInTheDocument();
-    expect(screen.getByText("Instância não configurada")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Conectar WhatsApp" })).toBeInTheDocument();
   });
 
-  it("shows the configured instance when whatsapp.configured is true", async () => {
+  it("shows Reconectar / Novo QR and checks live status when the project already has an instance", async () => {
     stubFetchSequence([
-      { body: projectState({ whatsapp: { configured: true, instanceUrl: "https://evolution.example.com", instanceName: "boss-instance", maskedApiKey: "****9999" } }) },
+      { body: projectState({ whatsapp: { configured: true, instanceName: "opensquad-boss-pizzaria", maskedApiKey: "****9999" } }) },
+      { body: { connected: false, state: "close" } },
     ]);
     renderAccount();
-    expect(await screen.findByText("****9999")).toBeInTheDocument();
-    expect(screen.getByText("https://evolution.example.com")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Reconectar / Novo QR" })).toBeInTheDocument();
   });
 
-  it("saves a new instance through the real endpoint", async () => {
+  it("shows Conectado instead of a button when the live status reports connected", async () => {
     stubFetchSequence([
-      { body: projectState() },
-      { body: { project: { whatsapp: { configured: true, instanceUrl: "https://evolution.example.com", instanceName: "boss-instance", maskedApiKey: "****abcd" } } } },
-      { body: projectState({ whatsapp: { configured: true, instanceUrl: "https://evolution.example.com", instanceName: "boss-instance", maskedApiKey: "****abcd" } }) },
+      { body: projectState({ whatsapp: { configured: true, instanceName: "opensquad-boss-pizzaria", maskedApiKey: "****9999" } }) },
+      { body: { connected: true, state: "open" } },
     ]);
     renderAccount();
+    expect(await screen.findByText("Conectado")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Conectar|Reconectar/ })).not.toBeInTheDocument();
+  });
 
-    await screen.findByText("Instância não configurada");
-    await userEvent.type(screen.getByLabelText("URL da instância Evolution"), "https://evolution.example.com");
-    await userEvent.type(screen.getByLabelText("Nome da instância"), "boss-instance");
-    await userEvent.type(screen.getByLabelText("Apikey"), "evo-secret-abcd");
-    await userEvent.click(screen.getByRole("button", { name: "Salvar instância" }));
+  it("connects, shows the QR code, polls status, and shows Conectado once the mock reports open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Call order: [0] initial mount /api/state (unconfigured — the mount
+      // effect above is a no-op here since whatsappInfo.configured is
+      // false), [1] the connect POST itself, [2] refreshProject()'s
+      // /api/state re-fetch inside handleConnect, [3] the first poll tick,
+      // [4] the second poll tick.
+      stubFetchSequence([
+        { body: projectState() },
+        { body: { qrcode: "data:image/png;base64,QRDATA", project: { whatsapp: { configured: true, instanceName: "opensquad-boss-pizzaria", maskedApiKey: "****1234" } } } },
+        { body: projectState({ whatsapp: { configured: true, instanceName: "opensquad-boss-pizzaria", maskedApiKey: "****1234" } }) },
+        { body: { connected: false, state: "connecting" } },
+        { body: { connected: true, state: "open" } },
+      ]);
+      renderAccount();
 
-    expect(await screen.findByText("Instância WhatsApp salva.")).toBeInTheDocument();
-    expect(await screen.findByText("****abcd")).toBeInTheDocument();
+      await userEvent.click(await screen.findByRole("button", { name: "Conectar WhatsApp" }));
+      expect(await screen.findByAltText("QR Code WhatsApp")).toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(screen.getByAltText("QR Code WhatsApp")).toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(await screen.findByText("Conectado")).toBeInTheDocument();
+      expect(screen.queryByAltText("QR Code WhatsApp")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

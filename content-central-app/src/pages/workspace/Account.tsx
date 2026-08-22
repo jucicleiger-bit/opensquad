@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
-import { saveToken, saveWhatsAppInstance } from "@/api/client";
+import { connectWhatsAppInstance, getWhatsAppInstanceStatus, saveToken } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { tokenExpiryMeta } from "./tokenDisplay";
@@ -20,15 +20,62 @@ export function Account() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  const [instanceUrl, setInstanceUrl] = useState("");
-  const [instanceName, setInstanceName] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [whatsappBusy, setWhatsappBusy] = useState(false);
-  const [whatsappError, setWhatsappError] = useState<string | null>(null);
-  const [whatsappMessage, setWhatsappMessage] = useState<string | null>(null);
+  const [qrcode, setQrcode] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [connectBusy, setConnectBusy] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const tokenInfo = project.token;
   const whatsappInfo = project.whatsapp;
+
+  function stopPolling() {
+    if (pollTimer.current) {
+      clearInterval(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollTimer.current = setInterval(async () => {
+      try {
+        const status = await getWhatsAppInstanceStatus(project.projectId);
+        if (status.connected) {
+          setConnected(true);
+          setQrcode(null);
+          stopPolling();
+        }
+      } catch {
+        // A transient poll failure isn't worth surfacing as an error —
+        // the next tick tries again.
+      }
+    }, 3000);
+  }
+
+  // Runs once per project load, not on every whatsappInfo change — a
+  // successful connect already updates `connected` itself (see
+  // handleConnect/startPolling below), so re-running this on
+  // whatsappInfo?.configured flipping true would double-fetch status right
+  // on top of the connect flow's own first poll tick. If the project
+  // already had a configured instance when this page first loaded (a
+  // prior session), this is what tells the operator its real current state
+  // instead of assuming "not connected".
+  useEffect(() => {
+    if (!whatsappInfo?.configured) return;
+    let cancelled = false;
+    getWhatsAppInstanceStatus(project.projectId)
+      .then((status) => {
+        if (!cancelled) setConnected(status.connected);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.projectId]);
+
+  useEffect(() => stopPolling, []);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -56,24 +103,19 @@ export function Account() {
     }
   }
 
-  async function handleWhatsAppSubmit(event: FormEvent) {
-    event.preventDefault();
-    if (!instanceUrl.trim() || !instanceName.trim() || !apiKey.trim()) {
-      setWhatsappError("Preencha URL, nome da instância e apikey antes de salvar.");
-      return;
-    }
-    setWhatsappBusy(true);
-    setWhatsappError(null);
-    setWhatsappMessage(null);
+  async function handleConnect() {
+    setConnectBusy(true);
+    setConnectError(null);
     try {
-      await saveWhatsAppInstance(project.projectId, { instanceUrl, instanceName, apiKey });
-      setApiKey("");
+      const res = await connectWhatsAppInstance(project.projectId);
+      setQrcode(res.qrcode);
+      setConnected(false);
       await refreshProject();
-      setWhatsappMessage("Instância WhatsApp salva.");
+      startPolling();
     } catch (err) {
-      setWhatsappError((err as Error).message);
+      setConnectError((err as Error).message);
     } finally {
-      setWhatsappBusy(false);
+      setConnectBusy(false);
     }
   }
 
@@ -136,60 +178,29 @@ export function Account() {
 
       <Card style={{ padding: 20 }}>
         <div className="notice">
-          <b>Canal beta — leia antes de configurar:</b>
+          <b>Canal beta — leia antes de conectar:</b>
           <br />
           <span className="muted">
             Publica via Evolution API (automação não-oficial do WhatsApp Web, não é a API oficial da Meta). Sem SLA — pode
-            falhar sem responder ou, em tese, levar ao banimento do número. Configure só se aceitar esse risco.
+            falhar sem responder ou, em tese, levar ao banimento do número. Conecte só se aceitar esse risco.
           </span>
         </div>
-        <div style={{ marginTop: 12, display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {whatsappInfo?.configured ? (
-            <>
-              <span className="pill ok">{whatsappInfo.maskedApiKey}</span>
-              <span className="pill">{whatsappInfo.instanceUrl}</span>
-            </>
+
+        <div style={{ marginTop: 12 }}>
+          {connected ? (
+            <span className="pill ok">Conectado</span>
+          ) : qrcode ? (
+            <div>
+              <img src={qrcode} alt="QR Code WhatsApp" style={{ maxWidth: 220 }} />
+              <p className="muted" style={{ marginTop: 8 }}>Escaneie com o WhatsApp do número que vai postar Status.</p>
+            </div>
           ) : (
-            <span className="pill">Instância não configurada</span>
+            <Button type="button" variant="secondary" onClick={handleConnect} disabled={connectBusy}>
+              {connectBusy ? "Conectando..." : whatsappInfo?.configured ? "Reconectar / Novo QR" : "Conectar WhatsApp"}
+            </Button>
           )}
         </div>
-        <form onSubmit={handleWhatsAppSubmit}>
-          <div className="grid" style={{ marginTop: 12 }}>
-            <div>
-              <label htmlFor="whatsapp-instance-url">URL da instância Evolution</label>
-              <input
-                id="whatsapp-instance-url"
-                placeholder="https://evolution.seudominio.com"
-                value={instanceUrl}
-                onChange={(e) => setInstanceUrl(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="whatsapp-instance-name">Nome da instância</label>
-              <input
-                id="whatsapp-instance-name"
-                placeholder="nome-da-instancia"
-                value={instanceName}
-                onChange={(e) => setInstanceName(e.target.value)}
-              />
-            </div>
-            <div>
-              <label htmlFor="whatsapp-apikey">Apikey</label>
-              <input
-                id="whatsapp-apikey"
-                type="password"
-                placeholder="cole a apikey aqui"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-            </div>
-          </div>
-          <Button type="submit" variant="secondary" className="full-width" style={{ marginTop: 12 }} disabled={whatsappBusy}>
-            {whatsappBusy ? "Salvando..." : "Salvar instância"}
-          </Button>
-        </form>
-        {whatsappError ? <div className="pill bad" style={{ marginTop: 12 }}>{whatsappError}</div> : null}
-        {whatsappMessage ? <div className="pill ok" style={{ marginTop: 12 }}>{whatsappMessage}</div> : null}
+        {connectError ? <div className="pill bad" style={{ marginTop: 12 }}>{connectError}</div> : null}
       </Card>
     </div>
   );
