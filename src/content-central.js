@@ -4724,7 +4724,11 @@ async function toProjectSummary(project) {
     brand: project.brand,
     offerAssets: normalizeProjectOfferAssets(project),
     token: project.token,
-    whatsapp: project.whatsapp || { configured: false, instanceName: '', maskedApiKey: '' },
+    whatsapp: {
+      configured: project.whatsapp?.configured || false,
+      instanceName: project.whatsapp?.instanceName || '',
+      maskedApiKey: project.whatsapp?.maskedApiKey || '',
+    },
     contentSettings: project.contentSettings,
     contentStrategy: {
       ...(project.contentStrategy || {}),

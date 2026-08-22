@@ -4392,9 +4392,13 @@ async function connectProjectWhatsAppInstance(projectId, project, targetDir) {
     const res = await fetch(`${adminUrl}/instance/connect/${instanceName}`, {
       headers: { apikey: adminApiKey },
     });
-    if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
-    const parsed = await res.json();
-    return { qrcode: parsed.base64 || parsed.qrcode?.base64 || null, project };
+    if (res.ok) {
+      const parsed = await res.json();
+      return { qrcode: parsed.base64 || parsed.qrcode?.base64 || null, project };
+    }
+    if (res.status !== 404) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+    // 404 — the instance is gone from the shared server (wiped/deleted), or this
+    // row predates the derived-name rule. Fall through and (re)create it.
   }
 
   const res = await fetch(`${adminUrl}/instance/create`, {

@@ -3472,6 +3472,8 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
 });
 
 test('POST .../whatsapp-instance/connect fails clearly when the Evolution admin server is not configured', async () => {
+  delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+  delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
@@ -3550,6 +3552,52 @@ test('POST .../whatsapp-instance/connect fetches a fresh QR for an already-conne
       assert.equal(calls.length, 1);
       assert.equal(calls[0].url, 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-reconnect');
       assert.equal(calls[0].init.headers.apikey, 'admin-secret');
+    } finally {
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+    }
+  });
+});
+
+test('POST .../whatsapp-instance/connect recreates the instance when Evolution 404s on connect (instance missing on server)', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    try {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'rota-whatsapp-404-fallthrough', name: 'Rota WhatsApp 404 Fallthrough' }),
+      });
+      await saveProjectWhatsAppInstance('rota-whatsapp-404-fallthrough', {
+        instanceName: 'opensquad-rota-whatsapp-404-fallthrough',
+        apiKey: 'instance-token-1234',
+      }, dir);
+
+      const calls = [];
+      await withMockedFetch(async (url, init) => {
+        calls.push({ url: String(url), init });
+        if (String(url) === 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-404-fallthrough') {
+          return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+        }
+        if (String(url) === 'https://evolution.example.com/instance/create') {
+          return new Response(JSON.stringify({
+            instance: { instanceName: 'opensquad-rota-whatsapp-404-fallthrough', status: 'created' },
+            hash: { apikey: 'instance-token-5678' },
+            qrcode: { code: '2@...', base64: 'data:image/png;base64,RECREATEDQR' },
+          }), { status: 201, headers: { 'content-type': 'application/json' } });
+        }
+        throw new Error(`unexpected fetch call: ${url}`);
+      }, async () => {
+        const res = await request(server, '/api/projects/rota-whatsapp-404-fallthrough/whatsapp-instance/connect', { method: 'POST' });
+        assert.equal(res.response.status, 200);
+        assert.equal(res.body.qrcode, 'data:image/png;base64,RECREATEDQR');
+        assert.equal(res.body.project.whatsapp.configured, true);
+        assert.equal(res.body.project.whatsapp.maskedApiKey, '****5678');
+      });
+
+      assert.equal(calls.length, 2);
+      assert.equal(calls[0].url, 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-404-fallthrough');
+      assert.equal(calls[1].url, 'https://evolution.example.com/instance/create');
     } finally {
       delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
       delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
