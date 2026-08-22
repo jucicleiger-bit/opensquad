@@ -14,6 +14,14 @@ services:
       - "8080:8080"
     env_file:
       - .env
+    # The image's own entrypoint (Docker/scripts/deploy_database.sh) runs
+    # the DB migration immediately on container start with no retry — on
+    # Docker Desktop for Windows a freshly-created container's network can
+    # take a second or two to settle even after `depends_on: service_healthy`
+    # passes, so the very first migration attempt races it and fails
+    # (P1001 "Can't reach database server"), then restart: always just
+    # repeats the same race forever. A short fixed delay breaks the loop.
+    command: ["/bin/bash", "-c", "sleep 5 && . ./Docker/scripts/deploy_database.sh && npm run start:prod"]
     volumes:
       - evolution_instances:/evolution/instances
     depends_on:

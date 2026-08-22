@@ -4403,12 +4403,18 @@ async function connectProjectWhatsAppInstance(projectId, project, targetDir) {
 
   const res = await fetch(`${adminUrl}/instance/create`, {
     method: 'POST',
+    // integration is required as of Evolution API v2.x ("Invalid integration"
+    // 400 without it) — WHATSAPP-BAILEYS is the free/unofficial WhatsApp Web
+    // engine this whole channel is already built around (see the design spec).
     headers: { 'Content-Type': 'application/json', apikey: adminApiKey },
-    body: JSON.stringify({ instanceName, qrcode: true }),
+    body: JSON.stringify({ instanceName, qrcode: true, integration: 'WHATSAPP-BAILEYS' }),
   });
   if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
   const parsed = await res.json();
-  const instanceApiKey = parsed.hash?.apikey;
+  // v2.3.7 returns `hash` as a plain string token, not `{ apikey }` — accept
+  // both shapes since older/other Evolution versions' docs describe the
+  // object form.
+  const instanceApiKey = typeof parsed.hash === 'string' ? parsed.hash : parsed.hash?.apikey;
   if (!instanceApiKey) throw new Error('Evolution API não devolveu um token de instância.');
 
   const updatedProject = await saveProjectWhatsAppInstance(projectId, { instanceName, apiKey: instanceApiKey }, targetDir);
@@ -4458,7 +4464,14 @@ export async function publishContentToWhatsAppStatus({ content, project }, targe
     if (!localImagePath) throw new Error('Imagem gerada não encontrada para publicar.');
     mediaUrl = await uploadGeneratedImagePublicly(localImagePath);
   }
-  const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 20000);
+  // `allContacts: true` fans the Status out to every saved contact
+  // server-side before Evolution responds — confirmed in production this
+  // can comfortably exceed 20s once an account has several hundred
+  // contacts (Evolution's own logs still show the send completing with no
+  // error after our old 20s timeout had already given up and marked the
+  // item failed). 90s gives real accounts room; still overridable per
+  // deployment for accounts with very large contact lists.
+  const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 90000);
   try {
     const res = await fetch(`${instanceUrl}/message/sendStatus/${instanceName}`, {
       method: 'POST',
