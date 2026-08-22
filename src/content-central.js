@@ -18,6 +18,7 @@ const CHANNEL_LABELS = {
   instagram_reels: 'Instagram Reels',
   facebook_feed: 'Facebook Feed',
   facebook_story: 'Facebook Story',
+  whatsapp_status: 'WhatsApp Status',
 };
 
 export const OFFER_TYPES = new Set([
@@ -356,6 +357,7 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     // just where generated creative+copy variations live until downloaded.
     adCreativesDir: join(projectDir, 'content', 'ad-creatives'),
     tokenSecretPath: join(secretsDir, `${normalized}.token`),
+    whatsappApiKeySecretPath: join(secretsDir, `${normalized}.whatsapp.apikey`),
   };
 }
 
@@ -442,6 +444,12 @@ export async function createCentralProject(options, targetDir = process.cwd()) {
       permissions: [],
       status: 'sem_token',
     },
+    whatsapp: {
+      configured: false,
+      instanceUrl: '',
+      instanceName: '',
+      maskedApiKey: '',
+    },
     contentSettings: {
       defaultDaysToGenerate: Number(options?.defaultDaysToGenerate || 7),
       defaultPostTime: options?.defaultPostTime || DEFAULT_TIME,
@@ -491,6 +499,7 @@ export async function deleteCentralProject(projectId, targetDir = process.cwd())
   if (!project) throw new Error(`Projeto não encontrado: ${projectId}`);
   await rm(paths.projectDir, { recursive: true, force: true });
   await rm(paths.tokenSecretPath, { force: true });
+  await rm(paths.whatsappApiKeySecretPath, { force: true });
   return { projectId, deleted: true };
 }
 
@@ -541,6 +550,45 @@ export async function readProjectToken(projectId, targetDir = process.cwd()) {
   const paths = getCentralPaths(targetDir, projectId);
   try {
     const raw = await readFile(paths.tokenSecretPath, 'utf-8');
+    return raw.trim() || null;
+  } catch (err) {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+// WhatsApp Status (beta) publishes through a self-hosted Evolution API
+// instance, not OAuth — same secret-on-disk pattern as readProjectToken
+// above, but the credential is instanceUrl+instanceName+apiKey instead of a
+// single bearer token.
+export async function saveProjectWhatsAppInstance(projectId, input, targetDir = process.cwd(), now = new Date()) {
+  if (!input?.instanceUrl || !input?.instanceName || !input?.apiKey) {
+    throw new Error('instanceUrl, instanceName and apiKey are required');
+  }
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+
+    await mkdir(dirname(paths.whatsappApiKeySecretPath), { recursive: true });
+    await writeFile(paths.whatsappApiKeySecretPath, input.apiKey, 'utf-8');
+
+    project.whatsapp = {
+      configured: true,
+      instanceUrl: input.instanceUrl,
+      instanceName: input.instanceName,
+      maskedApiKey: maskSecret(input.apiKey),
+    };
+
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
+    return project;
+  });
+}
+
+export async function readProjectWhatsAppApiKey(projectId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  try {
+    const raw = await readFile(paths.whatsappApiKeySecretPath, 'utf-8');
     return raw.trim() || null;
   } catch (err) {
     if (err.code === 'ENOENT') return null;
@@ -4356,6 +4404,7 @@ async function toProjectSummary(project) {
     brand: project.brand,
     offerAssets: normalizeProjectOfferAssets(project),
     token: project.token,
+    whatsapp: project.whatsapp || { configured: false, instanceUrl: '', instanceName: '', maskedApiKey: '' },
     contentSettings: project.contentSettings,
     contentStrategy: {
       ...(project.contentStrategy || {}),
@@ -5041,7 +5090,7 @@ function formatPillarLines(pillar) {
 function buildContentReview({ channel, aspectRatio, dimensions, contentTopic }) {
   const checks = [];
   const warnings = [];
-  if (channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story') {
+  if (isVerticalStoryChannel(channel)) {
     if (aspectRatio === 'portrait' && dimensions?.width === 1080 && dimensions?.height === 1920) {
       checks.push('Formato vertical 9:16 confirmado para Story/Reels.');
     } else {
@@ -6033,7 +6082,7 @@ function buildPrimaryAiImageReferences(references, options = {}) {
 }
 
 function isVerticalStoryChannel(channel) {
-  return channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story';
+  return channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story' || channel === 'whatsapp_status';
 }
 
 // Channels that render at the exact same pixel shape can share one
@@ -7519,6 +7568,9 @@ function imageFormatInstructionForChannel(channel) {
   }
   if (channel === 'facebook_story') {
     return 'Formato obrigatório: Facebook Story 9:16 vertical real, 1080x1920. No ChatGPT/OpenAI, criar composição vertical nativa; não gerar 1:1/quadrado, 3:2 ou 16:9. Não centralizar flyer 1:1 em canvas vertical.';
+  }
+  if (channel === 'whatsapp_status') {
+    return 'Formato obrigatório: WhatsApp Status 9:16 vertical real, 1080x1920. No ChatGPT/OpenAI, criar composição vertical nativa; não gerar 1:1/quadrado, 3:2 ou 16:9. Não centralizar flyer 1:1 em canvas vertical.';
   }
   if (channel === 'facebook_feed') {
     return 'Formato obrigatório: Facebook Feed vertical 4:5, 1080x1350, usar aspect_ratio portrait na geração de imagem; não gerar Story se o canal for Feed.';
