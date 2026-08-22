@@ -2065,15 +2065,14 @@ test('saveProjectWhatsAppInstance stores the apikey outside project config and r
     }, dir);
 
     const updated = await saveProjectWhatsAppInstance('whatsapp-demo', {
-      instanceUrl: 'https://evolution.example.com',
-      instanceName: 'whatsapp-demo-instance',
+      instanceName: 'opensquad-whatsapp-demo',
       apiKey: 'evo-real-secret-1234567890',
     }, dir, new Date('2026-08-21T12:00:00.000Z'));
 
     assert.equal(updated.whatsapp.configured, true);
-    assert.equal(updated.whatsapp.instanceUrl, 'https://evolution.example.com');
-    assert.equal(updated.whatsapp.instanceName, 'whatsapp-demo-instance');
+    assert.equal(updated.whatsapp.instanceName, 'opensquad-whatsapp-demo');
     assert.equal(updated.whatsapp.maskedApiKey, '****7890');
+    assert.equal(updated.whatsapp.instanceUrl, undefined);
 
     const paths = getCentralPaths(dir, 'whatsapp-demo');
     const configRaw = await readFile(paths.projectPath, 'utf-8');
@@ -2088,7 +2087,11 @@ test('saveProjectWhatsAppInstance rejects an incomplete instance config', async 
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'whatsapp-incompleto', name: 'WhatsApp Incompleto' }, dir);
     await assert.rejects(
-      () => saveProjectWhatsAppInstance('whatsapp-incompleto', { instanceUrl: 'https://evolution.example.com' }, dir),
+      () => saveProjectWhatsAppInstance('whatsapp-incompleto', { instanceName: 'opensquad-whatsapp-incompleto' }, dir),
+      /required/,
+    );
+    await assert.rejects(
+      () => saveProjectWhatsAppInstance('whatsapp-incompleto', { apiKey: 'x' }, dir),
       /required/,
     );
   });
@@ -2098,7 +2101,7 @@ test('a project summary always carries a whatsapp block, defaulted for projects 
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'whatsapp-default', name: 'WhatsApp Default' }, dir);
     const [project] = await (await import('../src/content-central.js')).listCentralProjects(dir);
-    assert.deepEqual(project.whatsapp, { configured: false, instanceUrl: '', instanceName: '', maskedApiKey: '' });
+    assert.deepEqual(project.whatsapp, { configured: false, instanceName: '', maskedApiKey: '' });
   });
 });
 
