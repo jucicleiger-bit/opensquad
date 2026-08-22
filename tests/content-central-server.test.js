@@ -27,6 +27,7 @@ import {
   nousFalAspectRatioForChannel,
   normalizeProspectExtraction,
   openAiImageSizeForChannel,
+  publishContentToWhatsAppStatus,
   publishWithGaveteSync,
   resolveContentImageAbsolutePath,
   selectImageReferencesForCodex,
@@ -50,6 +51,7 @@ import {
   saveProjectAsset,
   saveProjectOffer,
   saveProjectToken,
+  saveProjectWhatsAppInstance,
   updateProjectBrandInput,
 } from '../src/content-central.js';
 
@@ -513,6 +515,7 @@ test('OpenAI image size chosen per channel is a supported gpt-image-1 size', () 
   assert.equal(openAiImageSizeForChannel('instagram_feed'), '1024x1536');
   assert.equal(openAiImageSizeForChannel('facebook_story'), '1024x1536');
   assert.equal(openAiImageSizeForChannel('facebook_feed'), '1024x1536');
+  assert.equal(openAiImageSizeForChannel('whatsapp_status'), '1024x1536');
 });
 
 test('xAI aspect ratio chosen per channel is a supported grok-imagine-image value', () => {
@@ -521,6 +524,7 @@ test('xAI aspect ratio chosen per channel is a supported grok-imagine-image valu
   assert.equal(xaiAspectRatioForChannel('instagram_feed'), '3:4');
   assert.equal(xaiAspectRatioForChannel('facebook_story'), '9:16');
   assert.equal(xaiAspectRatioForChannel('facebook_feed'), '3:4');
+  assert.equal(xaiAspectRatioForChannel('whatsapp_status'), '9:16');
   assert.equal(xaiAspectRatioForChannel('unknown_channel'), '1:1');
 });
 
@@ -530,6 +534,7 @@ test('Nous/FAL aspect ratio chosen per channel is a supported preset keyword', (
   assert.equal(nousFalAspectRatioForChannel('instagram_feed'), 'portrait');
   assert.equal(nousFalAspectRatioForChannel('facebook_story'), 'portrait');
   assert.equal(nousFalAspectRatioForChannel('facebook_feed'), 'portrait');
+  assert.equal(nousFalAspectRatioForChannel('whatsapp_status'), 'portrait');
   assert.equal(nousFalAspectRatioForChannel('unknown_channel'), 'square');
 });
 
@@ -3164,6 +3169,126 @@ async function withMockedFetch(impl, fn) {
     globalThis.fetch = original;
   }
 }
+
+test('publishContentToWhatsAppStatus posts the generated image to the Evolution API sendStatus endpoint', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-whatsapp-publish-'));
+  try {
+    await createCentralProject({ projectId: 'whatsapp-publish', name: 'WhatsApp Publish' }, dir);
+    await saveProjectWhatsAppInstance('whatsapp-publish', {
+      instanceUrl: 'https://evolution.example.com',
+      instanceName: 'whatsapp-publish-instance',
+      apiKey: 'evo-real-secret',
+    }, dir);
+    const project = {
+      projectId: 'whatsapp-publish',
+      whatsapp: { instanceUrl: 'https://evolution.example.com', instanceName: 'whatsapp-publish-instance' },
+    };
+    const content = {
+      contentId: 'content-1',
+      channel: 'whatsapp_status',
+      caption: { text: 'Promoção da semana!' },
+      publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
+    };
+
+    const calls = [];
+    await withMockedFetch(async (url, init) => {
+      calls.push({ url: String(url), init });
+      return new Response(JSON.stringify({ key: { id: 'WA123' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }, async () => {
+      const result = await publishContentToWhatsAppStatus({ content, project }, dir);
+      assert.equal(result.mediaId, 'WA123');
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, 'https://evolution.example.com/message/sendStatus/whatsapp-publish-instance');
+    assert.equal(calls[0].init.headers.apikey, 'evo-real-secret');
+    const body = JSON.parse(calls[0].init.body);
+    assert.equal(body.type, 'image');
+    assert.equal(body.content, 'https://cdn.example.com/whatsapp-test.png');
+    assert.equal(body.caption, 'Promoção da semana!');
+    assert.equal(body.allContacts, true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('publishContentToWhatsAppStatus surfaces a clear beta-instability error when the Evolution API times out', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-whatsapp-timeout-'));
+  try {
+    await createCentralProject({ projectId: 'whatsapp-timeout', name: 'WhatsApp Timeout' }, dir);
+    await saveProjectWhatsAppInstance('whatsapp-timeout', {
+      instanceUrl: 'https://evolution.example.com',
+      instanceName: 'whatsapp-timeout-instance',
+      apiKey: 'evo-real-secret',
+    }, dir);
+    const project = {
+      projectId: 'whatsapp-timeout',
+      whatsapp: { instanceUrl: 'https://evolution.example.com', instanceName: 'whatsapp-timeout-instance' },
+    };
+    const content = {
+      contentId: 'content-1',
+      channel: 'whatsapp_status',
+      caption: { text: 'x' },
+      publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
+    };
+
+    process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS = '10';
+    try {
+      await withMockedFetch(async (url, init) => new Promise((_resolve, reject) => {
+        // Real fetch rejects with signal.reason when an AbortSignal.timeout()
+        // fires — reject with that same reason here instead of a hand-built
+        // error, so this test matches Node's actual behavior.
+        init.signal.addEventListener('abort', () => reject(init.signal.reason));
+      }), async () => {
+        await assert.rejects(
+          () => publishContentToWhatsAppStatus({ content, project }, dir),
+          /Canal beta instável.*Evolution API não respondeu a tempo/,
+        );
+      });
+    } finally {
+      delete process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS;
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('WhatsApp instance config is rejected without instanceUrl, instanceName and apiKey', async () => {
+  await withServer(async (dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'rota-whatsapp-erro', name: 'Rota WhatsApp Erro' }),
+    });
+    const res = await request(server, '/api/projects/rota-whatsapp-erro/whatsapp-instance', {
+      method: 'POST',
+      body: JSON.stringify({ instanceUrl: 'https://evolution.example.com' }),
+    });
+    assert.equal(res.response.status, 500);
+  });
+});
+
+test('POST .../whatsapp-instance saves the Evolution API instance config and masks the apikey', async () => {
+  await withServer(async (dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'rota-whatsapp', name: 'Rota WhatsApp' }),
+    });
+
+    const res = await request(server, '/api/projects/rota-whatsapp/whatsapp-instance', {
+      method: 'POST',
+      body: JSON.stringify({
+        instanceUrl: 'https://evolution.example.com',
+        instanceName: 'rota-whatsapp-instance',
+        apiKey: 'evo-real-secret-abcd',
+      }),
+    });
+
+    assert.equal(res.response.status, 200);
+    assert.equal(res.body.project.whatsapp.configured, true);
+    assert.equal(res.body.project.whatsapp.instanceUrl, 'https://evolution.example.com');
+    assert.equal(res.body.project.whatsapp.maskedApiKey, '****abcd');
+  });
+});
 
 test('fetchSiteText rejects non-http(s) URLs before making any network call', async () => {
   await assert.rejects(() => fetchSiteText('ftp://example.com/menu'), /http:\/\/ ou https:\/\//);

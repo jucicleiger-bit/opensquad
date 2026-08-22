@@ -61,6 +61,7 @@ import {
   sendDueAlertEmails,
   publishSingleContent,
   readProjectToken,
+  readProjectWhatsAppApiKey,
   reconcileInterruptedGenerations,
   regenerateContentDay,
   regenerateContentGroup,
@@ -74,6 +75,7 @@ import {
   deleteProjectOfferGroup,
   saveProjectPillar,
   saveProjectToken,
+  saveProjectWhatsAppInstance,
   suggestProjectPillars,
   updateCatalogSettings,
   updateContentCaption,
@@ -622,6 +624,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
       githubSyncWarning = err.message;
     }
     return sendJson(res, 200, { project, validation, ...(githubSyncWarning ? { githubSyncWarning } : {}) });
+  }
+
+  if (parts.length === 4 && parts[3] === 'whatsapp-instance') {
+    const body = await readBody(req);
+    const project = await saveProjectWhatsAppInstance(projectId, body, targetDir);
+    return sendJson(res, 200, { project });
   }
 
   if (parts.length === 4 && parts[3] === 'company-profile') {
@@ -1544,14 +1552,14 @@ async function parseOpenAiImageResponse(response) {
 
 export function openAiImageSizeForChannel(channel) {
   if (channel === 'instagram_feed' || channel === 'facebook_feed') return '1024x1536';
-  if (channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story') return '1024x1536';
+  if (channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story' || channel === 'whatsapp_status') return '1024x1536';
   return '1024x1024';
 }
 
 // xAI's Images API only accepts a fixed set of aspect_ratio strings — Instagram
 // Feed's 4:5 isn't one of them, so "3:4" (0.75) is the closest supported ratio.
 export function xaiAspectRatioForChannel(channel) {
-  if (channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story') return '9:16';
+  if (channel === 'instagram_story' || channel === 'instagram_reels' || channel === 'facebook_story' || channel === 'whatsapp_status') return '9:16';
   if (channel === 'instagram_feed' || channel === 'facebook_feed') return '3:4';
   return '1:1';
 }
@@ -2165,7 +2173,7 @@ export async function analyzeSiteWithAi({ url, text }) {
 // file (not passed as an argv/stdin string) so long multi-paragraph creative
 // briefs can't hit shell-escaping or argv-length limits.
 export function nousFalAspectRatioForChannel(channel) {
-  if (['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story'].includes(channel)) return 'portrait';
+  if (['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story', 'whatsapp_status'].includes(channel)) return 'portrait';
   return 'square';
 }
 
@@ -3895,6 +3903,7 @@ const META_PUBLISH_SCRIPT = resolve(fileURLToPath(new URL('.', import.meta.url))
 const PUBLISHABLE_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story']);
 const VIDEO_CHANNELS = new Set(['instagram_reels']);
 const FACEBOOK_CHANNELS = new Set(['facebook_feed', 'facebook_story']);
+const WHATSAPP_CHANNELS = new Set(['whatsapp_status']);
 
 // Turns a served asset URL (/api/projects/{id}/assets/assets/generated/x.png)
 // back into the real file on disk — the same convention sendProjectAsset
@@ -4130,7 +4139,60 @@ function delay(ms) {
 // plus a couple of retries (re-uploading a fresh URL each time) lets that
 // transient race self-heal within the same scheduled attempt, instead of
 // leaving the post stuck until the next sweep cycle.
+// The real "whatsappPublisher" for the beta WhatsApp Status channel — a
+// single direct HTTP call, unlike Meta's meta-publish-multi.js subprocess
+// (which exists to orchestrate multiple publish_targets in one call; this
+// is always exactly one target). Evolution API's sendStatus endpoint has a
+// documented failure mode (github.com/EvolutionAPI/evolution-api/issues/2377
+// — hangs indefinitely, closed "not planned") so this uses a short timeout
+// and no retry loop, unlike the Meta publisher's 3-attempt/300s-each retry:
+// re-hitting a call that's known to hang just triples the wait for the same
+// failure instead of recovering from a transient blip.
+export async function publishContentToWhatsAppStatus({ content, project }, targetDir) {
+  const apiKey = await readProjectWhatsAppApiKey(project.projectId, targetDir);
+  const { instanceUrl, instanceName } = project.whatsapp || {};
+  if (!apiKey || !instanceUrl || !instanceName) {
+    throw new Error('Instância Evolution não configurada para este projeto — configure na aba "Conta e token".');
+  }
+
+  // content.publish?.mediaUrl (already-hosted URL, e.g. from a prior publish
+  // attempt) short-circuits the local-file lookup/upload entirely — only
+  // fall back to resolving+uploading the generated image on disk when no
+  // hosted URL is already known.
+  let mediaUrl = content.publish?.mediaUrl;
+  if (!mediaUrl) {
+    const localImagePath = resolveGeneratedImageAbsolutePath(content, project.projectId, targetDir);
+    if (!localImagePath) throw new Error('Imagem gerada não encontrada para publicar.');
+    mediaUrl = await uploadGeneratedImagePublicly(localImagePath);
+  }
+  const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 20000);
+  try {
+    const res = await fetch(`${instanceUrl.replace(/\/$/, '')}/message/sendStatus/${instanceName}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      body: JSON.stringify({
+        type: 'image',
+        content: mediaUrl,
+        caption: content.caption?.text || '',
+        allContacts: true,
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+    const parsed = await res.json();
+    return { mediaId: parsed.key?.id || null, permalink: null };
+  } catch (err) {
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+      throw new Error('Canal beta instável — Evolution API não respondeu a tempo (falha conhecida da API, sem correção prevista pelo time).');
+    }
+    throw err;
+  }
+}
+
 async function publishContentToInstagram({ content, project }, targetDir) {
+  if (WHATSAPP_CHANNELS.has(content.channel)) {
+    return publishContentToWhatsAppStatus({ content, project }, targetDir);
+  }
   if (!PUBLISHABLE_CHANNELS.has(content.channel)) {
     throw new Error(`Canal "${content.channel}" ainda não tem publicação real suportada (só Instagram/Facebook Feed, Story e Reels hoje).`);
   }
