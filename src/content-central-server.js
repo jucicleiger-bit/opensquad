@@ -695,6 +695,14 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendHtml(res, renderProspectMockupPage(project, feedItems, storyItems));
   }
 
+  if (method === 'GET' && parts.length === 5 && parts[3] === 'whatsapp-instance' && parts[4] === 'status') {
+    const projects = await listCentralProjects(targetDir);
+    const project = projects.find((entry) => entry.projectId === projectId);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const result = await getProjectWhatsAppConnectionStatus(projectId, project);
+    return sendJson(res, 200, result);
+  }
+
   if (method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
 
   if (parts.length === 3) {
@@ -748,10 +756,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { project, validation, ...(githubSyncWarning ? { githubSyncWarning } : {}) });
   }
 
-  if (parts.length === 4 && parts[3] === 'whatsapp-instance') {
-    const body = await readBody(req);
-    const project = await saveProjectWhatsAppInstance(projectId, body, targetDir);
-    return sendJson(res, 200, { project });
+  if (parts.length === 5 && parts[3] === 'whatsapp-instance' && parts[4] === 'connect') {
+    const projects = await listCentralProjects(targetDir);
+    const project = projects.find((entry) => entry.projectId === projectId);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const result = await connectProjectWhatsAppInstance(projectId, project, targetDir);
+    return sendJson(res, 200, result);
   }
 
   if (parts.length === 4 && parts[3] === 'company-profile') {
@@ -4350,6 +4360,73 @@ async function publishContentToInstagram({ content, project }, targetDir) {
   throw lastError;
 }
 
+const EVOLUTION_INSTANCE_PREFIX = 'opensquad-';
+
+// The one shared Evolution server's base URL — never per-project. Every
+// caller that just needs to reach the server (the publisher) uses this
+// alone; admin-authenticated calls (create/reconnect/status) also need
+// evolutionAdminConfig() below.
+function evolutionServerUrl() {
+  const adminUrl = process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+  if (!adminUrl) throw new Error('Servidor Evolution não configurado — contate o administrador.');
+  return adminUrl.replace(/\/$/, '');
+}
+
+function evolutionAdminConfig() {
+  const adminApiKey = process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+  if (!adminApiKey) throw new Error('Servidor Evolution não configurado — contate o administrador.');
+  return { adminUrl: evolutionServerUrl(), adminApiKey };
+}
+
+// Creates the instance on first connect, or re-fetches a fresh QR for an
+// already-created instance on a reconnect/expired-QR retry — same button,
+// same route, both cases. Branches on OUR OWN stored state
+// (project.whatsapp.configured), not on Evolution's create-response shape
+// for "already exists" — that shape is unreliable across Evolution
+// versions (see evolution-api#2380/#1602 in the design spec).
+async function connectProjectWhatsAppInstance(projectId, project, targetDir) {
+  const { adminUrl, adminApiKey } = evolutionAdminConfig();
+  const instanceName = `${EVOLUTION_INSTANCE_PREFIX}${projectId}`;
+
+  if (project.whatsapp?.configured) {
+    const res = await fetch(`${adminUrl}/instance/connect/${instanceName}`, {
+      headers: { apikey: adminApiKey },
+    });
+    if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+    const parsed = await res.json();
+    return { qrcode: parsed.base64 || parsed.qrcode?.base64 || null, project };
+  }
+
+  const res = await fetch(`${adminUrl}/instance/create`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', apikey: adminApiKey },
+    body: JSON.stringify({ instanceName, qrcode: true }),
+  });
+  if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+  const parsed = await res.json();
+  const instanceApiKey = parsed.hash?.apikey;
+  if (!instanceApiKey) throw new Error('Evolution API não devolveu um token de instância.');
+
+  const updatedProject = await saveProjectWhatsAppInstance(projectId, { instanceName, apiKey: instanceApiKey }, targetDir);
+  return { qrcode: parsed.qrcode?.base64 || null, project: updatedProject };
+}
+
+// Connection state is never persisted (see Global Constraints) — always
+// asked live so a phone-side logout or session expiry shows up immediately
+// instead of a stale "connected" the operator has no reason to distrust.
+async function getProjectWhatsAppConnectionStatus(projectId, project) {
+  if (!project.whatsapp?.configured) return { connected: false, state: 'not_configured' };
+  const { adminUrl, adminApiKey } = evolutionAdminConfig();
+  const instanceName = project.whatsapp.instanceName;
+  const res = await fetch(`${adminUrl}/instance/connectionState/${instanceName}`, {
+    headers: { apikey: adminApiKey },
+  });
+  if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+  const parsed = await res.json();
+  const state = parsed.instance?.state || parsed.state || 'unknown';
+  return { connected: state === 'open', state };
+}
+
 // The real "whatsappPublisher" for the beta WhatsApp Status channel — a
 // single direct HTTP call, unlike Meta's meta-publish-multi.js subprocess
 // (which exists to orchestrate multiple publish_targets in one call; this
@@ -4361,10 +4438,11 @@ async function publishContentToInstagram({ content, project }, targetDir) {
 // failure instead of recovering from a transient blip.
 export async function publishContentToWhatsAppStatus({ content, project }, targetDir) {
   const apiKey = await readProjectWhatsAppApiKey(project.projectId, targetDir);
-  const { instanceUrl, instanceName } = project.whatsapp || {};
-  if (!apiKey || !instanceUrl || !instanceName) {
+  const instanceName = project.whatsapp?.instanceName;
+  if (!apiKey || !instanceName) {
     throw new Error('Instância Evolution não configurada para este projeto — configure na aba "Conta e token".');
   }
+  const instanceUrl = evolutionServerUrl();
 
   // content.publish?.mediaUrl (already-hosted URL, e.g. from a prior publish
   // attempt) short-circuits the local-file lookup/upload entirely — only
@@ -4378,7 +4456,7 @@ export async function publishContentToWhatsAppStatus({ content, project }, targe
   }
   const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 20000);
   try {
-    const res = await fetch(`${instanceUrl.replace(/\/$/, '')}/message/sendStatus/${instanceName}`, {
+    const res = await fetch(`${instanceUrl}/message/sendStatus/${instanceName}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', apikey: apiKey },
       body: JSON.stringify({

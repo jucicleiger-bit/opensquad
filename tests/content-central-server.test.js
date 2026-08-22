@@ -66,8 +66,15 @@ async function withServer(fn, options = {}) {
   }
 }
 
+// Captured once at module load, before any test can swap globalThis.fetch
+// via withMockedFetch — request() must always reach the real local test
+// server over the real network, even from inside a withMockedFetch block
+// where the *server's own* outbound fetch (to the real Evolution API) is
+// what's meant to be intercepted, not this client-side HTTP call to it.
+const realFetch = globalThis.fetch;
+
 async function request(server, path, options = {}) {
-  const response = await fetch(`${server.url}${path}`, {
+  const response = await realFetch(`${server.url}${path}`, {
     headers: { 'content-type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
@@ -3381,13 +3388,12 @@ test('publishContentToWhatsAppStatus posts the generated image to the Evolution 
   try {
     await createCentralProject({ projectId: 'whatsapp-publish', name: 'WhatsApp Publish' }, dir);
     await saveProjectWhatsAppInstance('whatsapp-publish', {
-      instanceUrl: 'https://evolution.example.com',
-      instanceName: 'whatsapp-publish-instance',
+      instanceName: 'opensquad-whatsapp-publish',
       apiKey: 'evo-real-secret',
     }, dir);
     const project = {
       projectId: 'whatsapp-publish',
-      whatsapp: { instanceUrl: 'https://evolution.example.com', instanceName: 'whatsapp-publish-instance' },
+      whatsapp: { instanceName: 'opensquad-whatsapp-publish' },
     };
     const content = {
       contentId: 'content-1',
@@ -3396,23 +3402,28 @@ test('publishContentToWhatsAppStatus posts the generated image to the Evolution 
       publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
     };
 
-    const calls = [];
-    await withMockedFetch(async (url, init) => {
-      calls.push({ url: String(url), init });
-      return new Response(JSON.stringify({ key: { id: 'WA123' } }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }, async () => {
-      const result = await publishContentToWhatsAppStatus({ content, project }, dir);
-      assert.equal(result.mediaId, 'WA123');
-    });
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    try {
+      const calls = [];
+      await withMockedFetch(async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(JSON.stringify({ key: { id: 'WA123' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }, async () => {
+        const result = await publishContentToWhatsAppStatus({ content, project }, dir);
+        assert.equal(result.mediaId, 'WA123');
+      });
 
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].url, 'https://evolution.example.com/message/sendStatus/whatsapp-publish-instance');
-    assert.equal(calls[0].init.headers.apikey, 'evo-real-secret');
-    const body = JSON.parse(calls[0].init.body);
-    assert.equal(body.type, 'image');
-    assert.equal(body.content, 'https://cdn.example.com/whatsapp-test.png');
-    assert.equal(body.caption, 'Promoção da semana!');
-    assert.equal(body.allContacts, true);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, 'https://evolution.example.com/message/sendStatus/opensquad-whatsapp-publish');
+      assert.equal(calls[0].init.headers.apikey, 'evo-real-secret');
+      const body = JSON.parse(calls[0].init.body);
+      assert.equal(body.type, 'image');
+      assert.equal(body.content, 'https://cdn.example.com/whatsapp-test.png');
+      assert.equal(body.caption, 'Promoção da semana!');
+      assert.equal(body.allContacts, true);
+    } finally {
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -3423,13 +3434,12 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
   try {
     await createCentralProject({ projectId: 'whatsapp-timeout', name: 'WhatsApp Timeout' }, dir);
     await saveProjectWhatsAppInstance('whatsapp-timeout', {
-      instanceUrl: 'https://evolution.example.com',
-      instanceName: 'whatsapp-timeout-instance',
+      instanceName: 'opensquad-whatsapp-timeout',
       apiKey: 'evo-real-secret',
     }, dir);
     const project = {
       projectId: 'whatsapp-timeout',
-      whatsapp: { instanceUrl: 'https://evolution.example.com', instanceName: 'whatsapp-timeout-instance' },
+      whatsapp: { instanceName: 'opensquad-whatsapp-timeout' },
     };
     const content = {
       contentId: 'content-1',
@@ -3438,6 +3448,7 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
       publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
     };
 
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
     process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS = '10';
     try {
       await withMockedFetch(async (url, init) => new Promise((_resolve, reject) => {
@@ -3452,6 +3463,7 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
         );
       });
     } finally {
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
       delete process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS;
     }
   } finally {
@@ -3459,40 +3471,136 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
   }
 });
 
-test('WhatsApp instance config is rejected without instanceUrl, instanceName and apiKey', async () => {
+test('POST .../whatsapp-instance/connect fails clearly when the Evolution admin server is not configured', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
-      body: JSON.stringify({ projectId: 'rota-whatsapp-erro', name: 'Rota WhatsApp Erro' }),
+      body: JSON.stringify({ projectId: 'rota-whatsapp-sem-admin', name: 'Rota WhatsApp Sem Admin' }),
     });
-    const res = await request(server, '/api/projects/rota-whatsapp-erro/whatsapp-instance', {
-      method: 'POST',
-      body: JSON.stringify({ instanceUrl: 'https://evolution.example.com' }),
-    });
+    const res = await request(server, '/api/projects/rota-whatsapp-sem-admin/whatsapp-instance/connect', { method: 'POST' });
     assert.equal(res.response.status, 500);
+    assert.match(res.body.error, /Servidor Evolution não configurado/);
   });
 });
 
-test('POST .../whatsapp-instance saves the Evolution API instance config and masks the apikey', async () => {
+test('POST .../whatsapp-instance/connect creates a new Evolution instance and stores its token', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    try {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'rota-whatsapp-connect', name: 'Rota WhatsApp Connect' }),
+      });
+
+      const calls = [];
+      await withMockedFetch(async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(JSON.stringify({
+          instance: { instanceName: 'opensquad-rota-whatsapp-connect', status: 'created' },
+          hash: { apikey: 'instance-token-1234' },
+          qrcode: { code: '2@...', base64: 'data:image/png;base64,QRDATA' },
+        }), { status: 201, headers: { 'content-type': 'application/json' } });
+      }, async () => {
+        const res = await request(server, '/api/projects/rota-whatsapp-connect/whatsapp-instance/connect', { method: 'POST' });
+        assert.equal(res.response.status, 200);
+        assert.equal(res.body.qrcode, 'data:image/png;base64,QRDATA');
+        assert.equal(res.body.project.whatsapp.configured, true);
+        assert.equal(res.body.project.whatsapp.instanceName, 'opensquad-rota-whatsapp-connect');
+        assert.equal(res.body.project.whatsapp.maskedApiKey, '****1234');
+      });
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, 'https://evolution.example.com/instance/create');
+      assert.equal(calls[0].init.headers.apikey, 'admin-secret');
+      const body = JSON.parse(calls[0].init.body);
+      assert.equal(body.instanceName, 'opensquad-rota-whatsapp-connect');
+      assert.equal(body.qrcode, true);
+    } finally {
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+    }
+  });
+});
+
+test('POST .../whatsapp-instance/connect fetches a fresh QR for an already-connected project instead of recreating it', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    try {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'rota-whatsapp-reconnect', name: 'Rota WhatsApp Reconnect' }),
+      });
+      await saveProjectWhatsAppInstance('rota-whatsapp-reconnect', {
+        instanceName: 'opensquad-rota-whatsapp-reconnect',
+        apiKey: 'instance-token-1234',
+      }, dir);
+
+      const calls = [];
+      await withMockedFetch(async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(JSON.stringify({ base64: 'data:image/png;base64,NEWQR' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }, async () => {
+        const res = await request(server, '/api/projects/rota-whatsapp-reconnect/whatsapp-instance/connect', { method: 'POST' });
+        assert.equal(res.response.status, 200);
+        assert.equal(res.body.qrcode, 'data:image/png;base64,NEWQR');
+      });
+
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-reconnect');
+      assert.equal(calls[0].init.headers.apikey, 'admin-secret');
+    } finally {
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+    }
+  });
+});
+
+test('GET .../whatsapp-instance/status reports connected true only when Evolution reports state open', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    try {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'rota-whatsapp-status', name: 'Rota WhatsApp Status' }),
+      });
+      await saveProjectWhatsAppInstance('rota-whatsapp-status', {
+        instanceName: 'opensquad-rota-whatsapp-status',
+        apiKey: 'instance-token-1234',
+      }, dir);
+
+      await withMockedFetch(
+        async () => new Response(JSON.stringify({ instance: { state: 'open' } }), { status: 200, headers: { 'content-type': 'application/json' } }),
+        async () => {
+          const res = await request(server, '/api/projects/rota-whatsapp-status/whatsapp-instance/status');
+          assert.equal(res.response.status, 200);
+          assert.equal(res.body.connected, true);
+          assert.equal(res.body.state, 'open');
+        },
+      );
+    } finally {
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+    }
+  });
+});
+
+test('GET .../whatsapp-instance/status reports not_configured without any network call for a project with no instance', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
-      body: JSON.stringify({ projectId: 'rota-whatsapp', name: 'Rota WhatsApp' }),
+      body: JSON.stringify({ projectId: 'rota-whatsapp-sem-instancia', name: 'Rota WhatsApp Sem Instância' }),
     });
-
-    const res = await request(server, '/api/projects/rota-whatsapp/whatsapp-instance', {
-      method: 'POST',
-      body: JSON.stringify({
-        instanceUrl: 'https://evolution.example.com',
-        instanceName: 'rota-whatsapp-instance',
-        apiKey: 'evo-real-secret-abcd',
-      }),
+    const calls = [];
+    await withMockedFetch(async (url) => { calls.push(String(url)); throw new Error('should not be called'); }, async () => {
+      const res = await request(server, '/api/projects/rota-whatsapp-sem-instancia/whatsapp-instance/status');
+      assert.equal(res.response.status, 200);
+      assert.equal(res.body.connected, false);
+      assert.equal(res.body.state, 'not_configured');
     });
-
-    assert.equal(res.response.status, 200);
-    assert.equal(res.body.project.whatsapp.configured, true);
-    assert.equal(res.body.project.whatsapp.instanceUrl, 'https://evolution.example.com');
-    assert.equal(res.body.project.whatsapp.maskedApiKey, '****abcd');
+    assert.equal(calls.length, 0);
   });
 });
 
