@@ -1,11 +1,14 @@
 # Local/dev Evolution API instance for the whatsapp_status beta channel.
-# Not wired into the app automatically — after `docker compose up -d`, create
-# the instance and scan its QR code through Evolution's own admin, then paste
-# the instance URL/name + AUTHENTICATION_API_KEY into the project's
-# "WhatsApp Status (beta)" card in Conta e token.
+# After `docker compose up -d`, set OPENSQUAD_EVOLUTION_ADMIN_URL and
+# OPENSQUAD_EVOLUTION_ADMIN_APIKEY (= this .env's AUTHENTICATION_API_KEY) on
+# the content-central-server process — each project then connects its own
+# instance with one click ("Conectar WhatsApp" in Conta e token), no manual
+# instance creation or pasted credentials needed.
 services:
   evolution-api:
-    image: atendai/evolution-api:latest
+    # atendai/evolution-api was the old image name (last published v1.7.1,
+    # abandoned) — the project moved to evoapicloud/evolution-api.
+    image: evoapicloud/evolution-api:latest
     restart: always
     ports:
       - "8080:8080"
