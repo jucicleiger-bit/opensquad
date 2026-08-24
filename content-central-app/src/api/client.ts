@@ -16,8 +16,7 @@ export interface ProjectInstagram {
 
 export interface ProjectWhatsApp {
   configured?: boolean;
-  instanceName?: string;
-  maskedApiKey?: string;
+  sessionName?: string;
 }
 
 export interface BrandInput {

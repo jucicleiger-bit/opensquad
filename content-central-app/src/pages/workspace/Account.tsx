@@ -181,7 +181,7 @@ export function Account() {
           <b>Canal beta — leia antes de conectar:</b>
           <br />
           <span className="muted">
-            Publica via Evolution API (automação não-oficial do WhatsApp Web, não é a API oficial da Meta). Sem SLA — pode
+            Publica via WAHA (automação não-oficial do WhatsApp Web, não é a API oficial da Meta). Sem SLA — pode
             falhar sem responder ou, em tese, levar ao banimento do número. Conecte só se aceitar esse risco.
           </span>
         </div>
