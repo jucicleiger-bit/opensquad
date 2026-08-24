@@ -78,7 +78,6 @@ import {
   sendDueAlertEmails,
   publishSingleContent,
   readProjectToken,
-  readProjectWhatsAppApiKey,
   reconcileInterruptedGenerations,
   regenerateContentDay,
   regenerateContentGroup,
@@ -760,7 +759,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const projects = await listCentralProjects(targetDir);
     const project = projects.find((entry) => entry.projectId === projectId);
     if (!project) return sendJson(res, 404, { error: 'Project not found' });
-    const result = await connectProjectWhatsAppInstance(projectId, project, targetDir);
+    const result = await connectProjectWhatsAppSession(projectId, project, targetDir);
     return sendJson(res, 200, result);
   }
 
@@ -4360,65 +4359,65 @@ async function publishContentToInstagram({ content, project }, targetDir) {
   throw lastError;
 }
 
-const EVOLUTION_INSTANCE_PREFIX = 'opensquad-';
+const WAHA_SESSION_PREFIX = 'opensquad-';
 
-// The one shared Evolution server's base URL — never per-project. Every
-// caller that just needs to reach the server (the publisher) uses this
-// alone; admin-authenticated calls (create/reconnect/status) also need
-// evolutionAdminConfig() below.
-function evolutionServerUrl() {
-  const adminUrl = process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
-  if (!adminUrl) throw new Error('Servidor Evolution não configurado — contate o administrador.');
-  return adminUrl.replace(/\/$/, '');
+// WAHA Core uses one global API key for every call — admin (create/status)
+// and publish alike — unlike Evolution's split of a public server URL plus
+// a separate per-instance token. See the design spec's accepted trade-off:
+// this loses Evolution's per-project key isolation, but WAHA Core doesn't
+// support scoped session tokens (only WAHA Plus does).
+function wahaConfig() {
+  const url = process.env.OPENSQUAD_WAHA_ADMIN_URL;
+  const apiKey = process.env.OPENSQUAD_WAHA_APIKEY;
+  if (!url || !apiKey) throw new Error('Servidor WAHA não configurado — contate o administrador.');
+  return { url: url.replace(/\/$/, ''), apiKey };
 }
 
-function evolutionAdminConfig() {
-  const adminApiKey = process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
-  if (!adminApiKey) throw new Error('Servidor Evolution não configurado — contate o administrador.');
-  return { adminUrl: evolutionServerUrl(), adminApiKey };
-}
+// Creates the session on first connect, restarts it if it fell over
+// (FAILED/STOPPED), or just re-fetches its current QR otherwise — same
+// button, same route, all three cases. A session already WORKING is left
+// alone (nothing to scan, and restarting it would drop a live connection).
+async function connectProjectWhatsAppSession(projectId, project, targetDir) {
+  const { url, apiKey } = wahaConfig();
+  const sessionName = `${WAHA_SESSION_PREFIX}${projectId}`;
+  const headers = { 'X-Api-Key': apiKey };
 
-// Creates the instance on first connect, or re-fetches a fresh QR for an
-// already-created instance on a reconnect/expired-QR retry — same button,
-// same route, both cases. Branches on OUR OWN stored state
-// (project.whatsapp.configured), not on Evolution's create-response shape
-// for "already exists" — that shape is unreliable across Evolution
-// versions (see evolution-api#2380/#1602 in the design spec).
-async function connectProjectWhatsAppInstance(projectId, project, targetDir) {
-  const { adminUrl, adminApiKey } = evolutionAdminConfig();
-  const instanceName = `${EVOLUTION_INSTANCE_PREFIX}${projectId}`;
-
-  if (project.whatsapp?.configured) {
-    const res = await fetch(`${adminUrl}/instance/connect/${instanceName}`, {
-      headers: { apikey: adminApiKey },
+  let status;
+  const statusRes = await fetch(`${url}/api/sessions/${sessionName}`, { headers });
+  if (statusRes.status === 404) {
+    const createRes = await fetch(`${url}/api/sessions`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: sessionName, config: {} }),
     });
-    if (res.ok) {
-      const parsed = await res.json();
-      return { qrcode: parsed.base64 || parsed.qrcode?.base64 || null, project };
-    }
-    if (res.status !== 404) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
-    // 404 — the instance is gone from the shared server (wiped/deleted), or this
-    // row predates the derived-name rule. Fall through and (re)create it.
+    if (!createRes.ok) throw new Error(`WAHA respondeu ${createRes.status}: ${await createRes.text()}`);
+    const startRes = await fetch(`${url}/api/sessions/${sessionName}/start`, { method: 'POST', headers });
+    if (!startRes.ok) throw new Error(`WAHA respondeu ${startRes.status}: ${await startRes.text()}`);
+    status = 'STARTING';
+  } else if (!statusRes.ok) {
+    throw new Error(`WAHA respondeu ${statusRes.status}: ${await statusRes.text()}`);
+  } else {
+    status = (await statusRes.json()).status;
   }
 
-  const res = await fetch(`${adminUrl}/instance/create`, {
-    method: 'POST',
-    // integration is required as of Evolution API v2.x ("Invalid integration"
-    // 400 without it) — WHATSAPP-BAILEYS is the free/unofficial WhatsApp Web
-    // engine this whole channel is already built around (see the design spec).
-    headers: { 'Content-Type': 'application/json', apikey: adminApiKey },
-    body: JSON.stringify({ instanceName, qrcode: true, integration: 'WHATSAPP-BAILEYS' }),
-  });
-  if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
-  const parsed = await res.json();
-  // v2.3.7 returns `hash` as a plain string token, not `{ apikey }` — accept
-  // both shapes since older/other Evolution versions' docs describe the
-  // object form.
-  const instanceApiKey = typeof parsed.hash === 'string' ? parsed.hash : parsed.hash?.apikey;
-  if (!instanceApiKey) throw new Error('Evolution API não devolveu um token de instância.');
+  let updatedProject = project;
+  if (!project.whatsapp?.configured) {
+    updatedProject = await saveProjectWhatsAppInstance(projectId, { sessionName }, targetDir);
+  }
 
-  const updatedProject = await saveProjectWhatsAppInstance(projectId, { instanceName, apiKey: instanceApiKey }, targetDir);
-  return { qrcode: parsed.qrcode?.base64 || null, project: updatedProject };
+  if (status === 'WORKING') return { qrcode: null, project: updatedProject };
+
+  if (status === 'FAILED' || status === 'STOPPED') {
+    const restartRes = await fetch(`${url}/api/sessions/${sessionName}/restart`, { method: 'POST', headers });
+    if (!restartRes.ok) throw new Error(`WAHA respondeu ${restartRes.status}: ${await restartRes.text()}`);
+  }
+
+  const qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
+  if (!qrRes.ok) throw new Error(`WAHA respondeu ${qrRes.status}: ${await qrRes.text()}`);
+  const qrBuffer = Buffer.from(await qrRes.arrayBuffer());
+  const qrcode = `data:image/png;base64,${qrBuffer.toString('base64')}`;
+
+  return { qrcode, project: updatedProject };
 }
 
 // Connection state is never persisted (see Global Constraints) — always
@@ -4426,33 +4425,27 @@ async function connectProjectWhatsAppInstance(projectId, project, targetDir) {
 // instead of a stale "connected" the operator has no reason to distrust.
 async function getProjectWhatsAppConnectionStatus(projectId, project) {
   if (!project.whatsapp?.configured) return { connected: false, state: 'not_configured' };
-  const { adminUrl, adminApiKey } = evolutionAdminConfig();
-  const instanceName = project.whatsapp.instanceName;
-  const res = await fetch(`${adminUrl}/instance/connectionState/${instanceName}`, {
-    headers: { apikey: adminApiKey },
-  });
-  if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+  const { url, apiKey } = wahaConfig();
+  const sessionName = project.whatsapp.sessionName;
+  const res = await fetch(`${url}/api/sessions/${sessionName}`, { headers: { 'X-Api-Key': apiKey } });
+  if (!res.ok) throw new Error(`WAHA respondeu ${res.status}: ${await res.text()}`);
   const parsed = await res.json();
-  const state = parsed.instance?.state || parsed.state || 'unknown';
-  return { connected: state === 'open', state };
+  const state = parsed.status || 'unknown';
+  return { connected: state === 'WORKING', state };
 }
 
 // The real "whatsappPublisher" for the beta WhatsApp Status channel — a
 // single direct HTTP call, unlike Meta's meta-publish-multi.js subprocess
 // (which exists to orchestrate multiple publish_targets in one call; this
-// is always exactly one target). Evolution API's sendStatus endpoint has a
-// documented failure mode (github.com/EvolutionAPI/evolution-api/issues/2377
-// — hangs indefinitely, closed "not planned") so this uses a short timeout
-// and no retry loop, unlike the Meta publisher's 3-attempt/300s-each retry:
-// re-hitting a call that's known to hang just triples the wait for the same
-// failure instead of recovering from a transient blip.
+// is always exactly one target). Short timeout, no retry loop: re-hitting a
+// call that might hang doesn't recover from a transient blip, it just
+// triples the wait for the same failure — same reasoning as before.
 export async function publishContentToWhatsAppStatus({ content, project }, targetDir) {
-  const apiKey = await readProjectWhatsAppApiKey(project.projectId, targetDir);
-  const instanceName = project.whatsapp?.instanceName;
-  if (!apiKey || !instanceName) {
-    throw new Error('Instância Evolution não configurada para este projeto — configure na aba "Conta e token".');
+  const sessionName = project.whatsapp?.sessionName;
+  if (!sessionName) {
+    throw new Error('Sessão WAHA não configurada para este projeto — configure na aba "Conta e token".');
   }
-  const instanceUrl = evolutionServerUrl();
+  const { url, apiKey } = wahaConfig();
 
   // content.publish?.mediaUrl (already-hosted URL, e.g. from a prior publish
   // attempt) short-circuits the local-file lookup/upload entirely — only
@@ -4464,32 +4457,23 @@ export async function publishContentToWhatsAppStatus({ content, project }, targe
     if (!localImagePath) throw new Error('Imagem gerada não encontrada para publicar.');
     mediaUrl = await uploadGeneratedImagePublicly(localImagePath);
   }
-  // `allContacts: true` fans the Status out to every saved contact
-  // server-side before Evolution responds — confirmed in production this
-  // can comfortably exceed 20s once an account has several hundred
-  // contacts (Evolution's own logs still show the send completing with no
-  // error after our old 20s timeout had already given up and marked the
-  // item failed). 90s gives real accounts room; still overridable per
-  // deployment for accounts with very large contact lists.
   const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 90000);
   try {
-    const res = await fetch(`${instanceUrl}/message/sendStatus/${instanceName}`, {
+    const res = await fetch(`${url}/api/${sessionName}/status/image`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: apiKey },
+      headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
       body: JSON.stringify({
-        type: 'image',
-        content: mediaUrl,
+        file: { mimetype: 'image/png', url: mediaUrl },
         caption: content.caption?.text || '',
-        allContacts: true,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) throw new Error(`Evolution API respondeu ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new Error(`WAHA respondeu ${res.status}: ${await res.text()}`);
     const parsed = await res.json();
-    return { mediaId: parsed.key?.id || null, permalink: null };
+    return { mediaId: parsed.id || null, permalink: null };
   } catch (err) {
     if (err.name === 'AbortError' || err.name === 'TimeoutError') {
-      throw new Error('Canal beta instável — Evolution API não respondeu a tempo (falha conhecida da API, sem correção prevista pelo time).');
+      throw new Error('Canal beta instável — WAHA não respondeu a tempo.', { cause: err });
     }
     throw err;
   }

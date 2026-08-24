@@ -3383,17 +3383,16 @@ async function withMockedFetch(impl, fn) {
   }
 }
 
-test('publishContentToWhatsAppStatus posts the generated image to the Evolution API sendStatus endpoint', async () => {
+test('publishContentToWhatsAppStatus posts the generated image to the WAHA status endpoint', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-whatsapp-publish-'));
   try {
     await createCentralProject({ projectId: 'whatsapp-publish', name: 'WhatsApp Publish' }, dir);
     await saveProjectWhatsAppInstance('whatsapp-publish', {
-      instanceName: 'opensquad-whatsapp-publish',
-      apiKey: 'evo-real-secret',
+      sessionName: 'opensquad-whatsapp-publish',
     }, dir);
     const project = {
       projectId: 'whatsapp-publish',
-      whatsapp: { instanceName: 'opensquad-whatsapp-publish' },
+      whatsapp: { sessionName: 'opensquad-whatsapp-publish' },
     };
     const content = {
       contentId: 'content-1',
@@ -3402,44 +3401,43 @@ test('publishContentToWhatsAppStatus posts the generated image to the Evolution 
       publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
     };
 
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
     try {
       const calls = [];
       await withMockedFetch(async (url, init) => {
         calls.push({ url: String(url), init });
-        return new Response(JSON.stringify({ key: { id: 'WA123' } }), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ id: 'true_status@broadcast_WA123_123@c.us' }), { status: 200, headers: { 'content-type': 'application/json' } });
       }, async () => {
         const result = await publishContentToWhatsAppStatus({ content, project }, dir);
-        assert.equal(result.mediaId, 'WA123');
+        assert.equal(result.mediaId, 'true_status@broadcast_WA123_123@c.us');
       });
 
       assert.equal(calls.length, 1);
-      assert.equal(calls[0].url, 'https://evolution.example.com/message/sendStatus/opensquad-whatsapp-publish');
-      assert.equal(calls[0].init.headers.apikey, 'evo-real-secret');
+      assert.equal(calls[0].url, 'https://waha.example.com/api/opensquad-whatsapp-publish/status/image');
+      assert.equal(calls[0].init.headers['X-Api-Key'], 'waha-secret');
       const body = JSON.parse(calls[0].init.body);
-      assert.equal(body.type, 'image');
-      assert.equal(body.content, 'https://cdn.example.com/whatsapp-test.png');
+      assert.equal(body.file.url, 'https://cdn.example.com/whatsapp-test.png');
       assert.equal(body.caption, 'Promoção da semana!');
-      assert.equal(body.allContacts, true);
     } finally {
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
     }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
 
-test('publishContentToWhatsAppStatus surfaces a clear beta-instability error when the Evolution API times out', async () => {
+test('publishContentToWhatsAppStatus surfaces a clear beta-instability error when WAHA times out', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-whatsapp-timeout-'));
   try {
     await createCentralProject({ projectId: 'whatsapp-timeout', name: 'WhatsApp Timeout' }, dir);
     await saveProjectWhatsAppInstance('whatsapp-timeout', {
-      instanceName: 'opensquad-whatsapp-timeout',
-      apiKey: 'evo-real-secret',
+      sessionName: 'opensquad-whatsapp-timeout',
     }, dir);
     const project = {
       projectId: 'whatsapp-timeout',
-      whatsapp: { instanceName: 'opensquad-whatsapp-timeout' },
+      whatsapp: { sessionName: 'opensquad-whatsapp-timeout' },
     };
     const content = {
       contentId: 'content-1',
@@ -3448,7 +3446,8 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
       publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
     };
 
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
     process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS = '10';
     try {
       await withMockedFetch(async (url, init) => new Promise((_resolve, reject) => {
@@ -3459,11 +3458,12 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
       }), async () => {
         await assert.rejects(
           () => publishContentToWhatsAppStatus({ content, project }, dir),
-          /Canal beta instável.*Evolution API não respondeu a tempo/,
+          /Canal beta instável.*WAHA não respondeu a tempo/,
         );
       });
     } finally {
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
       delete process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS;
     }
   } finally {
@@ -3471,9 +3471,9 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
   }
 });
 
-test('POST .../whatsapp-instance/connect fails clearly when the Evolution admin server is not configured', async () => {
-  delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
-  delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+test('POST .../whatsapp-instance/connect fails clearly when the WAHA server is not configured', async () => {
+  delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+  delete process.env.OPENSQUAD_WAHA_APIKEY;
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
@@ -3481,14 +3481,14 @@ test('POST .../whatsapp-instance/connect fails clearly when the Evolution admin 
     });
     const res = await request(server, '/api/projects/rota-whatsapp-sem-admin/whatsapp-instance/connect', { method: 'POST' });
     assert.equal(res.response.status, 500);
-    assert.match(res.body.error, /Servidor Evolution não configurado/);
+    assert.match(res.body.error, /Servidor WAHA não configurado/);
   });
 });
 
-test('POST .../whatsapp-instance/connect creates a new Evolution instance and stores its token', async () => {
+test('POST .../whatsapp-instance/connect creates a new WAHA session and stores its name', async () => {
   await withServer(async (dir, server) => {
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
     try {
       await request(server, '/api/projects', {
         method: 'POST',
@@ -3498,144 +3498,142 @@ test('POST .../whatsapp-instance/connect creates a new Evolution instance and st
       const calls = [];
       await withMockedFetch(async (url, init) => {
         calls.push({ url: String(url), init });
-        return new Response(JSON.stringify({
-          instance: { instanceName: 'opensquad-rota-whatsapp-connect', status: 'created' },
-          hash: { apikey: 'instance-token-1234' },
-          qrcode: { code: '2@...', base64: 'data:image/png;base64,QRDATA' },
-        }), { status: 201, headers: { 'content-type': 'application/json' } });
+        const u = String(url);
+        if (u === 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-connect') {
+          return new Response(JSON.stringify({ message: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+        }
+        if (u === 'https://waha.example.com/api/sessions') {
+          return new Response(JSON.stringify({ name: 'opensquad-rota-whatsapp-connect' }), { status: 201, headers: { 'content-type': 'application/json' } });
+        }
+        if (u === 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-connect/start') {
+          return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u === 'https://waha.example.com/api/opensquad-rota-whatsapp-connect/auth/qr?format=image') {
+          return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        throw new Error(`unexpected fetch call: ${u}`);
       }, async () => {
         const res = await request(server, '/api/projects/rota-whatsapp-connect/whatsapp-instance/connect', { method: 'POST' });
         assert.equal(res.response.status, 200);
-        assert.equal(res.body.qrcode, 'data:image/png;base64,QRDATA');
+        assert.equal(res.body.qrcode, `data:image/png;base64,${Buffer.from([1, 2, 3]).toString('base64')}`);
         assert.equal(res.body.project.whatsapp.configured, true);
-        assert.equal(res.body.project.whatsapp.instanceName, 'opensquad-rota-whatsapp-connect');
-        assert.equal(res.body.project.whatsapp.maskedApiKey, '****1234');
+        assert.equal(res.body.project.whatsapp.sessionName, 'opensquad-rota-whatsapp-connect');
       });
 
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0].url, 'https://evolution.example.com/instance/create');
-      assert.equal(calls[0].init.headers.apikey, 'admin-secret');
-      const body = JSON.parse(calls[0].init.body);
-      assert.equal(body.instanceName, 'opensquad-rota-whatsapp-connect');
-      assert.equal(body.qrcode, true);
+      assert.equal(calls.length, 4);
+      const createCall = calls.find((c) => c.url === 'https://waha.example.com/api/sessions');
+      assert.equal(JSON.parse(createCall.init.body).name, 'opensquad-rota-whatsapp-connect');
     } finally {
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
     }
   });
 });
 
-test('POST .../whatsapp-instance/connect fetches a fresh QR for an already-connected project instead of recreating it', async () => {
+test('POST .../whatsapp-instance/connect leaves a WORKING session untouched and returns no QR', async () => {
   await withServer(async (dir, server) => {
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
     try {
       await request(server, '/api/projects', {
         method: 'POST',
-        body: JSON.stringify({ projectId: 'rota-whatsapp-reconnect', name: 'Rota WhatsApp Reconnect' }),
+        body: JSON.stringify({ projectId: 'rota-whatsapp-working', name: 'Rota WhatsApp Working' }),
       });
-      await saveProjectWhatsAppInstance('rota-whatsapp-reconnect', {
-        instanceName: 'opensquad-rota-whatsapp-reconnect',
-        apiKey: 'instance-token-1234',
+      await saveProjectWhatsAppInstance('rota-whatsapp-working', {
+        sessionName: 'opensquad-rota-whatsapp-working',
       }, dir);
 
       const calls = [];
       await withMockedFetch(async (url, init) => {
         calls.push({ url: String(url), init });
-        return new Response(JSON.stringify({ base64: 'data:image/png;base64,NEWQR' }), { status: 200, headers: { 'content-type': 'application/json' } });
+        return new Response(JSON.stringify({ status: 'WORKING' }), { status: 200, headers: { 'content-type': 'application/json' } });
       }, async () => {
-        const res = await request(server, '/api/projects/rota-whatsapp-reconnect/whatsapp-instance/connect', { method: 'POST' });
+        const res = await request(server, '/api/projects/rota-whatsapp-working/whatsapp-instance/connect', { method: 'POST' });
         assert.equal(res.response.status, 200);
-        assert.equal(res.body.qrcode, 'data:image/png;base64,NEWQR');
+        assert.equal(res.body.qrcode, null);
       });
 
       assert.equal(calls.length, 1);
-      assert.equal(calls[0].url, 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-reconnect');
-      assert.equal(calls[0].init.headers.apikey, 'admin-secret');
+      assert.equal(calls[0].url, 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-working');
     } finally {
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
     }
   });
 });
 
-test('POST .../whatsapp-instance/connect recreates the instance when Evolution 404s on connect (instance missing on server)', async () => {
+test('POST .../whatsapp-instance/connect restarts a FAILED session before fetching a fresh QR', async () => {
   await withServer(async (dir, server) => {
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
     try {
       await request(server, '/api/projects', {
         method: 'POST',
-        body: JSON.stringify({ projectId: 'rota-whatsapp-404-fallthrough', name: 'Rota WhatsApp 404 Fallthrough' }),
+        body: JSON.stringify({ projectId: 'rota-whatsapp-restart', name: 'Rota WhatsApp Restart' }),
       });
-      await saveProjectWhatsAppInstance('rota-whatsapp-404-fallthrough', {
-        instanceName: 'opensquad-rota-whatsapp-404-fallthrough',
-        apiKey: 'instance-token-1234',
+      await saveProjectWhatsAppInstance('rota-whatsapp-restart', {
+        sessionName: 'opensquad-rota-whatsapp-restart',
       }, dir);
 
       const calls = [];
       await withMockedFetch(async (url, init) => {
         calls.push({ url: String(url), init });
-        if (String(url) === 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-404-fallthrough') {
-          return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+        const u = String(url);
+        if (u === 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-restart') {
+          return new Response(JSON.stringify({ status: 'FAILED' }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
-        if (String(url) === 'https://evolution.example.com/instance/create') {
-          return new Response(JSON.stringify({
-            instance: { instanceName: 'opensquad-rota-whatsapp-404-fallthrough', status: 'created' },
-            hash: { apikey: 'instance-token-5678' },
-            qrcode: { code: '2@...', base64: 'data:image/png;base64,RECREATEDQR' },
-          }), { status: 201, headers: { 'content-type': 'application/json' } });
+        if (u === 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-restart/restart') {
+          return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } });
         }
-        throw new Error(`unexpected fetch call: ${url}`);
+        if (u === 'https://waha.example.com/api/opensquad-rota-whatsapp-restart/auth/qr?format=image') {
+          return new Response(new Uint8Array([9, 9]), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        throw new Error(`unexpected fetch call: ${u}`);
       }, async () => {
-        const res = await request(server, '/api/projects/rota-whatsapp-404-fallthrough/whatsapp-instance/connect', { method: 'POST' });
+        const res = await request(server, '/api/projects/rota-whatsapp-restart/whatsapp-instance/connect', { method: 'POST' });
         assert.equal(res.response.status, 200);
-        assert.equal(res.body.qrcode, 'data:image/png;base64,RECREATEDQR');
-        assert.equal(res.body.project.whatsapp.configured, true);
-        assert.equal(res.body.project.whatsapp.maskedApiKey, '****5678');
+        assert.equal(res.body.qrcode, `data:image/png;base64,${Buffer.from([9, 9]).toString('base64')}`);
       });
 
-      assert.equal(calls.length, 2);
-      assert.equal(calls[0].url, 'https://evolution.example.com/instance/connect/opensquad-rota-whatsapp-404-fallthrough');
-      assert.equal(calls[1].url, 'https://evolution.example.com/instance/create');
+      assert.equal(calls.length, 3);
+      assert.equal(calls[1].url, 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-restart/restart');
     } finally {
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
     }
   });
 });
 
-test('GET .../whatsapp-instance/status reports connected true only when Evolution reports state open', async () => {
+test('GET .../whatsapp-instance/status reports connected true only when WAHA reports WORKING', async () => {
   await withServer(async (dir, server) => {
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_URL = 'https://evolution.example.com';
-    process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY = 'admin-secret';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
     try {
       await request(server, '/api/projects', {
         method: 'POST',
         body: JSON.stringify({ projectId: 'rota-whatsapp-status', name: 'Rota WhatsApp Status' }),
       });
       await saveProjectWhatsAppInstance('rota-whatsapp-status', {
-        instanceName: 'opensquad-rota-whatsapp-status',
-        apiKey: 'instance-token-1234',
+        sessionName: 'opensquad-rota-whatsapp-status',
       }, dir);
 
       await withMockedFetch(
-        async () => new Response(JSON.stringify({ instance: { state: 'open' } }), { status: 200, headers: { 'content-type': 'application/json' } }),
+        async () => new Response(JSON.stringify({ status: 'WORKING' }), { status: 200, headers: { 'content-type': 'application/json' } }),
         async () => {
           const res = await request(server, '/api/projects/rota-whatsapp-status/whatsapp-instance/status');
           assert.equal(res.response.status, 200);
           assert.equal(res.body.connected, true);
-          assert.equal(res.body.state, 'open');
+          assert.equal(res.body.state, 'WORKING');
         },
       );
     } finally {
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_URL;
-      delete process.env.OPENSQUAD_EVOLUTION_ADMIN_APIKEY;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
     }
   });
 });
 
-test('GET .../whatsapp-instance/status reports not_configured without any network call for a project with no instance', async () => {
+test('GET .../whatsapp-instance/status reports not_configured without any network call for a project with no session', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {
       method: 'POST',
