@@ -6496,6 +6496,29 @@ test('listSystemAlerts flags an unresolved publish failure and clears once it pu
   });
 });
 
+test('listSystemAlerts flags an approved item stuck with no mediaUrl after a failed upload, even though publish.error is null', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'falha-upload',
+      name: 'Falha Upload',
+      handle: '@falhaupload',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('falha-upload', { days: 1, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    // Mirrors the real bug: the approve-time mediaUploader throws (CDN not
+    // propagated yet), so publish.error stays null — only mediaUploadError
+    // is set — and this alert must still catch it.
+    await approveContent('falha-upload', batch.items[0].contentId, dir, batch.batchId, {
+      mediaUploader: async () => { throw new Error('Imagem hospedada em https://i.ibb.co/x/y.png não respondeu como imagem'); },
+    });
+
+    const alerts = await listSystemAlerts(dir);
+    const alert = alerts.find((a) => a.type === 'media_upload_failed' && a.projectId === 'falha-upload');
+    assert.ok(alert);
+    assert.match(alert.message, /não respondeu como imagem/);
+  });
+});
+
 test('sendDueAlertEmails emails once per issue and respects the cooldown on the next sweep', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

@@ -3829,17 +3829,34 @@ export async function listSystemAlerts(targetDir = process.cwd()) {
 
     const content = await listProjectContent(project.projectId, targetDir);
     for (const item of content) {
-      if (!item.publish?.error || item.publish?.realPublished) continue;
       const subject = item.contentTopic?.offerName || item.contentTopic?.label || item.title || item.contentId;
       const channel = CHANNEL_LABELS[item.channel] || item.channel;
-      alerts.push({
-        type: 'publish_failed',
-        projectId: project.projectId,
-        projectName: project.name,
-        contentId: item.contentId,
-        batchId: item.batchId,
-        message: `Falha ao publicar "${subject}" (${channel}): ${item.publish.error}`,
-      });
+
+      if (item.publish?.error && !item.publish?.realPublished) {
+        alerts.push({
+          type: 'publish_failed',
+          projectId: project.projectId,
+          projectName: project.name,
+          contentId: item.contentId,
+          batchId: item.batchId,
+          message: `Falha ao publicar "${subject}" (${channel}): ${item.publish.error}`,
+        });
+      }
+
+      // A failed approve-time upload sets mediaUploadError, never
+      // publish.error — the check above alone misses it entirely, which is
+      // exactly how a stuck item (mediaUrl: null forever) went unnoticed
+      // until its scheduled slot came and went with nobody alerted.
+      if (item.status === 'aprovado' && !item.publish?.realPublished && !item.publish?.mediaUrl && item.publish?.mediaUploadError) {
+        alerts.push({
+          type: 'media_upload_failed',
+          projectId: project.projectId,
+          projectName: project.name,
+          contentId: item.contentId,
+          batchId: item.batchId,
+          message: `Falha ao hospedar a imagem de "${subject}" (${channel}) após aprovar: ${item.publish.mediaUploadError}`,
+        });
+      }
     }
   }
 
@@ -3852,7 +3869,9 @@ function alertNotificationKey(alert) {
 
 function alertEmailSubject(alert) {
   const icon = alert.type === 'token_expired' ? '🔴' : alert.type === 'token_expiring' ? '🟡' : '⚠️';
-  const topic = alert.type === 'publish_failed' ? 'falha ao publicar' : 'token da Meta';
+  const topic = alert.type === 'publish_failed' ? 'falha ao publicar'
+    : alert.type === 'media_upload_failed' ? 'falha ao hospedar imagem'
+    : 'token da Meta';
   return `${icon} [Opensquad] ${alert.projectName} — ${topic}`;
 }
 

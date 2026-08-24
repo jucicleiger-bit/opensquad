@@ -133,10 +133,10 @@ function resolveGaveteSync(targetDir, projectId) {
       const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
       if (isVideoChannel) {
         if (!content.video?.localPath) return null;
-        return uploadGeneratedVideoPublicly(content.video.localPath);
+        return uploadWithRetry(() => uploadGeneratedVideoPublicly(content.video.localPath));
       }
       const localPath = resolveGeneratedImageAbsolutePath(content, projectId, targetDir);
-      return localPath ? uploadGeneratedImagePublicly(localPath) : null;
+      return localPath ? uploadWithRetry(() => uploadGeneratedImagePublicly(localPath)) : null;
     },
   };
 }
@@ -4273,6 +4273,29 @@ export async function uploadGeneratedVideoPublicly(localPath) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// A hosting hiccup (imgBB/Catbox CDN not yet propagated when Meta or the
+// operator's own re-fetch checks it) is the exact same transient failure
+// publishContentToInstagram already retries through at publish time — this
+// gives the approve-time upload the identical settle-delay + retry
+// treatment (same env vars, same shape), so it self-heals here too instead
+// of leaving the item stuck with mediaUrl: null until someone notices.
+async function uploadWithRetry(uploadFn) {
+  const maxAttempts = Math.max(1, Number(process.env.OPENSQUAD_PUBLISH_RETRY_ATTEMPTS || 3));
+  const retryDelayMs = Math.max(0, Number(process.env.OPENSQUAD_PUBLISH_RETRY_DELAY_MS || 4000));
+  const settleDelayMs = Math.max(0, Number(process.env.OPENSQUAD_PUBLISH_SETTLE_DELAY_MS || 2500));
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await delay(settleDelayMs);
+      return await uploadFn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) await delay(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
 }
 
 // The real "metaPublisher" injected into runDuePublishSweep — everything
