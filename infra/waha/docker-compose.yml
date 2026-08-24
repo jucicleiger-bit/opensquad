@@ -1,0 +1,18 @@
+# Servidor WAHA compartilhado — backend real do canal whatsapp_status
+# (Central de Conteúdo). Substituiu a Evolution API: Evolution/Baileys nunca
+# conseguiu entregar Status em conta WhatsApp Business de forma confiável;
+# WAHA resolve isso (confirmado em teste real, 2026-08-24).
+services:
+  waha:
+    image: devlikeapro/waha
+    restart: always
+    ports:
+      - "3001:3000"
+    environment:
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WAHA_API_KEY: ${WAHA_API_KEY}
+    volumes:
+      - waha_sessions:/app/.sessions
+
+volumes:
+  waha_sessions:
