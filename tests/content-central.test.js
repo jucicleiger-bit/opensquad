@@ -2055,7 +2055,7 @@ test('WhatsApp Status generates with the same real vertical dimensions as the ot
   });
 });
 
-test('saveProjectWhatsAppInstance stores the apikey outside project config and records masked metadata', async () => {
+test('saveProjectWhatsAppInstance records the session name with no secret file', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'whatsapp-demo',
@@ -2065,33 +2065,20 @@ test('saveProjectWhatsAppInstance stores the apikey outside project config and r
     }, dir);
 
     const updated = await saveProjectWhatsAppInstance('whatsapp-demo', {
-      instanceName: 'opensquad-whatsapp-demo',
-      apiKey: 'evo-real-secret-1234567890',
-    }, dir, new Date('2026-08-21T12:00:00.000Z'));
+      sessionName: 'opensquad-whatsapp-demo',
+    }, dir, new Date('2026-08-24T12:00:00.000Z'));
 
     assert.equal(updated.whatsapp.configured, true);
-    assert.equal(updated.whatsapp.instanceName, 'opensquad-whatsapp-demo');
-    assert.equal(updated.whatsapp.maskedApiKey, '****7890');
-    assert.equal(updated.whatsapp.instanceUrl, undefined);
-
-    const paths = getCentralPaths(dir, 'whatsapp-demo');
-    const configRaw = await readFile(paths.projectPath, 'utf-8');
-    assert.equal(configRaw.includes('evo-real-secret'), false);
-
-    const secretRaw = await readFile(paths.whatsappApiKeySecretPath, 'utf-8');
-    assert.equal(secretRaw, 'evo-real-secret-1234567890');
+    assert.equal(updated.whatsapp.sessionName, 'opensquad-whatsapp-demo');
+    assert.equal(updated.whatsapp.maskedApiKey, undefined);
   });
 });
 
-test('saveProjectWhatsAppInstance rejects an incomplete instance config', async () => {
+test('saveProjectWhatsAppInstance rejects a missing session name', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'whatsapp-incompleto', name: 'WhatsApp Incompleto' }, dir);
     await assert.rejects(
-      () => saveProjectWhatsAppInstance('whatsapp-incompleto', { instanceName: 'opensquad-whatsapp-incompleto' }, dir),
-      /required/,
-    );
-    await assert.rejects(
-      () => saveProjectWhatsAppInstance('whatsapp-incompleto', { apiKey: 'x' }, dir),
+      () => saveProjectWhatsAppInstance('whatsapp-incompleto', {}, dir),
       /required/,
     );
   });
@@ -2101,7 +2088,7 @@ test('a project summary always carries a whatsapp block, defaulted for projects 
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'whatsapp-default', name: 'WhatsApp Default' }, dir);
     const [project] = await (await import('../src/content-central.js')).listCentralProjects(dir);
-    assert.deepEqual(project.whatsapp, { configured: false, instanceName: '', maskedApiKey: '' });
+    assert.deepEqual(project.whatsapp, { configured: false, sessionName: '' });
   });
 });
 
