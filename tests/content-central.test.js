@@ -6224,6 +6224,49 @@ test('runDuePublishSweep only publishes the earliest overdue (date, time) slot p
   });
 });
 
+test('runDuePublishSweep with a channels filter only sees content on those channels, leaving other due items on other channels completely untouched', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'publish-channel-filter',
+      name: 'Publish Channel Filter',
+      handle: '@publishchannelfilter',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    // Two items, same project, same due slot, different channels — the
+    // exact shape a whatsapp-only scheduler must never let an Instagram
+    // item block or falsely fail on.
+    const igBatch = await generateContentBatch('publish-channel-filter', {
+      days: 1, startDate: '2026-07-20', postTime: '09:00', channel: 'instagram_story',
+    }, dir);
+    const waBatch = await generateContentBatch('publish-channel-filter', {
+      days: 1, startDate: '2026-07-20', postTime: '09:00', channel: 'whatsapp_status',
+    }, dir);
+    await approveContent('publish-channel-filter', igBatch.items[0].contentId, dir, igBatch.batchId);
+    await approveContent('publish-channel-filter', waBatch.items[0].contentId, dir, waBatch.batchId);
+
+    const publisherCalls = [];
+    const result = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-25T12:00:00.000Z'),
+      channels: new Set(['whatsapp_status']),
+      metaPublisher: async (payload) => {
+        if (payload.content.channel !== 'whatsapp_status') throw new Error('should never be called for a non-whatsapp channel');
+        publisherCalls.push(payload.content.contentId);
+        return { mediaId: 'wa-media-1' };
+      },
+    });
+
+    assert.deepEqual(result.published, [waBatch.items[0].contentId]);
+    assert.deepEqual(publisherCalls, [waBatch.items[0].contentId]);
+
+    const waAfter = JSON.parse(await readFile(waBatch.items[0].filePath, 'utf-8'));
+    assert.equal(waAfter.publish.realPublished, true);
+
+    const igAfter = JSON.parse(await readFile(igBatch.items[0].filePath, 'utf-8'));
+    assert.notEqual(igAfter.publish?.realPublished, true);
+    assert.ok(!igAfter.publish?.error);
+  });
+});
+
 test('approveContent calls queueSync with an upsert for the approved item', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sync-approve', name: 'Sync Approve', handle: '@syncapprove', approvalEmail: 'a@example.com' }, dir);

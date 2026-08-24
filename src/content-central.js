@@ -3665,7 +3665,8 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
   const projects = await listCentralProjects(targetDir);
   for (const projectSummary of projects) {
     const projectId = projectSummary.projectId;
-    const content = await listProjectContent(projectId, targetDir);
+    let content = await listProjectContent(projectId, targetDir);
+    if (options.channels) content = content.filter((item) => options.channels.has(item.channel));
     const due = content
       .filter((item) => item.status === 'aprovado' && !item.publish?.realPublished && isPublishDue(item, now))
       .sort((a, b) => (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime));

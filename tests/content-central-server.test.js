@@ -34,6 +34,7 @@ import {
   selectOpenAiImageEditReferences,
   startContentCentralServer,
   startPublishScheduler,
+  startWhatsAppPublishScheduler,
   uploadGeneratedImagePublicly,
   uploadGeneratedVideoPublicly,
   xaiAspectRatioForChannel,
@@ -4242,6 +4243,31 @@ test('startPublishScheduler still starts the interval when OPENSQUAD_AUTO_PUBLIS
     // in flight against `dir` right here. maxRetries/retryDelay lets rm's
     // own recursive-delete retry loop absorb that transient ENOTEMPTY/ENOENT
     // race instead of the cleanup itself failing the test.
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('startWhatsAppPublishScheduler does not start when OPENSQUAD_ENABLE_REAL_PUBLISHING is not true', async () => {
+  delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  const timer = startWhatsAppPublishScheduler(process.cwd());
+  assert.equal(timer, null);
+});
+
+test('startWhatsAppPublishScheduler starts independently of OPENSQUAD_AUTO_PUBLISH_SCHEDULER, which only gates the Meta-path scheduler', async () => {
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER = 'false';
+  // Same safety rule as the startPublishScheduler test above: never point
+  // this at process.cwd() with real publishing enabled — this sweeps for
+  // due whatsapp_status content and would try to publish it for real
+  // against the main OPENSQUAD checkout's live client projects.
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+  try {
+    const timer = startWhatsAppPublishScheduler(dir);
+    assert.notEqual(timer, null);
+    clearInterval(timer);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+    delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
     await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

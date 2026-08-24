@@ -378,6 +378,7 @@ export async function startContentCentralServer({
   const url = `http://${host}:${address.port}`;
   if (openBrowser) openUrl(url);
   const publishSchedulerTimer = startPublishScheduler(targetDir);
+  const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
 
   return {
@@ -385,6 +386,7 @@ export async function startContentCentralServer({
     url,
     close: () => new Promise((resolve, reject) => {
       if (publishSchedulerTimer) clearInterval(publishSchedulerTimer);
+      if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
       server.close((err) => (err ? reject(err) : resolve()));
     }),
@@ -4491,6 +4493,25 @@ export function startPublishScheduler(targetDir) {
   const sweep = () => runDuePublishSweep(targetDir, {
     metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
   }).catch((err) => console.error('[content-central] publish sweep failed:', err.message));
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// Independent of startPublishScheduler/OPENSQUAD_AUTO_PUBLISH_SCHEDULER —
+// Instagram/Facebook publish exclusively via the opensquad-gaveta GitHub
+// Action now; this is whatsapp_status's own local sweep, since WAHA has no
+// public address the Action could reach. Runs whenever the local server
+// does, gated only by the same real-publishing master switch. channels:
+// WHATSAPP_CHANNELS keeps this sweep from ever seeing (let alone touching)
+// an Instagram/Facebook item that happens to be due in the same project.
+export function startWhatsAppPublishScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
+  const sweep = () => runDuePublishSweep(targetDir, {
+    metaPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
+    channels: WHATSAPP_CHANNELS,
+  }).catch((err) => console.error('[content-central] whatsapp publish sweep failed:', err.message));
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;
