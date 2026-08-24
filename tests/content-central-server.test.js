@@ -3604,6 +3604,54 @@ test('POST .../whatsapp-instance/connect restarts a FAILED session before fetchi
   });
 });
 
+test('POST .../whatsapp-instance/connect migrates a project still carrying the old Evolution shape (configured: true, no sessionName)', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
+    try {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'rota-whatsapp-legado', name: 'Rota WhatsApp Legado' }),
+      });
+      // Simulate a project.json still on disk from before this migration —
+      // configured: true, but shaped like Evolution's old instanceName/
+      // maskedApiKey record instead of the new sessionName field.
+      const projectJsonPath = join(dir, '_opensquad', 'content-central', 'projects', 'rota-whatsapp-legado', 'project.json');
+      const project = JSON.parse(await readFile(projectJsonPath, 'utf-8'));
+      project.whatsapp = { configured: true, instanceName: 'opensquad-rota-whatsapp-legado', maskedApiKey: '****1234' };
+      await writeFile(projectJsonPath, JSON.stringify(project, null, 2), 'utf-8');
+
+      const calls = [];
+      await withMockedFetch(async (url, init) => {
+        calls.push({ url: String(url), init });
+        const u = String(url);
+        if (u === 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-legado') {
+          return new Response(JSON.stringify({ message: 'not found' }), { status: 404, headers: { 'content-type': 'application/json' } });
+        }
+        if (u === 'https://waha.example.com/api/sessions') {
+          return new Response(JSON.stringify({ name: 'opensquad-rota-whatsapp-legado' }), { status: 201, headers: { 'content-type': 'application/json' } });
+        }
+        if (u === 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-legado/start') {
+          return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (u === 'https://waha.example.com/api/opensquad-rota-whatsapp-legado/auth/qr?format=image') {
+          return new Response(new Uint8Array([7]), { status: 200, headers: { 'content-type': 'image/png' } });
+        }
+        throw new Error(`unexpected fetch call: ${u}`);
+      }, async () => {
+        const res = await request(server, '/api/projects/rota-whatsapp-legado/whatsapp-instance/connect', { method: 'POST' });
+        assert.equal(res.response.status, 200);
+        assert.equal(res.body.project.whatsapp.configured, true);
+        assert.equal(res.body.project.whatsapp.sessionName, 'opensquad-rota-whatsapp-legado');
+        assert.equal(res.body.project.whatsapp.maskedApiKey, undefined);
+      });
+    } finally {
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
+    }
+  });
+});
+
 test('GET .../whatsapp-instance/status reports connected true only when WAHA reports WORKING', async () => {
   await withServer(async (dir, server) => {
     process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';

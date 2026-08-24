@@ -4401,7 +4401,12 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
   }
 
   let updatedProject = project;
-  if (!project.whatsapp?.configured) {
+  // Covers both a never-connected project (no whatsapp block yet) AND a
+  // project still carrying the old Evolution shape ({ instanceName,
+  // maskedApiKey }, configured: true, no sessionName) — either way,
+  // sessionName not matching what this connect just resolved means the
+  // stored record needs updating, not just the "configured" flag.
+  if (project.whatsapp?.sessionName !== sessionName) {
     updatedProject = await saveProjectWhatsAppInstance(projectId, { sessionName }, targetDir);
   }
 
