@@ -1245,6 +1245,38 @@ test('commercial portfolio routes: create, list, and delete an item through the 
   });
 });
 
+test('commercial prospeccao routes: create, list, update via upsert, and delete a prospect through the real endpoints', async () => {
+  await withServer(async (dir, server) => {
+    const { response: createResponse, body: created } = await request(server, '/api/commercial/prospeccao', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'Padaria Bom Pão', googleMapsUrl: 'https://maps.google.com/x', instagram: '@padariabompao', phone: '11999990000' }),
+    });
+    assert.equal(createResponse.status, 200);
+    assert.ok(created.item.id);
+    assert.equal(created.item.status, 'nao_contatado');
+
+    const { body: listed } = await request(server, '/api/commercial/prospeccao');
+    assert.equal(listed.items.length, 1);
+
+    const { body: updated } = await request(server, '/api/commercial/prospeccao', {
+      method: 'POST',
+      body: JSON.stringify({ ...created.item, status: 'contatado' }),
+    });
+    assert.equal(updated.item.id, created.item.id);
+    assert.equal(updated.item.status, 'contatado');
+
+    const { body: listedAfterUpdate } = await request(server, '/api/commercial/prospeccao');
+    assert.equal(listedAfterUpdate.items.length, 1);
+    assert.equal(listedAfterUpdate.items[0].status, 'contatado');
+
+    const { body: deleted } = await request(server, `/api/commercial/prospeccao/${created.item.id}/delete`, { method: 'POST' });
+    assert.deepEqual(deleted, { id: created.item.id, deleted: true });
+
+    const { body: listedAfterDelete } = await request(server, '/api/commercial/prospeccao');
+    assert.equal(listedAfterDelete.items.length, 0);
+  });
+});
+
 test('GET prospect-mockup never fabricates a stat it does not have — shows "—" instead of 0 when the vision read came back empty, and never shows a broken-image avatar when no crop was saved', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {

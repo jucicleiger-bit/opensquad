@@ -37,18 +37,21 @@ import {
   deleteCommercialCatalogItem,
   deleteCommercialPortfolioItem,
   deleteCommercialProposal,
+  deleteCommercialProspect,
   duplicateCentralProject,
   getCommercialAgency,
   getCommercialProposal,
   listCommercialCatalogItems,
   listCommercialPortfolioItems,
   listCommercialProcesses,
+  listCommercialProspects,
   listCommercialProposals,
   saveCommercialAgency,
   saveCommercialAgencyLogo,
   saveCommercialCatalogItem,
   saveCommercialPortfolioItem,
   saveCommercialProcess,
+  saveCommercialProspect,
   saveCommercialProposal,
   deleteProjectContent,
   deleteProjectOffer,
@@ -570,6 +573,22 @@ async function handleRequest(req, res, targetDir, context = {}) {
   if (method === 'POST' && route.startsWith('/api/commercial/catalog/') && route.endsWith('/delete')) {
     const id = decodeURIComponent(route.slice('/api/commercial/catalog/'.length, -'/delete'.length));
     const result = await deleteCommercialCatalogItem(id, targetDir);
+    return sendJson(res, 200, result);
+  }
+
+  if (method === 'GET' && route === '/api/commercial/prospeccao') {
+    return sendJson(res, 200, { items: await listCommercialProspects(targetDir) });
+  }
+
+  if (method === 'POST' && route === '/api/commercial/prospeccao') {
+    const body = await readBody(req);
+    const item = await saveCommercialProspect(body, targetDir);
+    return sendJson(res, 200, { item });
+  }
+
+  if (method === 'POST' && route.startsWith('/api/commercial/prospeccao/') && route.endsWith('/delete')) {
+    const id = decodeURIComponent(route.slice('/api/commercial/prospeccao/'.length, -'/delete'.length));
+    const result = await deleteCommercialProspect(id, targetDir);
     return sendJson(res, 200, result);
   }
 
