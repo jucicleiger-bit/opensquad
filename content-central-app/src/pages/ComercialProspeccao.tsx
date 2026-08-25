@@ -28,7 +28,10 @@ export function ComercialProspeccao() {
 
   function load() {
     listCommercialProspects()
-      .then((res) => setItems(res.items))
+      .then((res) => {
+        setItems(res.items);
+        setError(null);
+      })
       .catch((err: Error) => setError(err.message));
   }
 
