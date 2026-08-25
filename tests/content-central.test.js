@@ -12,11 +12,13 @@ import {
   deleteCommercialCatalogItem,
   deleteCommercialProposal,
   deleteCommercialPortfolioItem,
+  deleteCommercialProspect,
   duplicateCentralProject,
   getCommercialAgency,
   getCommercialProposal,
   listCommercialCatalogItems,
   listCommercialPortfolioItems,
+  listCommercialProspects,
   listCommercialProcesses,
   listCommercialProposals,
   saveCommercialAgency,
@@ -24,6 +26,7 @@ import {
   saveCommercialCatalogItem,
   saveCommercialPortfolioItem,
   saveCommercialProcess,
+  saveCommercialProspect,
   saveCommercialProposal,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
@@ -391,6 +394,46 @@ test('saveCommercialPortfolioItem rejects a missing category', async () => {
   await withTempProject(async (dir) => {
     const pngDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     await assert.rejects(() => saveCommercialPortfolioItem({ caption: 'X', filename: 'a.png', dataUrl: pngDataUrl }, dir), /Categoria é obrigatória/);
+  });
+});
+
+test('saveCommercialProspect creates an item with default status, listCommercialProspects returns it, saveCommercialProspect with the same id updates it in place', async () => {
+  await withTempProject(async (dir) => {
+    const created = await saveCommercialProspect({ name: 'Padaria Bom Pão', googleMapsUrl: 'https://maps.google.com/x', instagram: '@padariabompao', phone: '11999990000' }, dir);
+    assert.ok(created.id);
+    assert.equal(created.name, 'Padaria Bom Pão');
+    assert.equal(created.status, 'nao_contatado');
+
+    let items = await listCommercialProspects(dir);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].id, created.id);
+
+    const updated = await saveCommercialProspect({ id: created.id, name: created.name, googleMapsUrl: created.googleMapsUrl, instagram: created.instagram, phone: created.phone, status: 'respondeu' }, dir);
+    assert.equal(updated.id, created.id);
+    assert.equal(updated.status, 'respondeu');
+
+    items = await listCommercialProspects(dir);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'respondeu');
+  });
+});
+
+test('saveCommercialProspect rejects a missing name and falls back to nao_contatado for an invalid status', async () => {
+  await withTempProject(async (dir) => {
+    await assert.rejects(() => saveCommercialProspect({ status: 'fechou' }, dir), /Nome é obrigatório/);
+
+    const created = await saveCommercialProspect({ name: 'Loja X', status: 'inventado' }, dir);
+    assert.equal(created.status, 'nao_contatado');
+  });
+});
+
+test('deleteCommercialProspect removes the item', async () => {
+  await withTempProject(async (dir) => {
+    const created = await saveCommercialProspect({ name: 'Loja Y' }, dir);
+    const result = await deleteCommercialProspect(created.id, dir);
+    assert.deepEqual(result, { id: created.id, deleted: true });
+    const items = await listCommercialProspects(dir);
+    assert.equal(items.length, 0);
   });
 });
 

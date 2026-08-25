@@ -322,6 +322,7 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     commercialProposalsDir: join(root, 'commercial-proposals'),
     commercialProcessesPath: join(root, 'commercial-processes.json'),
     commercialPortfolioPath: join(root, 'commercial-portfolio.json'),
+    commercialProspeccaoPath: join(root, 'commercial-prospeccao.json'),
   };
 
   if (!projectId) return paths;
@@ -601,6 +602,53 @@ export async function deleteCommercialCatalogItem(id, targetDir = process.cwd())
     const store = await readJson(paths.commercialCatalogPath, { items: [] });
     const remaining = (store.items || []).filter((item) => item.id !== id);
     await writeJson(paths.commercialCatalogPath, { items: remaining });
+    return { id, deleted: true };
+  });
+}
+
+const COMMERCIAL_PROSPECT_STATUSES = new Set(['nao_contatado', 'contatado', 'respondeu', 'fechou']);
+
+function normalizeCommercialProspect(input, now = new Date()) {
+  const name = String(input?.name || '').trim();
+  if (!name) throw new Error('Nome é obrigatório');
+  const id = String(input?.id || `${now.getTime()}-${Math.random().toString(36).slice(2, 8)}`).trim();
+  const status = COMMERCIAL_PROSPECT_STATUSES.has(input?.status) ? input.status : 'nao_contatado';
+  return {
+    id,
+    name,
+    googleMapsUrl: String(input?.googleMapsUrl || '').trim(),
+    instagram: String(input?.instagram || '').trim(),
+    phone: String(input?.phone || '').trim(),
+    status,
+    createdAt: input?.createdAt || now.toISOString(),
+  };
+}
+
+export async function listCommercialProspects(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readJson(paths.commercialProspeccaoPath, { items: [] });
+  return (store.items || []).map((item) => normalizeCommercialProspect(item, new Date(item.createdAt || Date.now())));
+}
+
+export async function saveCommercialProspect(input, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const store = await readJson(paths.commercialProspeccaoPath, { items: [] });
+    const currentItems = (store.items || []).map((item) => normalizeCommercialProspect(item, new Date(item.createdAt || Date.now())));
+    const item = normalizeCommercialProspect(input, now);
+    const byId = new Map(currentItems.map((entry) => [entry.id, entry]));
+    byId.set(item.id, item);
+    await writeJson(paths.commercialProspeccaoPath, { items: [...byId.values()] });
+    return item;
+  });
+}
+
+export async function deleteCommercialProspect(id, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  return withProjectLock(targetDir, COMMERCIAL_LOCK_ID, async () => {
+    const store = await readJson(paths.commercialProspeccaoPath, { items: [] });
+    const remaining = (store.items || []).filter((item) => item.id !== id);
+    await writeJson(paths.commercialProspeccaoPath, { items: remaining });
     return { id, deleted: true };
   });
 }
