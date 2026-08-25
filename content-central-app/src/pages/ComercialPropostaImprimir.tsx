@@ -15,6 +15,53 @@ function categoryBenefit(category: string) {
   return category;
 }
 
+// The proposal's own content (header, title, pricing table) — shared between
+// this standalone print page and the "Apresentar" deck's proposal section,
+// so editing the proposal only ever happens in one place.
+export function PropostaBody({ proposal, agency, showWhy = true }: { proposal: CommercialProposal; agency: CommercialAgency; showWhy?: boolean }) {
+  const subtitle = [...new Set(proposal.sections.map((section) => categoryBenefit(section.category)))].join(" + ");
+  const hasTraffic = proposal.sections.some((section) => section.category === "Tráfego Pago");
+
+  return (
+    <>
+      <header className={styles.header}>
+        <div className={styles.brand}>
+          {agency.logoPath ? <img src={commercialAssetUrl(agency.logoPath)} alt={agency.name} className={styles.agencyLogo} /> : null}
+          <span className={styles.brandName}>{agency.name}</span>
+        </div>
+        <div className={styles.client}>
+          <span className={styles.clientLabel}>Cliente</span>
+          <div className={styles.clientRow}>
+            {proposal.clientLogoDataUrl ? <img src={proposal.clientLogoDataUrl} alt={proposal.clientName} className={styles.clientLogo} /> : null}
+            <span className={styles.clientName}>{proposal.clientName}</span>
+          </div>
+        </div>
+      </header>
+
+      <h1 className={styles.title}>Proposta Comercial</h1>
+      <p className={styles.subtitle}>{subtitle}</p>
+      <p className={styles.intro}>
+        Uma proposta pensada pra manter a {proposal.clientName} ativa e em crescimento nas redes sociais — sem
+        complicação e sem letra miúda.
+      </p>
+
+      <PropostaPricingSection
+        proposal={proposal}
+        agency={agency}
+        showWhy={showWhy}
+        belowGrid={
+          !hasTraffic ? (
+            <div className={styles.upsellNote}>
+              <b>Tráfego Pago</b>
+              Pode ser incluído na proposta conforme o escopo definido para a campanha.
+            </div>
+          ) : undefined
+        }
+      />
+    </>
+  );
+}
+
 export function ComercialPropostaImprimir() {
   const { id } = useParams<{ id: string }>();
   const [proposal, setProposal] = useState<CommercialProposal | null>(null);
@@ -34,8 +81,6 @@ export function ComercialPropostaImprimir() {
 
   if (error) return <p className={styles.error}>{error}</p>;
   if (!proposal || !agency) return null;
-
-  const subtitle = [...new Set(proposal.sections.map((section) => categoryBenefit(section.category)))].join(" + ");
 
   return (
     <div className={styles.page} data-theme={theme}>
@@ -76,28 +121,7 @@ export function ComercialPropostaImprimir() {
       </div>
 
       <div className={styles.sheet}>
-        <header className={styles.header}>
-          <div className={styles.brand}>
-            {agency.logoPath ? <img src={commercialAssetUrl(agency.logoPath)} alt={agency.name} className={styles.agencyLogo} /> : null}
-            <span className={styles.brandName}>{agency.name}</span>
-          </div>
-          <div className={styles.client}>
-            <span className={styles.clientLabel}>Cliente</span>
-            <div className={styles.clientRow}>
-              {proposal.clientLogoDataUrl ? <img src={proposal.clientLogoDataUrl} alt={proposal.clientName} className={styles.clientLogo} /> : null}
-              <span className={styles.clientName}>{proposal.clientName}</span>
-            </div>
-          </div>
-        </header>
-
-        <h1 className={styles.title}>Proposta Comercial</h1>
-        <p className={styles.subtitle}>{subtitle}</p>
-        <p className={styles.intro}>
-          Uma proposta pensada pra manter a {proposal.clientName} ativa e em crescimento nas redes sociais — sem
-          complicação e sem letra miúda.
-        </p>
-
-        <PropostaPricingSection proposal={proposal} agency={agency} />
+        <PropostaBody proposal={proposal} agency={agency} />
       </div>
     </div>
   );

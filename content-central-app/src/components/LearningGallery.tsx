@@ -8,6 +8,7 @@ import {
   type SegmentLearningNode,
 } from "@/api/client";
 import { Button } from "@/components/Button";
+import { Dialog } from "@/components/Dialog";
 
 type LearningPurpose = "product" | "creative";
 type PostType = NonNullable<SegmentLearningEntry["postType"]>;
@@ -190,6 +191,7 @@ export function LearningGallery({
   const [editingStructureId, setEditingStructureId] = useState<string | null>(null);
   const [editingStructure, setEditingStructure] = useState(emptyTemplate());
   const [error, setError] = useState<string | null>(null);
+  const [showAuto, setShowAuto] = useState(false);
 
   const creativeStructures = entries.filter(isCreativeStructure);
   const productReferences = entries.filter(isProductReference);
@@ -338,7 +340,7 @@ export function LearningGallery({
               {creativeStructures.map((entry) => (
                 <div key={entry.id} className="field-card stack-sm">
                   {entry.imagePath ? (
-                    <img src={previewSrc(entry)} alt={structureTitle(entry)} style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 10 }} />
+                    <img src={previewSrc(entry)} alt={structureTitle(entry)} loading="lazy" style={{ width: "100%", height: 160, objectFit: "cover", borderRadius: 10 }} />
                   ) : (
                     <div style={{ width: "100%", height: 160, borderRadius: 10, background: "var(--surface-2)" }} />
                   )}
@@ -376,7 +378,7 @@ export function LearningGallery({
           ) : null}
           {productReferences.map((entry) => (
             <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "48px minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "center", paddingBottom: "var(--space-xs)", borderBottom: "1px solid var(--line)" }}>
-              {entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de produto"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : <span />}
+              {entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de produto"} loading="lazy" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : <span />}
               <span>{entry.text}</span>
               <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
             </div>
@@ -390,15 +392,22 @@ export function LearningGallery({
 
       {!onlyCreativeStructures ? (
         <>
+          {bucketEntries.some((entry) => entry.source === "auto") ? (
+            <Button variant="ghost" onClick={() => setShowAuto((current) => !current)}>
+              {showAuto
+                ? "Ocultar aprendizados automaticos"
+                : `Mostrar aprendizados automaticos (${bucketEntries.filter((entry) => entry.source === "auto").length})`}
+            </Button>
+          ) : null}
           {buckets.map(({ key, label }) => {
-            const currentEntries = bucketEntries.filter((entry) => entry.bucket === key);
+            const currentEntries = bucketEntries.filter((entry) => entry.bucket === key && (showAuto || entry.source !== "auto"));
             if (!currentEntries.length) return null;
             return (
               <section key={key} className="stack-sm">
                 <h3>{label}</h3>
                 {currentEntries.map((entry) => (
                   <div key={entry.id} style={{ display: "grid", gridTemplateColumns: entry.kind === "image" ? "48px minmax(0, 1fr) auto" : "minmax(0, 1fr) auto", gap: "var(--space-sm)", alignItems: "start", padding: "var(--space-xs) 0", borderBottom: "1px solid var(--line)" }}>
-                    {entry.kind === "image" && entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de aprendizado"} style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : null}
+                    {entry.kind === "image" && entry.imagePath ? <img src={previewSrc(entry)} alt={entry.text || "Referencia de aprendizado"} loading="lazy" style={{ width: 48, height: 48, objectFit: "cover", borderRadius: 10 }} /> : null}
                     <span>{entry.text}</span>
                     <Button variant="ghost" disabled={busy} onClick={() => handleDelete(entry.id)}>Apagar</Button>
                   </div>
@@ -461,57 +470,52 @@ export function LearningGallery({
         </div>
       ) : null}
       {editingEntry ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          onClick={() => setEditingStructureId(null)}
-          style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.72)", display: "grid", placeItems: "center", zIndex: 1000, padding: "var(--space-lg)" }}
+        <Dialog
+          onClose={() => setEditingStructureId(null)}
+          titleId="edit-structure-title"
+          overlayStyle={{ background: "rgba(0, 0, 0, 0.72)", padding: "var(--space-lg)" }}
+          contentClassName="stack-sm"
+          contentStyle={{
+            width: "min(92vw, 480px)",
+            maxHeight: "90vh",
+            overflowY: "auto",
+            background: "var(--panel-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "var(--shadow-card)",
+            padding: "var(--space-md)",
+          }}
         >
-          <div
-            onClick={(event) => event.stopPropagation()}
-            className="stack-sm"
-            style={{
-              width: "min(92vw, 480px)",
-              maxHeight: "90vh",
-              overflowY: "auto",
-              background: "var(--panel-2)",
-              border: "1px solid var(--line)",
-              borderRadius: "var(--radius-lg)",
-              boxShadow: "var(--shadow-card)",
-              padding: "var(--space-md)",
-            }}
-          >
-            <h3 style={{ margin: 0 }}>Editar estrutura</h3>
+          <h3 id="edit-structure-title" style={{ margin: 0 }}>Editar estrutura</h3>
+          <div>
+            <label htmlFor="edit-title">Nome da estrutura</label>
+            <input id="edit-title" value={editingStructure.title} onChange={(event) => setEditingStructure((current) => ({ ...current, title: event.target.value }))} />
+          </div>
+          <div className="row">
             <div>
-              <label htmlFor="edit-title">Nome da estrutura</label>
-              <input id="edit-title" value={editingStructure.title} onChange={(event) => setEditingStructure((current) => ({ ...current, title: event.target.value }))} />
-            </div>
-            <div className="row">
-              <div>
-                <label htmlFor="edit-post-type">Modelo do post</label>
-                <select id="edit-post-type" value={editingStructure.postType} onChange={(event) => setEditingStructure((current) => ({ ...current, postType: event.target.value as PostType | "" }))}>
-                  <option value="">Selecione</option>
-                  {Object.entries(POST_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label htmlFor="edit-shape">Formato</label>
-                <select id="edit-shape" value={editingStructure.shape} onChange={(event) => setEditingStructure((current) => ({ ...current, shape: event.target.value as Shape | "" }))}>
-                  <option value="">Selecione</option>
-                  {Object.entries(SHAPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </div>
+              <label htmlFor="edit-post-type">Modelo do post</label>
+              <select id="edit-post-type" value={editingStructure.postType} onChange={(event) => setEditingStructure((current) => ({ ...current, postType: event.target.value as PostType | "" }))}>
+                <option value="">Selecione</option>
+                {Object.entries(POST_TYPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
             </div>
             <div>
-              <label htmlFor="edit-text">Descrição da estrutura</label>
-              <textarea id="edit-text" value={editingStructure.text} onChange={(event) => setEditingStructure((current) => ({ ...current, text: event.target.value }))} />
-            </div>
-            <div className="actions-row">
-              <Button disabled={busy || !canSaveEdit} onClick={() => handleSaveStructureEdit(editingEntry)}>Salvar edição</Button>
-              <Button variant="secondary" disabled={busy} onClick={() => setEditingStructureId(null)}>Cancelar</Button>
+              <label htmlFor="edit-shape">Formato</label>
+              <select id="edit-shape" value={editingStructure.shape} onChange={(event) => setEditingStructure((current) => ({ ...current, shape: event.target.value as Shape | "" }))}>
+                <option value="">Selecione</option>
+                {Object.entries(SHAPE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
             </div>
           </div>
-        </div>
+          <div>
+            <label htmlFor="edit-text">Descrição da estrutura</label>
+            <textarea id="edit-text" value={editingStructure.text} onChange={(event) => setEditingStructure((current) => ({ ...current, text: event.target.value }))} />
+          </div>
+          <div className="actions-row">
+            <Button disabled={busy || !canSaveEdit} onClick={() => handleSaveStructureEdit(editingEntry)}>Salvar edição</Button>
+            <Button variant="secondary" disabled={busy} onClick={() => setEditingStructureId(null)}>Cancelar</Button>
+          </div>
+        </Dialog>
       ) : null}
       {error ? <div className="pill bad">{error}</div> : null}
     </div>

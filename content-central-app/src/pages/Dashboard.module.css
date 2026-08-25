@@ -59,6 +59,64 @@
   gap: 8px;
 }
 
+.menuButton {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.menuButton:hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.actionMenu {
+  position: absolute;
+  top: 38px;
+  right: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  min-width: 140px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2, #1d1c28);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+}
+
+.actionMenuItem {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.actionMenuItem:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.actionMenuItem:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Standalone delete button on the Prospecção cards — those don't get the
+   kebab dropdown (no Duplicar there), so this stays a plain visible button. */
 .deleteButton {
   min-height: 44px;
   border: 1px solid var(--line);
@@ -80,24 +138,6 @@
 .deleteButton:disabled {
   opacity: 0.6;
   cursor: default;
-}
-
-.duplicateButton {
-  min-height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 650;
-  padding: 0 12px;
-  cursor: pointer;
-}
-
-.duplicateButton:hover {
-  color: var(--text);
-  border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.06);
 }
 
 .duplicateDialogOverlay {

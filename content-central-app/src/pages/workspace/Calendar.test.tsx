@@ -56,6 +56,21 @@ const PROJECT_STATE = {
   globalRules: {},
 };
 
+const PROJECT_STATE_WITH_TOPICS = {
+  projects: [{
+    projectId: "boss-pizzaria",
+    name: "Boss Pizzaria",
+    contentStrategy: {
+      topicIdeas: {
+        generatedAt: "2026-08-01T10:00:00.000Z",
+        nextRefreshAt: "2026-08-16T10:00:00.000Z",
+        goals: { education: { label: "Educação", items: [{ id: "e1", title: "Como escolher melhor antes de comprar" }] } },
+      },
+    },
+  }],
+  globalRules: {},
+};
+
 describe("Calendar", () => {
   it("shows a chip for an approved scheduled item and opens its detail on click", async () => {
     stubFetchSequence([{ body: PROJECT_STATE }, { body: { content: [baseItem()] } }]);
@@ -75,6 +90,15 @@ describe("Calendar", () => {
     expect(screen.getByText("Clara")).toBeInTheDocument();
     expect(screen.getByText("Renata")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Publicar agora" })).toBeInTheDocument();
+  });
+
+  it("shows the topic idea bank at the end of the calendar", async () => {
+    stubFetchSequence([{ body: PROJECT_STATE_WITH_TOPICS }, { body: { content: [] } }]);
+
+    renderProjectCalendar();
+
+    expect(await screen.findByText("Banco de assuntos")).toBeInTheDocument();
+    expect(screen.getByText(/Como escolher melhor antes de comprar/)).toBeInTheDocument();
   });
 
   it("only shows items that are already approved, not ones still awaiting approval", async () => {

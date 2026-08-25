@@ -56,7 +56,8 @@ describe("ComercialPropostaImprimir", () => {
     expect(container.textContent).toContain("R$ 497");
     expect(container.textContent).toContain("/mês");
     expect(screen.getByText("Investimento mensal")).toBeInTheDocument();
-    expect(screen.getByText("Desconto de adesão:")).toBeInTheDocument();
+    expect(screen.getByText(/de adesão/)).toBeInTheDocument();
+    expect(screen.getByText("(cobrado só no 1º mês)")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /Por que a King Assessoria de Mkt/ })).toBeInTheDocument();
   });
 

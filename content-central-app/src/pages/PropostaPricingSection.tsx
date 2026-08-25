@@ -74,7 +74,8 @@ export function IconBadge({ icon: Icon, size = 52 }: { icon: (props: SVGProps<SV
 export function PropostaPricingSection({ proposal, agency, showWhy = true, belowGrid }: { proposal: CommercialProposal; agency: CommercialAgency; showWhy?: boolean; belowGrid?: ReactNode }) {
   let totalMonthly = 0;
   let totalDiscount = 0;
-  let hasOneTime = false;
+  let totalOneTime = 0;
+  let hasTrafficMedia = false;
   // A "comparison" section shows alternative plans for the client to pick
   // one of — it has no committed price yet, so it never enters the total.
   // Only "single" sections (an already-decided item) count toward what the
@@ -85,8 +86,12 @@ export function PropostaPricingSection({ proposal, agency, showWhy = true, below
       section.items.forEach((item) => {
         if (item.billingType === "mensal") totalMonthly += item.price;
         else {
-          hasOneTime = true;
+          // discountedPrice defaults to 0 when no discount was set (see the
+          // catalog form) — fall back to fullPrice so a plain one-time item
+          // still counts for its real charged amount, not zero.
+          totalOneTime += item.discountedPrice || item.fullPrice;
           totalDiscount += Math.max(0, item.fullPrice - item.discountedPrice);
+          if (section.category === "Tráfego Pago") hasTrafficMedia = true;
         }
       });
     });
@@ -187,8 +192,13 @@ export function PropostaPricingSection({ proposal, agency, showWhy = true, below
         ) : comparisonFrom !== null ? (
           <p className={styles.investmentTotal}>A partir de R$ {comparisonFrom}<span className={styles.priceUnit}>/mês</span></p>
         ) : null}
-        {hasOneTime ? <p className={styles.discount}>Investimento em mídia paga: não incluso nesta taxa</p> : null}
-        {totalDiscount > 0 ? <p className={styles.discount}>Desconto de adesão: <b>R$ {totalDiscount}</b></p> : null}
+        {hasTrafficMedia ? <p className={styles.discount}>Investimento em mídia paga: não incluso nesta taxa</p> : null}
+        {totalOneTime > 0 ? (
+          <p className={styles.discount}>
+            + R$ {totalOneTime} de adesão <b>(cobrado só no 1º mês)</b>
+            {totalDiscount > 0 ? <> — já com R$ {totalDiscount} de desconto</> : null}
+          </p>
+        ) : null}
       </div>
 
       <div className={styles.steps}>

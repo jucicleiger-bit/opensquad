@@ -14,6 +14,7 @@ import {
   listSegmentTemplates,
   prospectMockupUrl,
   segmentTemplateImageUrl,
+  updateProjectSettings,
   type ProjectSummary,
   type SegmentTemplateSummary,
   type SystemAlert,
@@ -37,6 +38,7 @@ const DEFAULT_HIGHLIGHT_LABELS = ["Produtos", "Pedidos", "Sobre"];
 
 const EMPTY_FORM = { projectId: "", name: "", handle: "", approvalEmail: "", mode: "semi_automatic", projectType: "marketing" };
 const EMPTY_DUPLICATE_FORM = { projectId: "", name: "" };
+const EMPTY_EDIT_FORM = { name: "", handle: "", approvalEmail: "", mode: "semi_automatic" };
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -53,6 +55,11 @@ export function Dashboard() {
   const [duplicateForm, setDuplicateForm] = useState(EMPTY_DUPLICATE_FORM);
   const [duplicating, setDuplicating] = useState(false);
   const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [editingProject, setEditingProject] = useState<ProjectSummary | null>(null);
+  const [editForm, setEditForm] = useState(EMPTY_EDIT_FORM);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // "Prospecção": upload a screenshot of a prospect's real Instagram profile
   // -> AI reads it -> instant, live-editable preview (InstagramMockup, no
@@ -72,6 +79,13 @@ export function Dashboard() {
   const [bioImproving, setBioImproving] = useState(false);
   const [downloadingPng, setDownloadingPng] = useState(false);
   const previewCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    const closeMenu = () => setOpenMenuId(null);
+    document.addEventListener("click", closeMenu);
+    return () => document.removeEventListener("click", closeMenu);
+  }, [openMenuId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -158,6 +172,43 @@ export function Dashboard() {
       setDuplicateError((err as Error).message);
     } finally {
       setDuplicating(false);
+    }
+  }
+
+  function openEdit(event: MouseEvent, project: ProjectSummary) {
+    event.preventDefault();
+    event.stopPropagation();
+    setEditingProject(project);
+    setEditForm({
+      name: project.name,
+      handle: project.instagram?.handle || "",
+      approvalEmail: project.approvalEmail || "",
+      mode: project.mode || "semi_automatic",
+    });
+    setEditError(null);
+  }
+
+  function closeEdit() {
+    setEditingProject(null);
+  }
+
+  async function handleEditSubmit(event: FormEvent) {
+    event.preventDefault();
+    if (!editingProject) return;
+    if (!editForm.name.trim()) {
+      setEditError("Nome do projeto é obrigatório.");
+      return;
+    }
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const res = await updateProjectSettings(editingProject.projectId, editForm);
+      setProjects((current) => (current || []).map((p) => (p.projectId === res.project.projectId ? res.project : p)));
+      setEditingProject(null);
+    } catch (err) {
+      setEditError((err as Error).message);
+    } finally {
+      setEditSaving(false);
     }
   }
 
@@ -295,7 +346,11 @@ export function Dashboard() {
                 <span className="muted">
                   <b>{alert.projectName}:</b> {alert.message}
                 </span>
-                <Link to={`/projects/${alert.projectId}/${alert.type === "publish_failed" ? "calendario" : "conta"}`}>
+                <Link
+                  to={`/projects/${alert.projectId}/${
+                    alert.type === "publish_failed" || alert.type === "media_upload_failed" ? "calendario" : "conta"
+                  }`}
+                >
                   <Button type="button" variant="secondary">
                     Resolver
                   </Button>
@@ -586,25 +641,56 @@ export function Dashboard() {
               }}
             >
               <div className={styles.cardActions}>
-                {project.projectType !== "catalog" ? (
-                  <button
-                    type="button"
-                    className={styles.duplicateButton}
-                    onClick={(event) => openDuplicate(event, project)}
-                    title="Duplicar projeto"
-                  >
-                    Duplicar
-                  </button>
-                ) : null}
                 <button
                   type="button"
-                  className={styles.deleteButton}
-                  disabled={deletingId === project.projectId}
-                  onClick={(event) => handleDelete(event, project)}
-                  title="Apagar projeto"
+                  className={styles.menuButton}
+                  title="Mais ações"
+                  aria-label="Mais ações"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setOpenMenuId((current) => (current === project.projectId ? null : project.projectId));
+                  }}
                 >
-                  {deletingId === project.projectId ? "Apagando..." : "Apagar"}
+                  ⋮
                 </button>
+                {openMenuId === project.projectId ? (
+                  <div className={styles.actionMenu} onClick={(event) => event.stopPropagation()}>
+                    <button
+                      type="button"
+                      className={styles.actionMenuItem}
+                      onClick={(event) => {
+                        openEdit(event, project);
+                        setOpenMenuId(null);
+                      }}
+                    >
+                      Editar
+                    </button>
+                    {project.projectType !== "catalog" ? (
+                      <button
+                        type="button"
+                        className={styles.actionMenuItem}
+                        onClick={(event) => {
+                          openDuplicate(event, project);
+                          setOpenMenuId(null);
+                        }}
+                      >
+                        Duplicar
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={styles.actionMenuItem}
+                      disabled={deletingId === project.projectId}
+                      onClick={(event) => {
+                        handleDelete(event, project);
+                        setOpenMenuId(null);
+                      }}
+                    >
+                      {deletingId === project.projectId ? "Apagando..." : "Apagar"}
+                    </button>
+                  </div>
+                ) : null}
               </div>
               <div className={styles.projectName}>{project.name}</div>
               <div className={styles.projectId}>{project.projectId}</div>
@@ -701,6 +787,67 @@ export function Dashboard() {
               </div>
             </form>
             {duplicateError ? <div className="pill bad" style={{ marginTop: "var(--space-sm)" }}>{duplicateError}</div> : null}
+          </Card>
+        </Dialog>
+      ) : null}
+
+      {editingProject ? (
+        <Dialog
+          onClose={closeEdit}
+          titleId="edit-project-title"
+          overlayClassName={styles.duplicateDialogOverlay}
+          contentClassName={styles.duplicateDialogContent}
+        >
+          <Card style={{ padding: "var(--space-lg)" }}>
+            <h2 id="edit-project-title" style={{ marginTop: 0 }}>
+              Editar "{editingProject.name}"
+            </h2>
+            <p className="muted" style={{ marginTop: "var(--space-2xs)" }}>
+              ID do projeto ({editingProject.projectId}) não pode ser alterado.
+            </p>
+            <form onSubmit={handleEditSubmit}>
+              <label htmlFor="edit-project-name">Nome</label>
+              <input
+                id="edit-project-name"
+                value={editForm.name}
+                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+              />
+              <label htmlFor="edit-project-handle">Instagram (@handle)</label>
+              <input
+                id="edit-project-handle"
+                placeholder="@cliente"
+                value={editForm.handle}
+                onChange={(e) => setEditForm({ ...editForm, handle: e.target.value })}
+              />
+              <label htmlFor="edit-project-approval-email">E-mail de aprovação</label>
+              <input
+                id="edit-project-approval-email"
+                type="email"
+                value={editForm.approvalEmail}
+                onChange={(e) => setEditForm({ ...editForm, approvalEmail: e.target.value })}
+              />
+              <label htmlFor="edit-project-mode">Modo</label>
+              <select
+                id="edit-project-mode"
+                value={editForm.mode}
+                onChange={(e) => setEditForm({ ...editForm, mode: e.target.value })}
+              >
+                {Object.entries(PROJECT_MODE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+              <div style={{ display: "flex", gap: "var(--space-sm)", marginTop: "var(--space-sm)" }}>
+                <Button type="submit" disabled={editSaving}>
+                  {editSaving ? "Salvando..." : "Salvar"}
+                </Button>
+                <Button type="button" variant="secondary" onClick={closeEdit}>
+                  Cancelar
+                </Button>
+              </div>
+            </form>
+            {editError ? <div className="pill bad" style={{ marginTop: "var(--space-sm)" }}>{editError}</div> : null}
           </Card>
         </Dialog>
       ) : null}

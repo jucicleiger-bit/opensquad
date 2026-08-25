@@ -63,7 +63,7 @@ describe("ComercialPropostaApresentar", () => {
     renderPage(proposalWithCategories(["Criação de Conteúdo"]), { ...AGENCY, about: "Texto sobre a King." });
     expect(await screen.findByRole("heading", { name: /A gente cuida da presença digital/ })).toBeInTheDocument();
     expect(screen.getByText("Texto sobre a King.")).toBeInTheDocument();
-    expect(screen.getByText("Publicação")).toBeInTheDocument();
+    expect(screen.getAllByText("Publicação").length).toBeGreaterThan(0);
     expect(screen.getByText("Presença digital sem ocupar sua rotina.")).toBeInTheDocument();
   });
 
@@ -101,17 +101,17 @@ describe("ComercialPropostaApresentar", () => {
     await screen.findByText("Texto salvo pra consultoria.");
   });
 
-  it("shows the 4-card 'Por que escolher a King?' page, personalized with the client name", async () => {
+  it("shows the mission/benefits/overview 'Por que a King' page", async () => {
     renderPage(proposalWithCategories(["Criação de Conteúdo"]));
-    expect(await screen.findByRole("heading", { name: "Por que escolher a King?" })).toBeInTheDocument();
-    expect(screen.getByText("Presença constante")).toBeInTheDocument();
-    expect(screen.getByText(/Conteúdo pensado para o negócio da Arthur Frios/)).toBeInTheDocument();
+    expect(await screen.findByText("Nossa missão")).toBeInTheDocument();
+    expect(screen.getAllByText("Presença constante").length).toBeGreaterThan(0);
+    expect(screen.getByText("Alinhamento")).toBeInTheDocument();
+    expect(screen.getByText("A King cuida da sua presença.")).toBeInTheDocument();
   });
 
-  it("shows the divider page and ends with the reused price block, without repeating 'Por que a King'", async () => {
+  it("ends with the reused price block, without repeating 'Por que a King'", async () => {
     renderPage(proposalWithCategories(["Criação de Conteúdo"]));
-    expect(await screen.findByText("a estratégia para a Arthur Frios.")).toBeInTheDocument();
-    expect(screen.getByText("Investimento mensal")).toBeInTheDocument();
+    expect(await screen.findByText("Investimento mensal")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /^Por que a King/ })).not.toBeInTheDocument();
   });
 

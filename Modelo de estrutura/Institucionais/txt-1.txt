@@ -1,0 +1,41 @@
+ESTRUTURA DO CRIATIVO — PERGUNTA → EXPLICAÇÃO
+
+Topo
+
+Logo pequena e discreta
+Pergunta principal grande e de fácil leitura
+Ex.: VOCÊ SABE O QUE FAZ UMA BOA MUSSARELA?
+
+Centro
+
+Imagem principal relacionada ao assunto
+Pode mostrar o produto, aplicação ou contexto de uso
+A imagem deve ocupar aproximadamente 45% a 55% da arte
+Precisa ajudar a explicar o tema sem depender da legenda
+
+Área de explicação
+
+1 frase curta respondendo ou desenvolvendo a pergunta
+Ex.: Um bom produto mantém textura, sabor e padrão no preparo
+Destacar apenas palavras-chave, sem criar vários blocos
+
+Rodapé
+
+Micro CTA simples
+Ex.: SALVE ESTA DICA
+@perfil ou logo pequeno
+Hierarquia visual
+
+PERGUNTA → IMAGEM → EXPLICAÇÃO → CTA → MARCA
+
+Distribuição sugerida
+10% — Logo
+20% a 25% — Pergunta
+45% a 55% — Imagem
+15% a 20% — Explicação
+5% a 10% — CTA + perfil
+Regra principal
+
+1 pergunta + 1 imagem principal + 1 explicação curta + 1 micro CTA + marca discreta
+
+Importante: manter no máximo 3 blocos de texto. A arte precisa ser entendida rapidamente e a imagem deve complementar a informação, não servir apenas como decoração.

@@ -1,5 +1,5 @@
-import { useEffect } from "react";
 import { Button } from "./Button";
+import { Dialog } from "./Dialog";
 import styles from "./ImageLightbox.module.css";
 
 interface ImageLightboxProps {
@@ -10,14 +10,6 @@ interface ImageLightboxProps {
 }
 
 export function ImageLightbox({ src, alt, fileName, onClose }: ImageLightboxProps) {
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
   async function handleDownload() {
     try {
       const res = await fetch(src);
@@ -38,18 +30,19 @@ export function ImageLightbox({ src, alt, fileName, onClose }: ImageLightboxProp
   }
 
   return (
-    <div className={styles.overlay} onClick={onClose} role="dialog" aria-modal="true">
-      <div className={styles.content} onClick={(event) => event.stopPropagation()}>
-        <img src={src} alt={alt || "Imagem"} className={styles.image} />
-        <div className={styles.toolbar}>
-          <Button type="button" variant="secondary" onClick={handleDownload}>
-            Baixar imagem
-          </Button>
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Fechar
-          </Button>
-        </div>
+    <Dialog onClose={onClose} titleId="image-lightbox-title" overlayClassName={styles.overlay} contentClassName={styles.content}>
+      <h2 id="image-lightbox-title" className="sr-only">
+        {fileName || "Visualização de imagem"}
+      </h2>
+      <img src={src} alt={alt || "Imagem"} className={styles.image} />
+      <div className={styles.toolbar}>
+        <Button type="button" variant="secondary" onClick={handleDownload}>
+          Baixar imagem
+        </Button>
+        <Button type="button" variant="ghost" onClick={onClose}>
+          Fechar
+        </Button>
       </div>
-    </div>
+    </Dialog>
   );
 }

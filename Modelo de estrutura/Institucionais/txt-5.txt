@@ -1,0 +1,51 @@
+ESTRUTURA DO CRIATIVO — DICA RÁPIDA / MICROCONTEÚDO
+
+Topo
+
+Logo pequena e discreta
+Identificação do formato
+Ex.: DICA RÁPIDA
+Título curto com o benefício ou orientação principal
+Ex.: PARA UM MELHOR RESULTADO NO PREPARO
+
+Centro
+
+Imagem principal relacionada à dica
+Pode mostrar produto, preparo, ingrediente ou contexto de uso
+Deve ocupar aproximadamente 45% a 55% da arte
+
+Área de orientação
+
+1 dica principal, curta e objetiva
+Ex.: Evite deixar o produto exposto além do necessário
+Pode ter 1 frase pequena explicando o motivo
+
+Área de apoio
+
+Até 2 ou 3 reforços visuais curtos
+Ex.:
+Mais qualidade
+Melhor padrão
+Melhor resultado
+
+Rodapé
+
+Micro CTA
+Ex.: SALVE ESTA DICA
+@perfil ou logo pequeno
+Hierarquia visual
+
+DICA → IMAGEM → ORIENTAÇÃO → BENEFÍCIO → CTA → MARCA
+
+Distribuição sugerida
+10% — Logo
+15% a 20% — Título
+45% a 55% — Imagem
+15% — Dica principal
+5% a 10% — Apoios
+5% a 10% — CTA + perfil
+Regra principal
+
+1 dica + 1 imagem principal + 1 explicação curta + até 3 apoios + 1 micro CTA
+
+Importante: trabalhar uma única dica por Story. O conteúdo deve ser simples, rápido de entender e útil mesmo sem legenda.

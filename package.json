@@ -51,6 +51,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "agent-browser": "^0.34.0",
     "eslint": "^10.0.3",
     "globals": "^17.4.0"
   }

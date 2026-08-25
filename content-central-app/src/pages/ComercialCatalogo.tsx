@@ -3,6 +3,7 @@ import { deleteCommercialCatalogItem, listCommercialCatalog, listCommercialProce
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { ComercialTabs } from "@/components/ComercialTabs";
+import { Dialog } from "@/components/Dialog";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
 import styles from "./ComercialCatalogo.module.css";
@@ -156,8 +157,14 @@ export function ComercialCatalogo() {
       </div>
 
       {showForm ? (
-        <Card style={{ padding: "var(--space-lg)", marginBottom: "var(--space-lg)" }}>
-          <b>{form.id ? "Editar item" : "Novo item do catálogo"}</b>
+        <Dialog
+          onClose={() => setShowForm(false)}
+          titleId="catalog-form-title"
+          overlayClassName={styles.formDialogOverlay}
+          contentClassName={styles.formDialogContent}
+        >
+        <Card style={{ padding: "var(--space-lg)" }}>
+          <h2 id="catalog-form-title" style={{ marginTop: 0 }}>{form.id ? "Editar item" : "Novo item do catálogo"}</h2>
           <form onSubmit={handleSubmit}>
             <div className="row">
               <div>
@@ -197,12 +204,18 @@ export function ComercialCatalogo() {
                 </div>
               </div>
             )}
-            <Button type="submit" className="full-width" style={{ marginTop: "var(--space-sm)" }} disabled={saving}>
-              {saving ? "Salvando..." : form.id ? "Salvar alterações" : "Adicionar item"}
-            </Button>
+            <div style={{ display: "flex", gap: "var(--space-sm)", marginTop: "var(--space-sm)" }}>
+              <Button type="submit" disabled={saving}>
+                {saving ? "Salvando..." : form.id ? "Salvar alterações" : "Adicionar item"}
+              </Button>
+              <Button type="button" variant="secondary" onClick={() => setShowForm(false)}>
+                Cancelar
+              </Button>
+            </div>
           </form>
           {saveError ? <div className="pill bad" style={{ marginTop: "var(--space-sm)" }}>{saveError}</div> : null}
         </Card>
+        </Dialog>
       ) : null}
 
       {error ? (

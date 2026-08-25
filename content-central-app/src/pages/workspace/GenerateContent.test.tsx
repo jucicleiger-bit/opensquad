@@ -30,6 +30,24 @@ function projectState(offers: unknown[] = []) {
   };
 }
 
+function projectStateWithTopicIdeas(title = "Site bonito não vende sozinho") {
+  return {
+    projects: [{
+      projectId: "boss-pizzaria",
+      name: "Boss Pizzaria",
+      contentStrategy: {
+        offers: [{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }],
+        topicIdeas: {
+          generatedAt: "2026-08-01T10:00:00.000Z",
+          nextRefreshAt: "2026-08-16T10:00:00.000Z",
+          goals: { authority: { label: "Autoridade", items: [{ id: "a1", title }] } },
+        },
+      },
+    }],
+    globalRules: {},
+  };
+}
+
 function catalogProjectState(offers: unknown[] = []) {
   return {
     projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers } }],
@@ -68,6 +86,25 @@ describe("GenerateContent", () => {
 
     await screen.findByRole("heading", { name: "Agenda e geração" });
     expect(screen.queryByText("Nenhum assunto/oferta cadastrado para este projeto.")).not.toBeInTheDocument();
+  });
+
+  it("shows the topic idea bank and lets the operator refresh it", async () => {
+    stubFetchSequence([
+      { body: projectStateWithTopicIdeas() },
+      EMPTY_COMMEMORATIVE_DATES,
+      { body: { topicIdeas: projectStateWithTopicIdeas("Novo assunto de autoridade").projects[0].contentStrategy.topicIdeas } },
+      { body: projectStateWithTopicIdeas("Novo assunto de autoridade") },
+    ]);
+    renderGenerate();
+
+    expect(await screen.findByText("Banco de assuntos")).toBeInTheDocument();
+    expect(screen.getByText(/Site bonito não vende sozinho/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Atualizar agora" }));
+
+    expect(await screen.findByText(/Novo assunto de autoridade/)).toBeInTheDocument();
+    const refreshCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    expect(refreshCall[0]).toBe("/api/projects/boss-pizzaria/topic-ideas-refresh");
   });
 
   it("blocks submission when no format is checked", async () => {

@@ -214,7 +214,7 @@ export function AdCreatives() {
               <Card key={adCreative.adCreativeId} className={styles.card}>
                 <div className={`${styles.phone} ${adCreative.channel === "instagram_story" ? styles.phoneTall : styles.phoneFeed}`}>
                   {src ? (
-                    <img src={src} alt={adCreative.title} />
+                    <img src={src} alt={adCreative.title} loading="lazy" />
                   ) : adCreative.image.generating ? (
                     <span>Gerando imagem com IA...</span>
                   ) : (

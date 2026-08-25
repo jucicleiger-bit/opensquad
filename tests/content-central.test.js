@@ -68,8 +68,10 @@ import {
   regenerateAdCreative,
   regenerateContentDay,
   regenerateContentGroup,
+  refreshProjectTopicIdeas,
   researchOnlineVisualTrends,
   runDuePublishSweep,
+  retryStuckMediaUploads,
   deleteProjectOffer,
   deleteProjectOfferGroup,
   deleteProjectPillar,
@@ -90,6 +92,7 @@ import {
   approveProjectBrandBriefing,
   updateProjectBrandInput,
   updateProjectCompanyProfile,
+  updateProjectSettings,
   updateProjectImageRules,
   validateMetaToken,
 } from '../src/content-central.js';
@@ -103,12 +106,10 @@ async function withTempProject(fn) {
   }
 }
 
-// buildPrimaryAiImageReferences now requires a registered creative template
-// (a segment-learning entry tagged purpose:'creative' with a matching
-// postType/shape) before AI generation is allowed to proceed at all — see
-// task-3 of the mandatory-creative-templates plan. Every pre-existing test
-// that reaches real AI image generation needs one of these registered in
-// its setup, or it now fails with "Nenhum modelo de criativo cadastrado".
+// Sales/product-driven post types require a registered creative template (a
+// segment-learning entry tagged purpose:'creative' with a matching postType /
+// shape) before AI generation is allowed to proceed. Service and
+// non-sales/content types intentionally stay free-form.
 let registerCreativeTemplateCounter = 0;
 async function registerCreativeTemplate(groupKey, postType, shape, dir, filename) {
   registerCreativeTemplateCounter += 1;
@@ -226,6 +227,37 @@ test('duplicateCentralProject copies Raio-X text fields into a new project and r
     const manual = await readFile(paths.manualPath, 'utf-8');
     assert.match(manual, /Pizza Grande/);
     assert.match(manual, /Ensina/);
+  });
+});
+
+test('duplicateCentralProject brings offer photos (metadata + file) along, not just the offer text', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'casa-embalagem-a', name: 'Casa Embalagem A', handle: '@ce', approvalEmail: 'a@example.com' }, dir);
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    const uploaded = await saveProjectAsset('casa-embalagem-a', {
+      kind: 'reference',
+      filename: 'caixa.png',
+      dataUrl,
+      role: 'product_photo',
+      referenceCategory: 'real_product',
+      scope: 'offer',
+    }, dir);
+    const photoId = uploaded.metadata.id;
+
+    await saveProjectOffer('casa-embalagem-a', { name: 'Caixa de papelão', type: 'offer', photoReferenceIds: [photoId] }, dir);
+
+    const duplicated = await duplicateCentralProject('casa-embalagem-a', {
+      projectId: 'casa-embalagem-b',
+      name: 'Casa Embalagem B',
+    }, dir);
+
+    assert.equal(duplicated.offerAssets?.length, 1);
+    assert.equal(duplicated.offerAssets[0].id, photoId);
+    assert.deepEqual(duplicated.contentStrategy.offers[0].photoReferenceIds, [photoId]);
+
+    const destPaths = getCentralPaths(dir, 'casa-embalagem-b');
+    await access(join(destPaths.projectDir, duplicated.offerAssets[0].relativePath));
   });
 });
 
@@ -1523,6 +1555,57 @@ test('generation proceeds once a matching creative template exists for the topic
   });
 });
 
+test('only sales/product post types require an exact creative structure; service and content types generate freely', async () => {
+  const requiredTypes = ['offer', 'combo', 'rodizio', 'delivery', 'product'];
+  for (const type of requiredTypes) {
+    await withTempProject(async (dir) => {
+      const projectId = `modelo-obrigatorio-${type}`;
+      await createCentralProject({ projectId, name: `Modelo Obrigatorio ${type}`, handle: `@${type}`, approvalEmail: 'a@example.com' }, dir);
+      await updateProjectBrandInput(projectId, {
+        brandName: `Modelo Obrigatorio ${type}`, segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+      }, dir);
+      await saveProjectOffer(projectId, { name: `Assunto ${type}`, type, price: type === 'offer' ? 'R$ 49,90' : '' }, dir);
+      if (type !== 'offer') {
+        // An Oferta direta template must not satisfy Combo/Rodízio/Delivery/
+        // Produto destaque: these sales types require their own exact model.
+        await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'modelo-oferta.png');
+      }
+
+      let imageCalls = 0;
+      const content = await simulateTestPost(projectId, {
+        channel: 'instagram_story',
+        imageGenerator: async () => { imageCalls += 1; return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+      }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+      assert.equal(imageCalls, 0, `${type} should block before calling the image generator`);
+      assert.match(content.imageGenerationError, /Nenhum modelo de criativo cadastrado/);
+    });
+  }
+
+  const freeTypes = ['service', 'orientation', 'desire', 'urgency', 'institutional', 'social_proof'];
+  for (const type of freeTypes) {
+    await withTempProject(async (dir) => {
+      const projectId = `modelo-livre-${type}`;
+      await createCentralProject({ projectId, name: `Modelo Livre ${type}`, handle: `@${type}`, approvalEmail: 'a@example.com' }, dir);
+      await updateProjectBrandInput(projectId, {
+        brandName: `Modelo Livre ${type}`, segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+      }, dir);
+      await saveProjectOffer(projectId, { name: `Assunto ${type}`, type, price: '' }, dir);
+
+      let imageCalls = 0;
+      const content = await simulateTestPost(projectId, {
+        channel: 'instagram_story',
+        imageGenerator: async () => { imageCalls += 1; return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+      }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+      assert.equal(imageCalls, 1, `${type} should generate without a creative structure`);
+      assert.equal(content.imageGenerationError, null);
+      assert.equal(content.creativeStructureUsed, null);
+      assert.equal(content.image.references.some((reference) => reference.referenceKind === 'segment_structure'), false);
+    });
+  }
+});
+
 test('records which creative structure was used and whether a segment product reference rode along', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'registra-uso', name: 'Registra Uso', handle: '@registrauso', approvalEmail: 'a@example.com' }, dir);
@@ -1801,7 +1884,7 @@ test('simulateTestPost uses the approved brand xray for content goal, segment, v
     const approved = await approveProjectBrandXray('teste-seguro-xray', {}, dir, new Date('2026-07-20T12:05:00.000Z'));
     assert.equal(approved.project.brandXray.status, 'approved');
 
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'rodizio', 'vertical', dir);
 
     const content = await simulateTestPost('teste-seguro-xray', {
       channel: 'instagram_story',
@@ -2997,6 +3080,93 @@ test('simulateTestPost obeys selected Story channel and marks portrait 9:16 form
   });
 });
 
+test('simulateTestPost with an explicit offerId always uses that product, even when a weekday-restricted offer ahead of it in the pool would otherwise shift the topic index', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'produto-escolhido',
+      name: 'Produto Escolhido',
+      handle: '@produtoescolhido',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    // B only runs on Tuesdays, so it drops out of Monday's topic pool —
+    // shifting every later offer's index down by one in that filtered pool.
+    const { offer: offerB } = await saveProjectOffer('produto-escolhido', { name: 'Produto B', type: 'offer', daysOfWeek: ['tue'] }, dir);
+    const { offer: offerA } = await saveProjectOffer('produto-escolhido', { name: 'Produto A', type: 'offer' }, dir);
+    const { offer: offerC } = await saveProjectOffer('produto-escolhido', { name: 'Produto C', type: 'offer' }, dir);
+    void offerB;
+
+    // 2026-07-20 is a Monday: offer B is filtered out, so a naive index
+    // lookup against the unfiltered pool (where A sits at index 1) lands on
+    // C instead once the pool is re-filtered for Monday.
+    const content = await simulateTestPost('produto-escolhido', {
+      channel: 'instagram_story',
+      offerId: offerA.id,
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(content.contentTopic.offerId, offerA.id);
+    assert.equal(content.contentTopic.offerName, 'Produto A');
+    assert.notEqual(content.contentTopic.offerId, offerC.id);
+  });
+});
+
+test('two simulateTestPost runs the same day on the same channel land in different batches instead of the second silently overwriting the first on disk', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'dois-testes-mesmo-dia',
+      name: 'Dois Testes Mesmo Dia',
+      handle: '@doistestes',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await saveProjectOffer('dois-testes-mesmo-dia', { name: 'Produto Um', type: 'offer' }, dir);
+
+    const now = new Date('2026-07-20T12:00:00.000Z');
+    const first = await simulateTestPost('dois-testes-mesmo-dia', { channel: 'instagram_story', note: 'primeiro teste' }, dir, now);
+    const second = await simulateTestPost('dois-testes-mesmo-dia', { channel: 'instagram_story', note: 'segundo teste' }, dir, new Date(now.getTime() + 1000));
+
+    assert.notEqual(first.batchId, second.batchId);
+
+    const all = await listProjectContent('dois-testes-mesmo-dia', dir);
+    const tests = all.filter((item) => item.status === 'test_post_simulated');
+    assert.equal(tests.length, 2, 'both tests must still exist on disk, not just the latest one');
+    assert.ok(tests.some((item) => item.publish?.simulationNote === 'primeiro teste'));
+    assert.ok(tests.some((item) => item.publish?.simulationNote === 'segundo teste'));
+  });
+});
+
+test('simulateTestPost writes the very first draft file already marked as a test, never briefly indistinguishable from a real draft awaiting approval', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'marca-teste-desde-o-inicio',
+      name: 'Marca Teste Desde O Inicio',
+      handle: '@marcateste',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await updateProjectBrandInput('marca-teste-desde-o-inicio', {
+      brandName: 'Marca Teste Desde O Inicio', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('marca-teste-desde-o-inicio', { name: 'Produto Um', type: 'offer', price: 'R$ 49,90' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'estrutura.png');
+
+    let statusDuringImageGeneration = null;
+    await simulateTestPost('marca-teste-desde-o-inicio', {
+      channel: 'instagram_story',
+      imageGenerator: async () => {
+        // Read the item back off disk mid-generation — the same moment
+        // Aguardando aprovação/the dashboard would see it if they polled
+        // right now — before the image (or the post-generation status
+        // re-assignment) has finished.
+        const onDisk = (await listProjectContent('marca-teste-desde-o-inicio', dir))
+          .find((item) => item.status !== undefined);
+        statusDuringImageGeneration = onDisk?.status;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(statusDuringImageGeneration, 'test_post_simulated');
+  });
+});
+
 test('safe tests and scheduled posts use the correct dimensions for Story Feed and Reels', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -3230,7 +3400,7 @@ test('AI safe test asks ChatGPT for a complete designed card and avoids automati
       cta: 'Peça no delivery',
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
     await updateProjectBrandInput('overlay-exato', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'vertical', dir);
 
     const generatorCalls = [];
     const content = await simulateTestPost('overlay-exato', {
@@ -3279,7 +3449,7 @@ test('Feed offer prompt uses a sales hook title, stronger CTA and blocks fake ur
       active: true,
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
     await updateProjectBrandInput('feed-conversao-real', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'feed', dir);
 
     const generatorCalls = [];
     await simulateTestPost('feed-conversao-real', {
@@ -3391,7 +3561,7 @@ test('AI final prompt is compiled into concise creative brief and limited refere
       serviceRegion: 'Várzea Grande-MT',
       mainDifferential: 'diferencial ainda não informado',
     }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'vertical', dir);
     await approveProjectBrandXray('prompt-compilado', {
       edits: {
         summary: 'Informado pelo usuário: pizzaria local. Sugestão da IA: marca acolhedora e comercial. Descrição livre ainda não informada.',
@@ -3489,7 +3659,7 @@ test('Story prompt treats esfiha offer as native vertical composition with compa
       autoGenerateCta: true,
     }, dir, new Date('2026-07-15T12:00:00.000Z'));
     await updateProjectBrandInput('story-esfiha-nativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Esfiharia' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:esfiharia', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:esfiharia', 'combo', 'vertical', dir);
 
     const generatorCalls = [];
     await simulateTestPost('story-esfiha-nativo', {
@@ -3528,7 +3698,7 @@ test('multi-product offers rotate a persisted hero focus and prioritize its matc
       await saveProjectAsset('rodizio-rotativo', { kind: 'reference', filename, dataUrl, role: 'product_photo' }, dir);
     }
     await updateProjectBrandInput('rodizio-rotativo', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'rodizio', 'feed', dir);
 
     const batch = await generateContentBatch('rodizio-rotativo', {
       days: 5, startDate: '2026-08-10', channel: 'instagram_feed',
@@ -3743,6 +3913,7 @@ test('layout reference rotates across different test runs instead of always usin
     // Rotation can now only happen among multiple MATCHING registered
     // templates (a directly-uploaded, untagged layout_model reference never
     // counts as a candidate anymore — see buildPrimaryAiImageReferences).
+    await saveProjectOffer('layout-rotativo', { name: 'Oferta rotativa', type: 'offer', price: 'R$ 49,90' }, dir);
     const templateA = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const templateB = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
 
@@ -3813,7 +3984,7 @@ test('product photo selection prefers a reference matching the offer\'s product 
       instruction: 'Esfiha real da Boss Pizzaria, fechada',
     }, dir, new Date('2026-07-20T12:05:00.000Z'));
     await updateProjectBrandInput('foto-produto-certa', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'vertical', dir);
 
     const generatorCalls = [];
     await simulateTestPost('foto-produto-certa', {
@@ -4063,8 +4234,8 @@ test('Story prompt prevalidates pizza combo text quantity and ignores square lay
     // shape tag matches (analyzeLearningImage/saveLearningEntry have no
     // width/height/aspectRatio fields, so the filename text fallback in
     // isSquareLikeReference is the only way to reproduce square detection here).
-    const squareTemplate = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'layout-quadrado.jpg');
-    const storyTemplate = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir, 'layout-story.jpg');
+    const squareTemplate = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'vertical', dir, 'layout-quadrado.jpg');
+    const storyTemplate = await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'vertical', dir, 'layout-story.jpg');
 
     const generatorCalls = [];
     const content = await simulateTestPost('story-combo-3-pizzas', {
@@ -4415,8 +4586,8 @@ test('Feed gets a direct default CTA for sales offers when the offer has no expl
       items: '2 pizzas grandes',
     }, dir);
     await updateProjectBrandInput('cta-feed-suave', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'feed', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'vertical', dir);
 
     const feedCalls = [];
     await simulateTestPost('cta-feed-suave', {
@@ -4456,7 +4627,7 @@ test('an offer\'s explicit CTA is still respected on Feed, folded into the same 
       cta: 'Reserve sua mesa',
     }, dir);
     await updateProjectBrandInput('cta-explicito-feed', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
-    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'rodizio', 'feed', dir);
 
     const feedCalls = [];
     await simulateTestPost('cta-explicito-feed', {
@@ -4613,6 +4784,105 @@ test('schedule generation mixes registered offers with selected content goals in
     const sources = batch.items.map((item) => item.contentTopic.source);
     assert.ok(sources.includes('offer'), 'expected at least one offer-driven topic');
     assert.ok(sources.includes('goal'), 'expected at least one goal-driven topic');
+  });
+});
+
+test('topic idea agent creates 10 subjects per selected organic goal and feeds generation', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'banco-assuntos', name: 'Banco Assuntos' }, dir);
+    await updateProjectBrandInput('banco-assuntos', {
+      brandName: 'Banco Assuntos',
+      segment: 'Agência de marketing digital',
+      productsOrServices: 'sites, landing pages e tráfego pago',
+      audience: 'donos de negócios locais',
+      mainDifferential: 'diagnóstico e estratégia antes de vender execução',
+      contentGoals: ['authority', 'education', 'brand_awareness'],
+    }, dir);
+
+    const generated = await refreshProjectTopicIdeas('banco-assuntos', {
+      topicIdeaGenerator: async ({ goalKeys }) => ({
+        goals: Object.fromEntries(goalKeys.map((goalKey) => [goalKey, {
+          items: Array.from({ length: 10 }, (_, index) => ({
+            title: `${goalKey} assunto ${index + 1}`,
+            angle: `${goalKey} ângulo ${index + 1}`,
+            detail: `${goalKey} complemento ${index + 1}`,
+          })),
+        }])),
+      }),
+    }, dir, new Date('2026-08-21T10:00:00.000Z'));
+
+    assert.equal(generated.topicIdeas.refreshDays, 15);
+    assert.equal(generated.topicIdeas.ideasPerGoal, 10);
+    assert.equal(generated.topicIdeas.goals.authority.items.length, 10);
+    assert.equal(generated.topicIdeas.goals.education.items.length, 10);
+    assert.equal(generated.topicIdeas.goals.brand_awareness.items.length, 10);
+    assert.equal(generated.topicIdeas.goals.authority.items[0].title, 'authority assunto 1');
+
+    const batch = await generateContentBatch('banco-assuntos', {
+      days: 3,
+      startDate: '2026-08-03',
+      channel: 'instagram_story',
+    }, dir);
+    const titles = batch.items.map((item) => item.contentTopic.ideaTitle);
+    assert.deepEqual(titles, ['authority assunto 1', 'education assunto 1', 'brand_awareness assunto 1']);
+    assert.match(batch.items[0].image.prompt, /authority complemento 1/);
+    assert.match(batch.items[0].caption.text, /authority assunto 1/);
+  });
+});
+
+test('topic idea bank refreshes after 15 days and stays unchanged before the due date', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'assuntos-quinzenais', name: 'Assuntos Quinzenais' }, dir);
+    await updateProjectBrandInput('assuntos-quinzenais', {
+      brandName: 'Assuntos Quinzenais',
+      segment: 'Consultoria',
+      productsOrServices: 'diagnóstico estratégico',
+      contentGoals: ['authority'],
+    }, dir);
+    let run = 0;
+    const topicIdeaGenerator = async () => {
+      run += 1;
+      return {
+        goals: {
+          authority: {
+            items: Array.from({ length: 10 }, (_, index) => ({
+              title: `rodada ${run} assunto ${index + 1}`,
+              angle: `rodada ${run} ângulo ${index + 1}`,
+              detail: `rodada ${run} detalhe ${index + 1}`,
+            })),
+          },
+        },
+      };
+    };
+
+    await generateContentBatch('assuntos-quinzenais', {
+      days: 1,
+      startDate: '2026-08-03',
+      topicIdeaGenerator,
+    }, dir);
+    let project = await loadProjectForTest('assuntos-quinzenais', dir);
+    assert.equal(project.contentStrategy.topicIdeas.goals.authority.items[0].title, 'rodada 1 assunto 1');
+
+    await generateContentBatch('assuntos-quinzenais', {
+      days: 1,
+      startDate: '2026-08-04',
+      topicIdeaGenerator,
+    }, dir);
+    project = await loadProjectForTest('assuntos-quinzenais', dir);
+    assert.equal(project.contentStrategy.topicIdeas.goals.authority.items[0].title, 'rodada 1 assunto 1');
+    assert.equal(run, 1);
+
+    project.contentStrategy.topicIdeas.nextRefreshAt = '2026-08-16T10:00:00.000Z';
+    await writeFile(getCentralPaths(dir, 'assuntos-quinzenais').projectPath, JSON.stringify(project, null, 2));
+
+    await generateContentBatch('assuntos-quinzenais', {
+      days: 1,
+      startDate: '2026-08-18',
+      topicIdeaGenerator,
+    }, dir);
+    project = await loadProjectForTest('assuntos-quinzenais', dir);
+    assert.equal(project.contentStrategy.topicIdeas.goals.authority.items[0].title, 'rodada 2 assunto 1');
+    assert.equal(run, 2);
   });
 });
 
@@ -6352,6 +6622,108 @@ test('approveContent still approves the item when mediaUploader throws, recordin
   });
 });
 
+test('retryStuckMediaUploads re-uploads a mediaUploadError item and clears the error on success', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'retry-stuck-ok', name: 'Retry Stuck Ok', handle: '@retrystuckok', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('retry-stuck-ok', { days: 1, startDate: '2099-01-01', postTime: '18:00' }, dir);
+    await approveContent('retry-stuck-ok', batch.items[0].contentId, dir, batch.batchId, {
+      mediaUploader: async () => { throw new Error('imgBB is down'); },
+    });
+
+    const result = await retryStuckMediaUploads(dir, {
+      mediaUploader: async () => 'https://i.ibb.co/fresh.png',
+    });
+
+    assert.deepEqual(result, { retried: [batch.items[0].contentId], failed: [] });
+    const content = await listProjectContent('retry-stuck-ok', dir);
+    assert.equal(content[0].publish.mediaUrl, 'https://i.ibb.co/fresh.png');
+    assert.equal(content[0].publish.mediaUploadError, null);
+  });
+});
+
+test('retryStuckMediaUploads keeps the item stuck and records the new error when the retry itself fails', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'retry-stuck-fail', name: 'Retry Stuck Fail', handle: '@retrystuckfail', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('retry-stuck-fail', { days: 1, startDate: '2099-01-01', postTime: '18:00' }, dir);
+    await approveContent('retry-stuck-fail', batch.items[0].contentId, dir, batch.batchId, {
+      mediaUploader: async () => { throw new Error('imgBB is down'); },
+    });
+
+    const result = await retryStuckMediaUploads(dir, {
+      mediaUploader: async () => { throw new Error('still down'); },
+    });
+
+    assert.equal(result.retried.length, 0);
+    assert.equal(result.failed.length, 1);
+    const content = await listProjectContent('retry-stuck-fail', dir);
+    assert.equal(content[0].publish.mediaUrl, null);
+    assert.equal(content[0].publish.mediaUploadError, 'still down');
+  });
+});
+
+test('retryStuckMediaUploads leaves a healthy approved item untouched, and is a no-op with no mediaUploader', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'retry-stuck-healthy', name: 'Retry Stuck Healthy', handle: '@retrystuckhealthy', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('retry-stuck-healthy', { days: 1, startDate: '2099-01-01', postTime: '18:00' }, dir);
+    await approveContent('retry-stuck-healthy', batch.items[0].contentId, dir, batch.batchId, {
+      mediaUploader: async () => 'https://i.ibb.co/already-fine.png',
+    });
+
+    assert.deepEqual(await retryStuckMediaUploads(dir), { retried: [], failed: [] });
+
+    const called = [];
+    const result = await retryStuckMediaUploads(dir, { mediaUploader: async () => called.push(1) });
+    assert.deepEqual(result, { retried: [], failed: [] });
+    assert.equal(called.length, 0);
+  });
+});
+
+test('updateProjectSettings edits name, handle, approvalEmail and mode without touching projectId', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'settings-edit',
+      name: 'Original Name',
+      handle: '@original',
+      approvalEmail: 'old@example.com',
+      mode: 'manual',
+    }, dir);
+
+    const project = await updateProjectSettings('settings-edit', {
+      name: 'New Name',
+      handle: 'novo',
+      approvalEmail: 'new@example.com',
+      mode: 'semi_automatic',
+    }, dir);
+
+    assert.equal(project.projectId, 'settings-edit');
+    assert.equal(project.name, 'New Name');
+    assert.equal(project.instagram.handle, '@novo');
+    assert.equal(project.approvalEmail, 'new@example.com');
+    assert.equal(project.mode, 'semi_automatic');
+  });
+});
+
+test('updateProjectSettings only touches the fields given, and rejects an unsupported mode', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'settings-partial',
+      name: 'Kept Name',
+      handle: '@kept',
+      approvalEmail: 'kept@example.com',
+    }, dir);
+
+    const project = await updateProjectSettings('settings-partial', { name: 'Renamed' }, dir);
+    assert.equal(project.name, 'Renamed');
+    assert.equal(project.instagram.handle, '@kept');
+    assert.equal(project.approvalEmail, 'kept@example.com');
+
+    await assert.rejects(
+      () => updateProjectSettings('settings-partial', { mode: 'not-a-real-mode' }, dir),
+      /Unsupported project mode/,
+    );
+  });
+});
+
 test('regenerateContentDay calls queueSync with a remove when leaving aprovado status', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sync-regen', name: 'Sync Regen', handle: '@syncregen', approvalEmail: 'a@example.com' }, dir);
@@ -7643,7 +8015,7 @@ test('offerObjective falls back to the original hardcoded default (unchanged wor
   });
 });
 
-test('layoutStrength is strict whenever a matching creative template was found, even for a no-price/no-CTA institutional topic', async () => {
+test('institutional structure is optional: used when present, not required when absent', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'strict-institucional', name: 'Strict Institucional', handle: '@strictinst', approvalEmail: 'a@example.com' }, dir);
     await updateProjectBrandInput('strict-institucional', {
@@ -7662,6 +8034,8 @@ test('layoutStrength is strict whenever a matching creative template was found, 
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
 
     assert.equal(generatorCalls[0].content.creativeSpec.layout.strength, 'strict');
+    assert.equal(generatorCalls[0].content.creativeStructureUsed?.postType, 'institutional');
+    assert.ok(generatorCalls[0].content.image.references.some((reference) => reference.referenceKind === 'segment_structure'));
   });
 });
 

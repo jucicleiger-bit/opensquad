@@ -32,7 +32,7 @@ const thumbStyle = {
   flex: "0 0 auto",
   display: "grid",
   placeItems: "center",
-  background: "#09090b",
+  background: "var(--bg-soft)",
   color: "var(--muted)",
   fontSize: 11,
 } as const;
@@ -543,28 +543,44 @@ export function Offers() {
                   photoPreviewUrl(id) ? (
                     <div key={id} style={{ position: "relative" }}>
                       <div style={{ ...thumbStyle, width: 90, height: 90 }}>
-                        <img src={photoPreviewUrl(id)!} alt={form.name || "Foto atual"} style={thumbImgStyle} />
+                        <img src={photoPreviewUrl(id)!} alt={form.name || "Foto atual"} style={thumbImgStyle} loading="lazy" />
                       </div>
                       <button
                         type="button"
                         onClick={() => removePhoto(id)}
                         title="Remover esta foto"
+                        aria-label="Remover esta foto"
                         style={{
                           position: "absolute",
-                          top: -6,
-                          right: -6,
-                          width: 20,
-                          height: 20,
-                          borderRadius: "50%",
+                          top: -12,
+                          right: -12,
+                          width: 44,
+                          height: 44,
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
                           border: "none",
-                          background: "#ef4444",
-                          color: "#fff",
+                          background: "transparent",
                           cursor: "pointer",
-                          lineHeight: "20px",
                           padding: 0,
                         }}
                       >
-                        ×
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            width: 20,
+                            height: 20,
+                            borderRadius: "50%",
+                            background: "var(--bad)",
+                            color: "var(--accent-ink)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            lineHeight: 1,
+                          }}
+                        >
+                          ×
+                        </span>
                       </button>
                     </div>
                   ) : null,
@@ -841,7 +857,7 @@ export function Offers() {
                             <div style={{ display: "flex", gap: 4 }}>
                               {(offer.photoReferenceIds || []).slice(0, 3).map((id) => (
                                 <div key={id} style={thumbStyle}>
-                                  {photoPreviewUrl(id) ? <img src={photoPreviewUrl(id)!} alt={offer.name} style={thumbImgStyle} /> : null}
+                                  {photoPreviewUrl(id) ? <img src={photoPreviewUrl(id)!} alt={offer.name} style={thumbImgStyle} loading="lazy" /> : null}
                                 </div>
                               ))}
                               {(offer.photoReferenceIds?.length || 0) > 3 ? (

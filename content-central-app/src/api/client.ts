@@ -139,6 +139,22 @@ export interface ProjectPillar {
   updatedAt?: string;
 }
 
+export interface TopicIdeaItem {
+  id: string;
+  title: string;
+  angle?: string;
+  detail?: string;
+  source?: string;
+}
+
+export interface TopicIdeasBank {
+  generatedAt?: string;
+  nextRefreshAt?: string;
+  source?: string;
+  warning?: string;
+  goals?: Record<string, { label?: string; items?: TopicIdeaItem[] }>;
+}
+
 export const PILLAR_ROLE_LABELS: Record<string, string> = {
   ensina: "Ensina",
   prova: "Prova",
@@ -262,14 +278,14 @@ export interface ProjectSummary {
     catalogStoriesPerDay?: number;
     [key: string]: unknown;
   };
-  contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; [key: string]: unknown };
+  contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; topicIdeas?: TopicIdeasBank; [key: string]: unknown };
   rules?: unknown;
   createdAt?: string;
   updatedAt?: string;
 }
 
 export interface SystemAlert {
-  type: "token_expired" | "token_expiring" | "publish_failed";
+  type: "token_expired" | "token_expiring" | "publish_failed" | "media_upload_failed" | "topic_ideas_fallback";
   projectId: string;
   projectName: string;
   message: string;
@@ -364,6 +380,8 @@ export interface ContentItem {
   creativeGroupKey?: string | null;
   creativeStructureUsed?: { title: string; postType?: string; shape?: string } | null;
   usedSegmentProductReference?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 class ApiError extends Error {}
@@ -406,6 +424,23 @@ export function createProject(input: CreateProjectInput): Promise<{ project: Pro
 export function deleteProject(projectId: string): Promise<{ projectId: string; deleted: boolean }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: "POST",
+  });
+}
+
+export interface UpdateProjectSettingsInput {
+  name?: string;
+  handle?: string;
+  approvalEmail?: string;
+  mode?: string;
+}
+
+export function updateProjectSettings(
+  projectId: string,
+  input: UpdateProjectSettingsInput,
+): Promise<{ project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/settings`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
@@ -580,6 +615,10 @@ export function previewContentPlan(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+export function refreshTopicIdeas(projectId: string): Promise<{ project: ProjectSummary; topicIdeas: TopicIdeasBank | null }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/topic-ideas-refresh`, { method: "POST" });
 }
 
 export interface CommemorativeDate {
@@ -1101,10 +1140,15 @@ export function saveCatalogSettings(
   });
 }
 
-export function testPost(projectId: string, channel: string, note: string): Promise<{ content: ContentItem; message: string }> {
+export function testPost(
+  projectId: string,
+  channel: string,
+  note: string,
+  offerId?: string,
+): Promise<{ content: ContentItem; message: string }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/test-post`, {
     method: "POST",
-    body: JSON.stringify({ channel, note }),
+    body: JSON.stringify({ channel, note, offerId }),
   });
 }
 

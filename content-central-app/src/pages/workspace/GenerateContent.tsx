@@ -16,6 +16,7 @@ import { channelFullLabel, FEED_CREATIVE_CHANNELS, VERTICAL_CREATIVE_CHANNELS } 
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { ChannelCheckboxGroup } from "@/components/ChannelCheckboxGroup";
+import { TopicIdeasBank } from "./TopicIdeasBank";
 import styles from "./GenerateContent.module.css";
 
 // Catalog (venda direta) projects have no formats/channels matrix to
@@ -155,7 +156,7 @@ export function GenerateContent() {
 // GenerateContent) so each mode's hooks aren't conditionally skipped —
 // GenerateContent itself only ever calls useOutletContext.
 function GenerateMarketingContent() {
-  const { project } = useOutletContext<WorkspaceContext>();
+  const { project, refreshProject } = useOutletContext<WorkspaceContext>();
   const navigate = useNavigate();
   const [days, setDays] = useState("7");
   const [startDate, setStartDate] = useState("");
@@ -729,6 +730,7 @@ function GenerateMarketingContent() {
         </Button>
         {customState.error ? <div className="pill bad" style={{ marginTop: 8 }}>{customState.error}</div> : null}
       </Card>
+      <TopicIdeasBank project={project} refreshProject={refreshProject} />
     </div>
   );
 }

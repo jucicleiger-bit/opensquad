@@ -157,6 +157,7 @@ describe("Dashboard", () => {
     );
 
     await screen.findByText("Cliente Antigo");
+    await userEvent.click(screen.getByRole("button", { name: "Mais ações" }));
     await userEvent.click(screen.getByRole("button", { name: "Apagar" }));
 
     expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Cliente Antigo"));
@@ -181,6 +182,7 @@ describe("Dashboard", () => {
     );
 
     await screen.findByText("Cliente Antigo");
+    await userEvent.click(screen.getByRole("button", { name: "Mais ações" }));
     await userEvent.click(screen.getByRole("button", { name: "Apagar" }));
 
     expect(screen.getByText("Cliente Antigo")).toBeInTheDocument();
@@ -275,6 +277,7 @@ describe("Dashboard", () => {
     );
 
     await screen.findByText("Boss Pizzaria");
+    await userEvent.click(screen.getByRole("button", { name: "Mais ações" }));
     await userEvent.click(screen.getByRole("button", { name: "Duplicar" }));
     await userEvent.type(screen.getByLabelText("Nome"), "Boss Pizzaria Zona Sul");
     await userEvent.type(screen.getByLabelText("ID curto"), "boss-pizzaria-zona-sul");
@@ -309,12 +312,77 @@ describe("Dashboard", () => {
     );
 
     await screen.findByText("Boss Pizzaria");
+    await userEvent.click(screen.getByRole("button", { name: "Mais ações" }));
     await userEvent.click(screen.getByRole("button", { name: "Duplicar" }));
     await userEvent.type(screen.getByLabelText("Nome"), "Boss Pizzaria");
     await userEvent.click(screen.getByRole("button", { name: "Duplicar projeto" }));
 
     expect(await screen.findByText("Project already exists: boss-pizzaria")).toBeInTheDocument();
     expect(screen.getByLabelText("Nome")).toBeInTheDocument();
+  });
+
+  it("edits a project's name, handle, approval email and mode through the real endpoint", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [
+            {
+              projectId: "boss-pizzaria",
+              name: "Boss Pizzaria",
+              token: {},
+              approvalEmail: "old@example.com",
+              mode: "manual",
+              instagram: { handle: "@old" },
+              brandXray: { status: "approved" },
+            },
+          ],
+          globalRules: {},
+        },
+      },
+      {
+        body: {
+          project: {
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria Renomeada",
+            token: {},
+            approvalEmail: "new@example.com",
+            mode: "semi_automatic",
+            instagram: { handle: "@novo" },
+            brandXray: { status: "approved" },
+          },
+        },
+      },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Boss Pizzaria");
+    await userEvent.click(screen.getByRole("button", { name: "Mais ações" }));
+    await userEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    const nameInput = screen.getByLabelText("Nome");
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Boss Pizzaria Renomeada");
+    const handleInput = screen.getByLabelText("Instagram (@handle)");
+    await userEvent.clear(handleInput);
+    await userEvent.type(handleInput, "novo");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar" }));
+
+    expect(await screen.findByText("Boss Pizzaria Renomeada")).toBeInTheDocument();
+
+    const editCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(editCall[0]).toBe("/api/projects/boss-pizzaria/settings");
+    expect(editCall[1].method).toBe("POST");
+    expect(JSON.parse(editCall[1].body as string)).toEqual({
+      name: "Boss Pizzaria Renomeada",
+      handle: "novo",
+      approvalEmail: "old@example.com",
+      mode: "manual",
+    });
   });
 
   it("has no Duplicar button on a catalog project card", async () => {
@@ -330,6 +398,7 @@ describe("Dashboard", () => {
     );
 
     await screen.findByText("Loja de Celulares");
+    await userEvent.click(screen.getByRole("button", { name: "Mais ações" }));
     expect(screen.queryByRole("button", { name: "Duplicar" })).not.toBeInTheDocument();
   });
 

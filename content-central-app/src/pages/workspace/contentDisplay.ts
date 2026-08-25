@@ -51,10 +51,15 @@ export function imageSource(item: ContentItem): string | undefined {
   return item.image?.previewDataUrl || item.image?.previewUrl || item.image?.url;
 }
 
-export type ContentBucket = "aguardando" | "aprovado";
+export type ContentBucket = "aguardando" | "aprovado" | "teste";
 
+// A "Teste rápido" simulation is local/dry-run only — it never enters the
+// real approval/publish pipeline, so it must not count as content awaiting
+// approval on the Aguardando aprovação list or the dashboard's counts.
 export function bucketForItem(item: ContentItem): ContentBucket {
-  return item.status === "aprovado" ? "aprovado" : "aguardando";
+  if (item.status === "aprovado") return "aprovado";
+  if (item.status === "test_post_simulated") return "teste";
+  return "aguardando";
 }
 
 export interface ContentGroup {

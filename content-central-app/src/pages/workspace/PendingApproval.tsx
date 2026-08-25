@@ -352,7 +352,7 @@ export function PendingApproval() {
         <div className={`${styles.phone} ${isFeedChannel(leader.channel) ? styles.phoneFeed : styles.phoneTall}`}>
           {imageSource(leader) ? (
             <>
-              <img src={imageSource(leader)} alt={leader.formatLabel || channelLabel(leader.channel)} />
+              <img src={imageSource(leader)} alt={leader.formatLabel || channelLabel(leader.channel)} loading="lazy" />
               <button type="button" className={styles.previewButton} onClick={() => setPreviewItem(leader)}>
                 Ver maior
               </button>
@@ -454,7 +454,7 @@ export function PendingApproval() {
         <div className={`${styles.phone} ${isFeedChannel(item.channel) ? styles.phoneFeed : styles.phoneTall}`}>
           {imageSource(item) ? (
             <>
-              <img src={imageSource(item)} alt={item.formatLabel || channelLabel(item.channel)} />
+              <img src={imageSource(item)} alt={item.formatLabel || channelLabel(item.channel)} loading="lazy" />
               <button type="button" className={styles.previewButton} onClick={() => setPreviewItem(item)}>
                 Ver maior
               </button>

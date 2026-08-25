@@ -8,6 +8,11 @@
   border-right: 1px solid var(--line);
   background: var(--bg-soft);
   padding: var(--space-lg) var(--space-sm);
+  position: sticky;
+  top: 63px;
+  align-self: start;
+  height: calc(100vh - 63px);
+  overflow-y: auto;
 }
 
 .back {
@@ -41,7 +46,9 @@
 }
 
 .navLink {
-  display: block;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
   padding: var(--space-xs) var(--space-sm);
   border-radius: 12px;
   color: var(--muted);
@@ -63,7 +70,7 @@
 
 .navGroupLabel {
   padding: var(--space-md) var(--space-sm) var(--space-2xs);
-  color: var(--faint);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -87,6 +94,9 @@
   .sidebar {
     border-right: none;
     border-bottom: 1px solid var(--line);
+    position: static;
+    height: auto;
+    overflow-y: visible;
   }
 
   .nav {

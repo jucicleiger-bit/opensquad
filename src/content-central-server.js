@@ -85,6 +85,8 @@ import {
   regenerateContentDay,
   regenerateContentGroup,
   researchOnlineVisualTrends,
+  refreshProjectTopicIdeas,
+  retryStuckMediaUploads,
   runDuePublishSweep,
   saveLearningEntry,
   saveOfferTypeBaseInstruction,
@@ -100,6 +102,7 @@ import {
   updateContentCaption,
   updateProjectBrandInput,
   updateProjectCompanyProfile,
+  updateProjectSettings,
   updateProjectReference,
   simulateTestPost,
   updateProjectImageRules,
@@ -132,16 +135,22 @@ function resolveGaveteSync(targetDir, projectId) {
       }
       if (action === 'remove') return removeQueueItem(gaveteDir, payload.projectId, payload.contentId);
     },
-    mediaUploader: async (content) => {
-      const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
-      if (isVideoChannel) {
-        if (!content.video?.localPath) return null;
-        return uploadWithRetry(() => uploadGeneratedVideoPublicly(content.video.localPath));
-      }
-      const localPath = resolveGeneratedImageAbsolutePath(content, projectId, targetDir);
-      return localPath ? uploadWithRetry(() => uploadGeneratedImagePublicly(localPath)) : null;
-    },
+    mediaUploader: (content) => uploadContentMediaFresh(content, projectId, targetDir),
   };
+}
+
+// Re-hosts a content item's media from scratch — shared by the approve-time
+// upload hook above and the stuck-item retry sweep below, so both go
+// through the same isVideoChannel branching and uploadWithRetry settle/retry
+// treatment instead of drifting apart.
+async function uploadContentMediaFresh(content, projectId, targetDir) {
+  const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
+  if (isVideoChannel) {
+    if (!content.video?.localPath) return null;
+    return uploadWithRetry(() => uploadGeneratedVideoPublicly(content.video.localPath));
+  }
+  const localPath = resolveGeneratedImageAbsolutePath(content, projectId, targetDir);
+  return localPath ? uploadWithRetry(() => uploadGeneratedImagePublicly(localPath)) : null;
 }
 
 // Manual "Publicar agora" still runs the real publish directly from this
@@ -338,6 +347,7 @@ export async function startContentCentralServer({
   logoColorAnalyzer = null,
   siteAnalyzer = null,
   webResearcher = null,
+  topicIdeaGenerator = null,
   learningImageAnalyzer = null,
   offerDirectionSuggester = null,
   videoAnimator = null,
@@ -357,6 +367,7 @@ export async function startContentCentralServer({
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
+    topicIdeaGenerator: topicIdeaGenerator || (enableAiImages ? generateTopicIdeasWithAiAndWeb : null),
     learningImageAnalyzer: learningImageAnalyzer || (enableAiImages ? analyzeLearningImageWithCodexAgent : null),
     offerDirectionSuggester: offerDirectionSuggester || (enableAiImages ? suggestOfferDirectionWithCodexAgent : null),
     videoAnimator: videoAnimator || (enableAiImages ? (payload) => animateImageForReelsWithFfmpeg(payload, targetDir) : null),
@@ -383,6 +394,7 @@ export async function startContentCentralServer({
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
+  const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
 
   return {
     server,
@@ -391,6 +403,7 @@ export async function startContentCentralServer({
       if (publishSchedulerTimer) clearInterval(publishSchedulerTimer);
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
+      if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
       server.close((err) => (err ? reject(err) : resolve()));
     }),
   };
@@ -784,6 +797,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, result);
   }
 
+  if (parts.length === 4 && parts[3] === 'settings') {
+    const body = await readBody(req);
+    const project = await updateProjectSettings(projectId, body, targetDir);
+    return sendJson(res, 200, { project });
+  }
+
   if (parts.length === 4 && parts[3] === 'company-profile') {
     const body = await readBody(req);
     const project = await updateProjectCompanyProfile(projectId, body, targetDir);
@@ -896,6 +915,14 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, result);
   }
 
+  if (parts.length === 4 && parts[3] === 'topic-ideas-refresh') {
+    const result = await refreshProjectTopicIdeas(projectId, {
+      topicIdeaGenerator: context.topicIdeaGenerator,
+      force: true,
+    }, targetDir);
+    return sendJson(res, 200, result);
+  }
+
   if (parts.length === 4 && parts[3] === 'offers') {
     const body = await readBody(req);
     const result = await saveProjectOffer(projectId, body, targetDir);
@@ -981,6 +1008,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
         groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
         offersOnly: Boolean(body.offersOnly),
         approvedPlan: body.approvedPlan,
+        topicIdeaGenerator: context.topicIdeaGenerator,
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       return sendJson(res, 201, { batch, batches: [batch] });
@@ -995,6 +1023,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
         contentRules: splitRules(body.contentRules),
         groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
         offersOnly: Boolean(body.offersOnly),
+        topicIdeaGenerator: context.topicIdeaGenerator,
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       batches.push(batch);
@@ -1017,6 +1046,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
       formats,
       groupIds: Array.isArray(body.groupIds) ? body.groupIds : undefined,
       offersOnly: Boolean(body.offersOnly),
+      topicIdeaGenerator: context.topicIdeaGenerator,
     }, targetDir);
     return sendJson(res, 200, { plan });
   }
@@ -1138,9 +1168,11 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const content = await simulateTestPost(projectId, {
       channel,
       note: body.note || '',
+      offerId: body.offerId || undefined,
       maxCreativeAttempts: normalizeTestMaxCreativeAttempts(body.maxCreativeAttempts),
       imageGenerator: context.imageGenerator,
       imageReviewer: context.imageReviewer,
+      topicIdeaGenerator: context.topicIdeaGenerator,
     }, targetDir);
     return sendJson(res, 201, {
       content,
@@ -1481,7 +1513,15 @@ async function sendReactApp(res, subPath) {
   if (!filePath.startsWith(REACT_APP_DIST_ROOT)) return sendJson(res, 400, { error: 'Caminho inválido' });
   try {
     const body = await readFile(filePath);
-    res.writeHead(200, { 'content-type': reactAppContentType(filePath) });
+    // index.html has no hash in its URL and references the current build's
+    // hashed asset filenames — the browser must always revalidate it so a
+    // fresh `npm run build` (new hashes) is picked up on the next reload
+    // instead of the tab silently keeping an old bundle running for the
+    // rest of the session. Hashed assets (index-<hash>.js/css) are the
+    // opposite: the filename itself changes whenever the content does, so
+    // they're safe to cache aggressively forever.
+    const cacheControl = isAssetRequest ? 'public, max-age=31536000, immutable' : 'no-cache';
+    res.writeHead(200, { 'content-type': reactAppContentType(filePath), 'cache-control': cacheControl });
     res.end(body);
   } catch (err) {
     if (err.code === 'ENOENT') {
@@ -3818,6 +3858,103 @@ async function researchOnlineVisualTrendsWithHermes({ segment, productsOrService
   return result;
 }
 
+async function collectOnlineTopicResearchEvidence({ segment, productsOrServices, audience }) {
+  const base = [segment, productsOrServices, audience].filter(Boolean).join(' ').trim();
+  const queries = [
+    `${base} dúvidas frequentes marketing conteúdo Instagram negócios locais`,
+    `${base} tendências conteúdo Instagram pequenos negócios 2026`,
+    `${base} perguntas clientes antes de contratar serviço`,
+  ];
+  const found = [];
+  const seen = new Set();
+  for (const query of queries) {
+    try {
+      for (const result of await searchDuckDuckGo(query)) {
+        if (!result.url || seen.has(result.url)) continue;
+        seen.add(result.url);
+        found.push({ query, ...result });
+        if (found.length >= ONLINE_RESEARCH_MAX_RESULTS) break;
+      }
+    } catch (err) {
+      console.error('[content-central] online topic search failed:', err.message);
+    }
+    if (found.length >= ONLINE_RESEARCH_MAX_RESULTS) break;
+  }
+  if (!found.length) return [];
+  let fetchedPages = 0;
+  for (const result of found) {
+    if (fetchedPages >= ONLINE_RESEARCH_MAX_PAGES) break;
+    try {
+      const { html } = await fetchRawHtml(result.url);
+      const text = htmlToReadableText(html).slice(0, ONLINE_RESEARCH_PAGE_CHARS);
+      if (text) {
+        result.pageText = text;
+        fetchedPages += 1;
+      }
+    } catch {
+      // Snippets still count as weak, current evidence; blocked pages should
+      // not force the agent back to generic topics.
+    }
+  }
+  return found;
+}
+
+function extractFirstJsonObject(raw) {
+  const text = String(raw || '').trim();
+  if (!text) return null;
+  const jsonText = text.match(/\{[\s\S]*\}/)?.[0];
+  if (!jsonText) return null;
+  return JSON.parse(jsonText);
+}
+
+function buildTopicIdeasPrompt({ project, goals, ideasPerGoal, refreshDays, raioX, evidence = [] }) {
+  return [
+    'Você é um agente editorial do Content Central. Gere assuntos específicos para evitar repetição em posts orgânicos.',
+    `Gere exatamente ${ideasPerGoal} assuntos para CADA objetivo listado. Esses assuntos serão renovados a cada ${refreshDays} dias.`,
+    '',
+    'RAIO-X / CONTEXTO APROVADO DA MARCA',
+    `Empresa: ${project.name}`,
+    `Segmento: ${raioX.segment || 'não informado'}`,
+    `Produtos/serviços: ${raioX.productsOrServices || 'não informado'}`,
+    `Público: ${raioX.audience || 'não informado'}`,
+    `Diferencial: ${raioX.differential || 'não informado'}`,
+    raioX.xrayText ? `Resumo do Raio-X: ${raioX.xrayText}` : '',
+    '',
+    evidence.length ? 'PESQUISA ONLINE RECENTE / EVIDÊNCIA COLETADA' : '',
+    evidence.length ? formatOnlineResearchEvidence(evidence) : '',
+    '',
+    'OBJETIVOS',
+    ...goals.map((goal) => `- ${goal.key}: ${goal.label}`),
+    '',
+    'REGRAS',
+    '- Não inventar números, provas, cases, prêmios, garantias, preço ou resultado financeiro.',
+    '- Cada assunto precisa ter um ângulo diferente, concreto e publicável para Instagram.',
+    '- Evitar frases genéricas como "importância da estratégia" sem contexto específico.',
+    '- Para Story, escrever complemento curto que ajude a arte comunicar sem legenda.',
+    '- Pode usar a pesquisa online só como inspiração de dúvidas/tendências; não copiar títulos, marcas nem concorrentes.',
+    '',
+    'Responda APENAS com JSON válido neste formato:',
+    '{"goals":{"authority":{"items":[{"title":"","angle":"","detail":""}]},"education":{"items":[{"title":"","angle":"","detail":""}]}}}',
+  ].filter(Boolean).join('\n');
+}
+
+async function generateTopicIdeasWithAiAndWeb({ project, goals, goalKeys, ideasPerGoal, refreshDays, raioX }) {
+  const evidence = await collectOnlineTopicResearchEvidence({
+    segment: raioX.segment,
+    productsOrServices: raioX.productsOrServices,
+    audience: raioX.audience,
+  });
+  const prompt = buildTopicIdeasPrompt({ project, goals, goalKeys, ideasPerGoal, refreshDays, raioX, evidence });
+  const raw = await callAiText(prompt, 'OPENSQUAD_TOPIC_IDEAS_TIMEOUT_MS');
+  const parsed = extractFirstJsonObject(raw);
+  if (!parsed) throw new Error('O agente de assuntos não retornou JSON válido.');
+  parsed.research = {
+    searchedAt: new Date().toISOString(),
+    sources: evidence.map((item) => ({ title: item.title, url: item.url, query: item.query })),
+  };
+  return parsed;
+}
+
 function buildOnlineVisualResearchPrompt({ segment, productsOrServices, evidence = [] }) {
   return [
     'Você vai transformar evidências reais de busca/navegação em direções visuais para uma IA de imagem.',
@@ -4554,6 +4691,28 @@ export function startWhatsAppPublishScheduler(targetDir) {
     metaPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
     channels: WHATSAPP_CHANNELS,
   }).catch((err) => console.error('[content-central] whatsapp publish sweep failed:', err.message));
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// Closes the gap runDuePublishSweep leaves open for an approve-time upload
+// that ran out of retries: mediaUploadError items only get a fresh attempt
+// when their scheduled slot finally comes due, which can be days out, so
+// the media_upload_failed alert just sits there until then or until the
+// operator manually retries from the Calendário. Runs on its own (slower)
+// cadence — this isn't publishing anything, just re-hosting the file — so
+// the alert self-heals well before the deadline instead of on it. Only
+// meaningful when OPENSQUAD_GAVETA_DIR is set: that's the only mode where
+// approveContent's mediaUploader hook runs at all, so it's the only mode
+// where mediaUploadError ever gets set in the first place.
+export function startStuckMediaRetryScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  if (!process.env.OPENSQUAD_GAVETA_DIR) return null;
+  const intervalMs = Number(process.env.OPENSQUAD_MEDIA_RETRY_INTERVAL_MS || 1800000);
+  const sweep = () => retryStuckMediaUploads(targetDir, {
+    mediaUploader: ({ content, project }) => uploadContentMediaFresh(content, project.projectId, targetDir),
+  }).catch((err) => console.error('[content-central] stuck media retry sweep failed:', err.message));
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;

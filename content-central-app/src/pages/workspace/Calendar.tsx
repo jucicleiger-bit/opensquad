@@ -8,6 +8,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
 import { addMonths, buildMonthGrid, monthLabel, startOfMonth, toDateKey, weekdayLabels } from "./calendarUtils";
 import { ContentPipeline } from "./ContentPipeline";
+import { TopicIdeasBank } from "./TopicIdeasBank";
 import { bucketForItem, channelLabel, imageSource, isFeedChannel, statusMeta } from "./contentDisplay";
 import styles from "./Calendar.module.css";
 
@@ -20,7 +21,7 @@ interface ActionState {
 const IDLE_ACTION_STATE: ActionState = { busy: false, error: null, message: null };
 
 export function Calendar() {
-  const { project } = useOutletContext<WorkspaceContext>();
+  const { project, refreshProject } = useOutletContext<WorkspaceContext>();
   const [items, setItems] = useState<ContentItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
@@ -164,7 +165,7 @@ export function Calendar() {
         <Card className={styles.detail}>
           <div className={`${styles.phone} ${isFeedChannel(selectedItem.channel) ? styles.phoneFeed : styles.phoneTall}`}>
             {imageSource(selectedItem) ? (
-              <img src={imageSource(selectedItem)} alt={selectedItem.formatLabel || channelLabel(selectedItem.channel)} />
+              <img src={imageSource(selectedItem)} alt={selectedItem.formatLabel || channelLabel(selectedItem.channel)} loading="lazy" />
             ) : selectedItem.image?.generating ? (
               <span>Gerando imagem com IA...</span>
             ) : (
@@ -202,6 +203,8 @@ export function Calendar() {
           <EmptyState title="Selecione um post no calendário" description="Clique em um card de um dia para ver a prévia completa e as ações." />
         </div>
       )}
+
+      <TopicIdeasBank project={project} refreshProject={refreshProject} />
     </div>
   );
 }

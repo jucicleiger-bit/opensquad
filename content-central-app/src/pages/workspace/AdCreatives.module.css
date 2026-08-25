@@ -61,7 +61,7 @@
 
 .variationLabel {
   display: block;
-  color: var(--faint);
+  color: var(--muted);
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;

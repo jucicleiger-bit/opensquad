@@ -35,6 +35,7 @@ import {
   startContentCentralServer,
   startPublishScheduler,
   startWhatsAppPublishScheduler,
+  startStuckMediaRetryScheduler,
   uploadGeneratedImagePublicly,
   uploadGeneratedVideoPublicly,
   xaiAspectRatioForChannel,
@@ -1932,6 +1933,26 @@ test('content central API surfaces an expiring-token alert in /api/state', async
     assert.ok(alert);
     assert.equal(alert.type, 'token_expiring');
   });
+});
+
+test('content central API surfaces a topic-idea fallback alert in /api/state', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'alerta-assuntos', name: 'Alerta Assuntos' }, dir);
+    await updateProjectBrandInput('alerta-assuntos', {
+      brandName: 'Alerta Assuntos',
+      segment: 'consultoria',
+      productsOrServices: 'diagnóstico estratégico',
+      contentGoals: ['authority'],
+    }, dir);
+
+    await request(server, '/api/projects/alerta-assuntos/topic-ideas-refresh', { method: 'POST' });
+
+    const state = await request(server, '/api/state');
+    const alert = state.body.alerts.find((a) => a.projectId === 'alerta-assuntos');
+    assert.ok(alert);
+    assert.equal(alert.type, 'topic_ideas_fallback');
+    assert.match(alert.message, /fallback baseado no Raio-X/);
+  }, { topicIdeaGenerator: async () => { throw new Error('web off'); } });
 });
 
 test('content central API deletes a project and its stored token secret for good', async () => {
@@ -4300,6 +4321,46 @@ test('startWhatsAppPublishScheduler starts independently of OPENSQUAD_AUTO_PUBLI
   } finally {
     delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
     delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('startStuckMediaRetryScheduler does not start when OPENSQUAD_ENABLE_REAL_PUBLISHING is not true, even with OPENSQUAD_GAVETA_DIR set', async () => {
+  delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  process.env.OPENSQUAD_GAVETA_DIR = '/tmp/some-gaveta';
+  try {
+    const timer = startStuckMediaRetryScheduler(process.cwd());
+    assert.equal(timer, null);
+  } finally {
+    delete process.env.OPENSQUAD_GAVETA_DIR;
+  }
+});
+
+test('startStuckMediaRetryScheduler does not start when OPENSQUAD_GAVETA_DIR is unset, even with real publishing enabled', async () => {
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  delete process.env.OPENSQUAD_GAVETA_DIR;
+  try {
+    const timer = startStuckMediaRetryScheduler(process.cwd());
+    assert.equal(timer, null);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  }
+});
+
+test('startStuckMediaRetryScheduler starts when both real publishing and OPENSQUAD_GAVETA_DIR are set', async () => {
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  process.env.OPENSQUAD_GAVETA_DIR = '/tmp/some-gaveta';
+  // Same safety rule as the other scheduler tests: an isolated temp dir, not
+  // process.cwd(), since this sweeps for stuck media and would touch the
+  // main OPENSQUAD checkout's live client projects otherwise.
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+  try {
+    const timer = startStuckMediaRetryScheduler(dir);
+    assert.notEqual(timer, null);
+    clearInterval(timer);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+    delete process.env.OPENSQUAD_GAVETA_DIR;
     await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

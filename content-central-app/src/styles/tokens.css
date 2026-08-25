@@ -16,7 +16,6 @@
   --muted: #9796a3;
   --text: #f8f7fb;
   --soft: #d6d4e0;
-  --faint: #6c6a7c;
   --accent: oklch(66% 0.19 292);
   --accent-strong: oklch(72% 0.17 292);
   --accent-ink: oklch(99% 0 0);
@@ -33,7 +32,9 @@
   --status-published: oklch(74% 0.12 220);
   --ok: #22c55e;
   --bad: #ef4444;
+  --bad-soft: #fecaca;
   --warn: #f59e0b;
+  --warn-soft: #fde68a;
   --radius-sm: 10px;
   --radius: 16px;
   --radius-lg: 24px;
@@ -232,7 +233,7 @@ button.ghost:hover {
 }
 
 .pill.warn {
-  color: #fde68a;
+  color: var(--warn-soft);
   border-color: rgba(245, 158, 11, 0.4);
 }
 
@@ -297,6 +298,13 @@ select:focus,
 textarea:focus {
   border-color: var(--accent-strong);
   box-shadow: 0 0 0 4px oklch(from var(--accent) l c h / 16%);
+}
+
+button:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
 }
 
 input::placeholder,
@@ -389,12 +397,24 @@ textarea::placeholder {
 }
 
 .pill.bad {
-  color: #fecaca;
+  color: var(--bad-soft);
   border-color: rgba(239, 68, 68, 0.34);
 }
 
 .full-width {
   width: 100%;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (max-width: 720px) {
@@ -411,5 +431,16 @@ textarea::placeholder {
   }
   50% {
     opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

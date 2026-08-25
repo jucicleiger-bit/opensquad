@@ -26,6 +26,7 @@ export function SegmentGridTile({ imageUrl, alt, accent }: SegmentGridTileProps)
       <img
         src={imageUrl}
         alt={alt}
+        loading="lazy"
         style={{
           position: "absolute",
           inset: 0,

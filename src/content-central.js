@@ -35,6 +35,16 @@ export const OFFER_TYPES = new Set([
   'social_proof',
 ]);
 
+// Only sales/product-driven creative types are forced to have an operator
+// registered structure model. Service and content/relationship types must keep
+// the AI free to compose from the brief, brand, logo and optional product
+// photos instead of being blocked by a missing layout template.
+const CREATIVE_TEMPLATE_REQUIRED_POST_TYPES = new Set(['offer', 'combo', 'rodizio', 'delivery', 'product']);
+
+function requiresCreativeTemplate(postType) {
+  return CREATIVE_TEMPLATE_REQUIRED_POST_TYPES.has(postType);
+}
+
 const PILLAR_ROLES = new Set(['ensina', 'prova', 'posiciona', 'convida']);
 const PILLAR_VISUAL_TREATMENTS = new Set(['cru', 'leve', 'desenhado']);
 const DEFAULT_PILLAR_COLOR = '#7C7C7C';
@@ -239,6 +249,73 @@ const GOAL_TOPIC_TEMPLATES = {
     ctaDefault: 'Participe',
     buildObjective: (project) => `Divulgar um evento ou acontecimento real de ${project.name}, sem inventar data, local ou detalhe não informado.`,
   },
+};
+
+const TOPIC_IDEAS_PER_GOAL = 10;
+const TOPIC_IDEA_REFRESH_DAYS = 15;
+const TOPIC_IDEA_GOALS = new Set(['authority', 'brand_awareness', 'relationship', 'engagement', 'education']);
+
+const GOAL_TOPIC_ANGLE_BANK = {
+  authority: [
+    'o erro comum que revela falta de estratégia',
+    'o critério profissional antes de indicar uma solução',
+    'o que um especialista observa antes de agir',
+    'a diferença entre fazer por impulso e fazer com método',
+    'um bastidor técnico explicado de forma simples',
+    'o sinal de que o negócio precisa organizar o próximo passo',
+    'como evitar decisões baseadas só em aparência',
+    'o checklist mínimo para avaliar a situação atual',
+    'o que separa execução comum de execução estratégica',
+    'a pergunta que mostra se existe clareza suficiente',
+  ],
+  brand_awareness: [
+    'quem é a marca e qual problema ela ajuda a organizar',
+    'a forma simples de explicar o diferencial da marca',
+    'por que o público deve lembrar desta empresa',
+    'o posicionamento que torna a marca mais fácil de entender',
+    'a promessa segura de clareza que a marca pode sustentar',
+    'o antes mental do cliente quando ainda não conhece a marca',
+    'a frase que resume a maneira de trabalhar da empresa',
+    'o território visual/verbal que a marca quer ocupar',
+    'o motivo de acompanhar a marca antes de comprar',
+    'a diferença entre parecer presente e ser lembrado',
+  ],
+  relationship: [
+    'uma dúvida real que aproxima a marca do público',
+    'um bastidor humano sem virar autopromoção',
+    'uma pergunta leve que convida conversa',
+    'uma situação cotidiana que o público reconhece',
+    'um mito comum tratado com tom próximo',
+    'uma escolha difícil que o cliente vive no dia a dia',
+    'um conselho curto de quem entende a rotina do público',
+    'uma história simples sobre o jeito certo de começar',
+    'um convite para o público comparar a própria realidade',
+    'um ponto de empatia antes de falar de solução',
+  ],
+  engagement: [
+    'uma pergunta comparativa fácil de responder',
+    'um erro para o público marcar alguém que também comete',
+    'um checklist rápido para salvar',
+    'uma escolha entre duas opções comuns',
+    'uma frase de identificação para gerar comentário',
+    'um antes/depois conceitual sem prometer resultado',
+    'um teste simples para o público avaliar a própria situação',
+    'um alerta curto que vale compartilhar',
+    'um carrossel mental em formato de lista curta',
+    'uma provocação segura que abre conversa',
+  ],
+  education: [
+    'um conceito básico que o público costuma confundir',
+    'um passo prático para começar melhor',
+    'a explicação simples de por que uma ação falha',
+    'a ordem correta antes de investir tempo ou dinheiro',
+    'um termo técnico traduzido para linguagem de negócio',
+    'um erro de processo e como perceber cedo',
+    'uma mini-aula com exemplo concreto',
+    'uma regra de decisão segura',
+    'o que analisar antes de contratar ou comprar',
+    'uma diferença importante entre duas opções parecidas',
+  ],
 };
 
 const TEST_CREATIVE_VARIATIONS = [
@@ -494,11 +571,14 @@ export async function deleteCentralProject(projectId, targetDir = process.cwd())
 // Copies a marketing project's Raio-X (brand profile, offers, pillars,
 // rules) into a brand-new project so a similar client doesn't start from a
 // blank form. Deliberately narrow: no token, Instagram handle, approval
-// email, learnings, or asset files (logo/references) carry over — those are
-// per-project facts, not reusable strategy. createCentralProject does the
-// actual creation (id/name validation, folder scaffolding, manual-vivo.md)
-// so this only adds the one thing it doesn't accept as an option:
-// contentStrategy (offers/pillars/offerGroups always start empty there).
+// email, learnings, or brand-identity assets (logo/style references) carry
+// over — those are per-project facts, not reusable strategy. The one
+// exception is offerAssets: the product photos offers point to via
+// photoReferenceIds, which DO need to come along or duplicated offers show
+// broken images. createCentralProject does the actual creation (id/name
+// validation, folder scaffolding, manual-vivo.md) so this only adds what it
+// doesn't accept as an option: contentStrategy (offers/pillars/offerGroups
+// always start empty there) and the offer photo files/metadata.
 export async function duplicateCentralProject(sourceProjectId, options, targetDir = process.cwd()) {
   const sourcePaths = getCentralPaths(targetDir, sourceProjectId);
   const source = await loadProject(sourcePaths);
@@ -530,6 +610,18 @@ export async function duplicateCentralProject(sourceProjectId, options, targetDi
       pillars: JSON.parse(JSON.stringify(source.contentStrategy.pillars)),
       offerGroups: JSON.parse(JSON.stringify(source.contentStrategy.offerGroups)),
     };
+    current.offerAssets = JSON.parse(JSON.stringify(normalizeProjectOfferAssets(source)));
+    for (const asset of current.offerAssets) {
+      if (!asset?.relativePath) continue;
+      try {
+        const destFile = join(newPaths.projectDir, asset.relativePath);
+        await mkdir(dirname(destFile), { recursive: true });
+        await copyFile(join(sourcePaths.projectDir, asset.relativePath), destFile);
+      } catch {
+        // Source file missing/unreadable — leave the metadata; the offer's
+        // photo just won't render, same as any other broken reference.
+      }
+    }
     current.updatedAt = new Date().toISOString();
     await writeJson(newPaths.projectPath, current);
     await writeFile(newPaths.manualPath, buildManual(current), 'utf-8');
@@ -942,6 +1034,38 @@ export async function saveProjectWhatsAppInstance(projectId, input, targetDir = 
     project.updatedAt = now.toISOString();
     await writeJson(paths.projectPath, project);
     return project;
+  });
+}
+
+// Edits the handful of top-level fields set once at creation (createCentralProject)
+// and otherwise permanently stuck — display name, Instagram handle, approval
+// email, approval mode. projectId is deliberately not editable here: it's
+// the folder name on disk and the key every other record (content, offers,
+// learnings) is filed under, so renaming it is a real migration, not a
+// field edit — same reasoning duplicateProject already relies on.
+export async function updateProjectSettings(projectId, input = {}, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  if (input.name !== undefined) {
+    const name = String(input.name).trim();
+    if (!name) throw new Error('Nome do projeto é obrigatório.');
+    project.name = name;
+  }
+  if (input.handle !== undefined) {
+    project.instagram = { ...project.instagram, handle: normalizeHandle(input.handle) };
+  }
+  if (input.approvalEmail !== undefined) {
+    project.approvalEmail = String(input.approvalEmail).trim();
+  }
+  if (input.mode !== undefined) {
+    if (!SUPPORTED_MODES.has(input.mode)) throw new Error(`Unsupported project mode: ${input.mode}`);
+    project.mode = input.mode;
+  }
+  project.updatedAt = now.toISOString();
+  await writeJson(paths.projectPath, project);
+  await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+  return project;
   });
 }
 
@@ -1612,6 +1736,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
   const startDate = options.startDate || formatDate(new Date());
   const postTime = options.postTime || project.contentSettings.defaultPostTime || DEFAULT_TIME;
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
+  await refreshProjectTopicIdeasInPlace(project, paths, { topicIdeaGenerator: options.topicIdeaGenerator }, new Date());
   const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
   if (options.offersOnly && !topicCount) {
     throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
@@ -1621,7 +1746,26 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     topicCount
   );
   const selectedOfferRotator = createSelectedOfferRotator(project, options);
-  const batchId = `${startDate}-${String(days).padStart(2, '0')}d-${channel}`;
+  // A specific product/offer requested by id (e.g. "Teste rápido" picking one
+  // from "Ofertas e assuntos") — resolved directly against the offer list,
+  // bypassing buildContentTopic's pool-index rotation entirely. That pool is
+  // weekday-filtered and (when content goals are configured) interleaved
+  // with institutional topics via smoothWeightedRotation, so an index found
+  // in one pool call does not reliably land on the same offer in another
+  // pool call made with different context (see queuedOffer below, which
+  // already overrides baseTopic the same way for group-scoped generation).
+  let forcedOfferTopic = null;
+  if (options.offerId) {
+    const requestedOffer = activeProjectOffers(project).find((offer) => offer.id === options.offerId);
+    if (!requestedOffer) throw new Error('Produto/oferta não encontrado ou inativo.');
+    forcedOfferTopic = await offerToContentTopic(requestedOffer, targetDir);
+  }
+  // "Teste rápido" passes its own unique batchId (see simulateTestPost) —
+  // the default scheme below only varies by date+days+channel, so two runs
+  // on the same day/channel (a real batch and a test, or two tests back to
+  // back) would otherwise share one directory and the second write would
+  // silently clobber the first on disk.
+  const batchId = options.batchId || `${startDate}-${String(days).padStart(2, '0')}d-${channel}`;
   const batchDir = join(paths.draftsDir, batchId);
   const imageDir = join(batchDir, 'images');
   await mkdir(batchDir, { recursive: true });
@@ -1644,7 +1788,8 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     const aspectRatio = imageAspectRatioForChannel(channel);
     const contentId = `${project.projectId}-${scheduledDate}-${channel}`;
     const baseTopic = await buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) }, targetDir);
-    const queuedOffer = baseTopic.source === 'offer' ? await nextSelectedOffer(selectedOfferRotator, weekdayFromDate(scheduledDate), targetDir) : null;
+    const queuedOffer = forcedOfferTopic
+      || (baseTopic.source === 'offer' ? await nextSelectedOffer(selectedOfferRotator, weekdayFromDate(scheduledDate), targetDir) : null);
     const contentTopic = withProductRotationSeed({ ...baseTopic, ...(queuedOffer || {}), channel }, contentId);
     const filePath = join(batchDir, `day-${String(dayNumber).padStart(2, '0')}.json`);
     const imageFileName = `day-${String(dayNumber).padStart(2, '0')}.svg`;
@@ -1661,7 +1806,12 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
       formatLabel: CHANNEL_LABELS[channel] || channel,
       contentTopic,
       contentReview: buildContentReview({ channel, aspectRatio, dimensions, contentTopic }),
-      status: 'draft_generated',
+      // "Teste rápido" (see simulateTestPost) passes status: 'test_post_simulated'
+      // here so the card is never, even for the instant between this write
+      // and the image finishing, indistinguishable on disk from a real draft
+      // awaiting approval — anything reading listProjectContent mid-generation
+      // (Aguardando aprovação, the dashboard) would otherwise show it too.
+      status: options.status || 'draft_generated',
       title: `Dia ${dayNumber} — ${project.name}`,
       image: {
         localPath: imageLocalPath,
@@ -2701,6 +2851,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const formats = normalizeScheduleFormats(options.formats || []);
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
   const approvedPlanOverrides = buildApprovedPlanOverrideMap(options.approvedPlan);
+  await refreshProjectTopicIdeasInPlace(project, paths, { topicIdeaGenerator: options.topicIdeaGenerator }, new Date());
   const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
   if (options.offersOnly && !topicCount) {
     throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
@@ -2949,6 +3100,9 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
 
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
+  await refreshProjectTopicIdeas(projectId, { topicIdeaGenerator: options.topicIdeaGenerator, force: false }, targetDir, new Date());
+  const refreshedProject = await loadProject(paths);
+  Object.assign(project, refreshedProject);
   const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
   if (options.offersOnly && !topicCount) {
     throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
@@ -3275,6 +3429,7 @@ export function enqueueCatalogImageGeneration(projectId, batch, options = {}, ta
 
 export async function simulateTestPost(projectId, options = {}, targetDir = process.cwd(), now = new Date()) {
   const paths = getCentralPaths(targetDir, projectId);
+  await refreshProjectTopicIdeas(projectId, { topicIdeaGenerator: options.topicIdeaGenerator, force: false }, targetDir, now);
   const project = await loadProject(paths);
   // "Teste seguro" only knows how to simulate the marketing-mode AI-art
   // pipeline — a catalog project has no AI art to test, and letting it
@@ -3291,15 +3446,26 @@ export async function simulateTestPost(projectId, options = {}, targetDir = proc
   const note = options.note ? String(options.note).trim() : '';
   const runSeed = String(options.testSeed || now.toISOString());
   const variation = buildTestCreativeVariation(channel, note, runSeed);
+  // A unique batchId per test run — the default `${date}-01d-${channel}`
+  // scheme generateContentBatch falls back to would otherwise collide with
+  // a same-day/same-channel real batch (or an earlier test run today),
+  // silently overwriting whichever one existed on disk first. Also passes
+  // status straight through so the card is marked as a test from its very
+  // first write, never briefly indistinguishable from a real draft while
+  // the image is still generating.
   const batch = await generateContentBatch(projectId, {
     days: 1,
     startDate: options.startDate || formatDate(now),
     channel,
     topicOffset,
+    offerId: options.offerId || undefined,
+    batchId: `teste-${now.getTime()}-${channel}`,
+    status: 'test_post_simulated',
     contentRules: [
       note ? `Teste local antes de programar: ${note}` : 'Teste local antes de programar.',
       ...variation.rules,
     ],
+    topicIdeaGenerator: options.topicIdeaGenerator,
   }, targetDir);
   const content = batch.items[0];
   const simulatedAt = now.toISOString();
@@ -3801,6 +3967,43 @@ export async function applyExternalPublishResult(projectId, contentId, targetDir
   return item;
 }
 
+// Closes the gap runDuePublishSweep leaves open: a mediaUploadError item
+// only gets a fresh upload attempt when its scheduled slot actually comes
+// due, which can be days away, so the operator alert (media_upload_failed)
+// just sits there until either that deadline arrives or someone manually
+// retries from the Calendário. This sweep re-attempts the upload itself on
+// its own (slower) interval, so the alert clears — or the file's genuine
+// brokenness surfaces — well before the deadline instead of on it.
+export async function retryStuckMediaUploads(targetDir = process.cwd(), options = {}) {
+  if (typeof options.mediaUploader !== 'function') return { retried: [], failed: [] };
+  const now = options.now || new Date();
+  const retried = [];
+  const failed = [];
+
+  const projects = await listCentralProjects(targetDir);
+  for (const projectSummary of projects) {
+    const content = await listProjectContent(projectSummary.projectId, targetDir);
+    const stuck = content.filter((item) =>
+      item.status === 'aprovado' && !item.publish?.realPublished && !item.publish?.mediaUrl && item.publish?.mediaUploadError
+    );
+    for (const item of stuck) {
+      try {
+        const mediaUrl = await options.mediaUploader({ content: item, project: projectSummary });
+        item.publish = { ...item.publish, mediaUrl, mediaUploadError: null };
+        item.updatedAt = now.toISOString();
+        await writeJson(item.filePath, item);
+        retried.push(item.contentId);
+      } catch (err) {
+        item.publish = { ...item.publish, mediaUploadError: err.message };
+        item.updatedAt = now.toISOString();
+        await writeJson(item.filePath, item);
+        failed.push({ contentId: item.contentId, error: err.message });
+      }
+    }
+  }
+  return { retried, failed };
+}
+
 function isPublishDue(item, now) {
   if (!item.scheduledDate) return false;
   const dueAt = new Date(`${item.scheduledDate}T${item.scheduledTime || '00:00'}:00`);
@@ -3859,6 +4062,15 @@ export async function listSystemAlerts(targetDir = process.cwd()) {
   const alerts = [];
 
   for (const project of projects) {
+    if (project.contentStrategy?.topicIdeas?.warning) {
+      alerts.push({
+        type: 'topic_ideas_fallback',
+        projectId: project.projectId,
+        projectName: project.name,
+        message: project.contentStrategy.topicIdeas.warning,
+      });
+    }
+
     if (project.token?.status === 'expirado') {
       alerts.push({
         type: 'token_expired',
@@ -5043,21 +5255,203 @@ function brandXrayGroundingText(project) {
   return xray.blocks?.communication?.text || xray.blocks?.summary?.text || '';
 }
 
-function buildGoalContentTopic(goalKey, project) {
+function selectedTopicIdeaGoalKeys(project = {}) {
+  return [...new Set(project.brandInput?.contentGoals || [])]
+    .filter((goalKey) => TOPIC_IDEA_GOALS.has(goalKey) && GOAL_TOPIC_TEMPLATES[goalKey]);
+}
+
+function projectTopicIdeaContext(project = {}) {
+  const brandInput = project.brandInput || {};
+  const companyProfile = project.companyProfile || {};
+  const xray = project.brandXray?.status === 'approved' ? project.brandXray.blocks || {} : {};
+  return {
+    brandName: cleanText(brandInput.brandName || project.name),
+    segment: cleanText(companyProfile.segment || brandInput.segment || brandInput.segmentCategory || 'negócio local'),
+    productsOrServices: cleanText(companyProfile.productsOrServices || brandInput.productsOrServices || 'serviços/produtos principais'),
+    audience: cleanText(companyProfile.audience || brandInput.audience || 'público-alvo da marca'),
+    differential: cleanText(companyProfile.mainDifferential || brandInput.mainDifferential || brandInput.positioning || 'atendimento claro e confiável'),
+    xrayText: cleanText([xray.summary?.text, xray.communication?.text, xray.content?.text].filter(Boolean).join(' ')).slice(0, 900),
+  };
+}
+
+function topicIdeaTitle(goalKey, angle, context, index) {
+  const product = context.productsOrServices.split(',')[0].split(' e ')[0].trim() || context.segment;
+  const base = {
+    authority: `${product}: ${angle}`,
+    brand_awareness: `${context.brandName}: ${angle}`,
+    relationship: `${context.audience}: ${angle}`,
+    engagement: `${angle} em ${context.segment}`,
+    education: `${product}: ${angle}`,
+  }[goalKey] || `${context.segment}: ${angle}`;
+  return cleanText(base).slice(0, 110) || `${CONTENT_GOAL_LABELS[goalKey] || 'Tema'} ${index + 1}`;
+}
+
+function fallbackTopicIdeasForGoal(goalKey, project, now) {
+  const context = projectTopicIdeaContext(project);
+  const angles = GOAL_TOPIC_ANGLE_BANK[goalKey] || GOAL_TOPIC_ANGLE_BANK.education;
+  return angles.slice(0, TOPIC_IDEAS_PER_GOAL).map((angle, index) => {
+    const title = topicIdeaTitle(goalKey, angle, context, index);
+    return {
+      id: `${goalKey}-${slugify(title) || index + 1}`,
+      title,
+      angle,
+      detail: cleanText(`Conectar ${angle} com ${context.productsOrServices}, público ${context.audience} e diferencial: ${context.differential}.`),
+      source: 'fallback-raiox',
+      generatedAt: now.toISOString(),
+    };
+  });
+}
+
+function normalizeTopicIdeaItem(value, goalKey, index, now, source = 'ai') {
+  const raw = typeof value === 'string' ? { title: value } : (value || {});
+  const title = cleanText(raw.title || raw.assunto || raw.topic || raw.name || '');
+  if (!title) return null;
+  const angle = cleanText(raw.angle || raw.angulo || raw.hook || raw.gancho || raw.context || title);
+  const detail = cleanText(raw.detail || raw.detalhe || raw.complement || raw.complemento || raw.reason || raw.rationale || angle);
+  return {
+    id: `${goalKey}-${slugify(raw.id || title) || index + 1}`,
+    title: title.slice(0, 120),
+    angle: angle.slice(0, 180),
+    detail: detail.slice(0, 260),
+    source: cleanText(raw.source || source).slice(0, 40) || source,
+    generatedAt: now.toISOString(),
+  };
+}
+
+function normalizeGeneratedTopicIdeas(raw, goalKey, now) {
+  const candidates = Array.isArray(raw)
+    ? raw.filter((item) => !item.goalKey || item.goalKey === goalKey)
+    : (raw?.goals?.[goalKey]?.items || raw?.goals?.[goalKey] || raw?.[goalKey] || []);
+  return (Array.isArray(candidates) ? candidates : [])
+    .map((item, index) => normalizeTopicIdeaItem(item, goalKey, index, now, 'ai-web'))
+    .filter(Boolean);
+}
+
+function mergeTopicIdeas(primary, fallback) {
+  const seen = new Set();
+  const merged = [];
+  for (const item of [...primary, ...fallback]) {
+    const key = normalizeComparableText(item.title || item.angle || item.id);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+    if (merged.length >= TOPIC_IDEAS_PER_GOAL) break;
+  }
+  return merged;
+}
+
+function topicIdeaBankIsDue(bank, goalKeys, now) {
+  if (!goalKeys.length) return false;
+  if (!bank?.goals) return true;
+  if (bank.nextRefreshAt && new Date(bank.nextRefreshAt) <= now) return true;
+  return goalKeys.some((goalKey) => (bank.goals?.[goalKey]?.items || []).length < TOPIC_IDEAS_PER_GOAL);
+}
+
+async function buildTopicIdeaBank(project, goalKeys, options = {}, now = new Date()) {
+  let generated = null;
+  let error = '';
+  if (typeof options.topicIdeaGenerator === 'function') {
+    try {
+      generated = await options.topicIdeaGenerator({
+        project,
+        goalKeys,
+        goals: goalKeys.map((goalKey) => ({ key: goalKey, label: CONTENT_GOAL_LABELS[goalKey] || goalKey })),
+        ideasPerGoal: TOPIC_IDEAS_PER_GOAL,
+        refreshDays: TOPIC_IDEA_REFRESH_DAYS,
+        raioX: projectTopicIdeaContext(project),
+      });
+    } catch (err) {
+      error = err.message;
+      if (options.throwOnTopicIdeaGeneratorError) throw err;
+    }
+  }
+
+  const goals = {};
+  for (const goalKey of goalKeys) {
+    const fallback = fallbackTopicIdeasForGoal(goalKey, project, now);
+    const primary = normalizeGeneratedTopicIdeas(generated, goalKey, now);
+    goals[goalKey] = {
+      goalKey,
+      label: CONTENT_GOAL_LABELS[goalKey] || goalKey,
+      items: mergeTopicIdeas(primary, fallback),
+    };
+  }
+
+  return {
+    version: 1,
+    generatedAt: now.toISOString(),
+    nextRefreshAt: new Date(now.getTime() + TOPIC_IDEA_REFRESH_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+    ideasPerGoal: TOPIC_IDEAS_PER_GOAL,
+    refreshDays: TOPIC_IDEA_REFRESH_DAYS,
+    source: generated ? 'ai-web-with-raiox' : 'fallback-raiox',
+    ...(error ? { warning: `Gerador externo indisponível; usei fallback baseado no Raio-X. Detalhe: ${error}` } : {}),
+    goals,
+  };
+}
+
+async function refreshProjectTopicIdeasInPlace(project, paths, options = {}, now = new Date()) {
+  const goalKeys = selectedTopicIdeaGoalKeys(project);
+  if (!goalKeys.length) return null;
+  const existing = project.contentStrategy?.topicIdeas;
+  if (!options.force && !topicIdeaBankIsDue(existing, goalKeys, now)) return existing;
+  const topicIdeas = await buildTopicIdeaBank(project, goalKeys, options, now);
+  project.contentStrategy = {
+    ...(project.contentStrategy || {}),
+    topicIdeas,
+  };
+  project.updatedAt = now.toISOString();
+  await writeJson(paths.projectPath, project);
+  await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+  return topicIdeas;
+}
+
+export async function refreshProjectTopicIdeas(projectId, options = {}, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const topicIdeas = await refreshProjectTopicIdeasInPlace(project, paths, { ...options, force: options.force !== false }, now);
+    return { project, topicIdeas };
+  });
+}
+
+function projectGoalTopicIdeas(project, goalKey) {
+  return (project.contentStrategy?.topicIdeas?.goals?.[goalKey]?.items || [])
+    .map((item, index) => normalizeTopicIdeaItem(item, goalKey, index, new Date(item.generatedAt || project.contentStrategy?.topicIdeas?.generatedAt || Date.now()), item.source || 'stored'))
+    .filter(Boolean)
+    .slice(0, TOPIC_IDEAS_PER_GOAL);
+}
+
+function buildGoalContentTopics(goalKey, project) {
+  const ideas = projectGoalTopicIdeas(project, goalKey);
+  if (!ideas.length) {
+    const topic = buildGoalContentTopic(goalKey, project);
+    return topic ? [topic] : [];
+  }
+  return ideas.map((idea, index) => buildGoalContentTopic(goalKey, project, idea, index)).filter(Boolean);
+}
+
+function buildGoalContentTopic(goalKey, project, idea = null, index = 0) {
   const template = GOAL_TOPIC_TEMPLATES[goalKey];
   if (!template) return null;
+  const baseObjective = template.buildObjective(project, brandXrayGroundingText(project));
+  const ideaSuffix = idea
+    ? ` Assunto específico desta rodada: "${idea.title}". Ângulo: ${idea.angle}. Complemento/informação principal: ${idea.detail}. Não repetir os outros assuntos do mesmo banco nesta geração.`
+    : '';
   const topic = {
-    id: `goal-${goalKey}`,
+    id: idea ? `goal-${goalKey}-${slugify(idea.id || idea.title) || index + 1}` : `goal-${goalKey}`,
     type: template.type,
-    label: template.label,
+    label: idea ? `${template.label} — ${idea.title}` : template.label,
     source: 'goal',
     goalKey,
+    ideaId: idea?.id || '',
+    ideaTitle: idea?.title || '',
+    topicAngle: idea?.angle || '',
     price: '',
-    items: '',
+    items: idea?.detail || '',
     cta: '',
     autoGenerateCta: false,
-    notes: '',
-    objective: template.buildObjective(project, brandXrayGroundingText(project)),
+    notes: idea ? `Banco de assuntos quinzenal (${idea.source || 'raiox'}): ${idea.angle}` : '',
+    objective: `${baseObjective}${ideaSuffix}`,
   };
   topic.cta = salesGatedCta(topic, template.ctaDefault);
   return topic;
@@ -5217,8 +5611,8 @@ async function buildTopicPool(project, options = {}, targetDir) {
 
   const goalBuckets = (project.brandInput?.contentGoals || [])
     .map((goalKey) => {
-      const topic = buildGoalContentTopic(goalKey, project);
-      return topic ? { key: goalKey, topics: [topic] } : null;
+      const topics = buildGoalContentTopics(goalKey, project);
+      return topics.length ? { key: goalKey, topics } : null;
     })
     .filter(Boolean);
 
@@ -5794,6 +6188,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
+    || topic.ideaTitle
     || topic.label
     || project.name;
   const exactTitle = isFreeTitleTopic ? '' : normalizeCreativeTitle(topic.offerName || project.name);
@@ -5948,7 +6343,22 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? `Rodapé: chamada “${exactCta}” em texto pequeno, sem botão — logo/fechamento limpo domina.`
         : 'Rodapé: fechamento visual limpo (logo ou elemento decorativo), sem botão ou selo de CTA.',
       'A composição deve ter leitura clara de cima para baixo e aproveitar topo, centro e base.',
-    ]) : '',
+    ]) : section('ESTRUTURA FEED OBRIGATÓRIA', [
+      // Mirrors the Story block above with a positive zone-by-zone layout —
+      // a "não faça X" ban in RESTRIÇÕES FINAIS (below) wasn't enough on its
+      // own to stop the model from adding a decorative ribbon + icon row;
+      // a proscriptive struture with an explicit closed element list is what
+      // actually holds it, same as it does for Story.
+      'Topo: logo e/ou título principal — nenhuma faixa, ribbon ou selo decorativo acima ou ao redor do título.',
+      quantityRules.storyCenterLine || 'Centro: produto real em destaque, ocupando a maior área da composição.',
+      exactPrice ? 'Base: preço em um único selo compacto e legível — não duplicar em outro selo ou faixa.' : '',
+      exactCta
+        ? `Rodapé: chamada “${exactCta}” em texto ou botão simples — não repetir como selo/ícone extra. Se for botão, deixar respiro visível entre ele e a borda inferior.`
+        : 'Rodapé: fechamento limpo (logo), sem botão ou selo de CTA.',
+      'Exatamente estes blocos: nenhum selo secundário, fileira de ícones/benefícios ou faixa de texto fora do definido aqui.',
+      'Margem interna generosa em todos os lados: nenhum texto, selo, ícone, botão, @ ou logo pode tocar, ultrapassar ou ser cortado pela borda da imagem — vale pro rodapé inteiro, não só pro CTA.',
+      'Se algum texto (item, @ da marca, chamada) não couber inteiro dentro da margem no tamanho de fonte legível, encurtar o texto ou reduzir a fonte — nunca deixar vazar, quebrar de forma estranha ou sair cortado da arte.',
+    ]),
     section('HIERARQUIA', [
       quantityRules.heroLine || productFocus.heroLine || (productReferences.length ? '1. Produto/foto real em destaque.' : '1. Produto ou benefício principal em destaque.'),
       quantityRules.heroLine && productFocus.heroLine ? productFocus.heroLine : '',
@@ -5985,6 +6395,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     ]),
     section('RESTRIÇÕES FINAIS', [
       isVerticalStory ? 'Não criar composição com aparência de flyer quadrado centralizado.' : '',
+      // Feed doesn't get the Story's ESTRUTURA VERTICAL OBRIGATÓRIA lock, so
+      // without an explicit ban the model fills the extra canvas space with
+      // decorative ribbons/badge rows outside the HIERARQUIA list — and any
+      // text that small comes out garbled/illegible in the final render.
+      !isVerticalStory ? 'Não adicionar faixas, ribbons, selos secundários ou fileira de ícones com texto além dos elementos definidos em HIERARQUIA — texto em fonte muito pequena sai ilegível/embaralhado na geração final.' : '',
       exactPrice ? 'Não posicionar o preço no centro cobrindo o produto principal.' : '',
       productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
       ...productFocus.restrictionLines,
@@ -6340,7 +6755,7 @@ function cleanPromptText(value) {
 // — pulled out here as its own function so template lookup and prompt
 // building never drift into disagreeing about what counts as which type.
 function deriveCreativePostType(topic = {}) {
-  if (topic.source === 'goal') return 'institutional';
+  if (topic.source === 'goal') return topic.type === 'product' ? 'product' : 'institutional';
   if (topic.source === 'special_date' && !topic.offerId) return 'special_date';
   if (topic.source === 'ad_creative' && !topic.offerId) return 'ad_creative';
   return OFFER_TYPES.has(topic.type) ? topic.type : 'offer';
@@ -6430,14 +6845,19 @@ function buildPrimaryAiImageReferences(references, options = {}) {
       : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
   const postType = deriveCreativePostType(options.topic);
   const shape = creativeShapeGroupForChannel(options.channel);
-  // A template is mandatory, not a suggestion — only a segment_structure-
-  // tagged reference (an operator-authored creative structure with
-  // postType set) counts as a match; a segment_product reference or a
-  // legacy untagged layout_model reference never does, or generation
-  // would silently keep working exactly like before this change for any
-  // project holding one, defeating the whole point. A structure's shape
-  // is optional though — left blank by the operator, it's tagged "works
-  // for both" and matches whichever shape this generation needs.
+  const templateRequired = requiresCreativeTemplate(postType);
+  // A template is mandatory only for sales/product-driven post types. For
+  // service, orientation, desire, urgency, institutional and social-proof
+  // content, do not block generation and do not force a segment structure —
+  // those pieces should be composed freely from the brief and brand context.
+  // When a template is required, only a segment_structure-tagged reference
+  // (an operator-authored creative structure with the exact postType set)
+  // counts as a match; a segment_product reference or a legacy untagged
+  // layout_model reference never does, or generation would silently keep
+  // working exactly like before this change for any project holding one,
+  // defeating the point of the required structure rule. A structure's shape is
+  // optional though — left blank by the operator, it's tagged "works for both"
+  // and matches whichever shape this generation needs.
   const exactLayouts = selected.filter((reference) => (
     reference.role === 'layout_model'
     && reference.referenceKind === 'segment_structure'
@@ -6445,17 +6865,8 @@ function buildPrimaryAiImageReferences(references, options = {}) {
     && reference.postType === postType
     && (!reference.shape || reference.shape === shape)
   ));
-  const fallbackLayouts = postType === 'offer'
-    ? []
-    : selected.filter((reference) => (
-      reference.role === 'layout_model'
-      && reference.referenceKind === 'segment_structure'
-      && (!isStory || !isSquareLikeReference(reference))
-      && reference.postType === 'offer'
-      && (!reference.shape || reference.shape === shape)
-    ));
-  const matchingLayouts = exactLayouts.length ? exactLayouts : fallbackLayouts;
-  if (!matchingLayouts.length) {
+  const matchingLayouts = exactLayouts;
+  if (templateRequired && !matchingLayouts.length) {
     const postTypeLabel = CREATIVE_POST_TYPE_LABELS[postType] || postType;
     const shapeLabel = shape ? (CREATIVE_SHAPE_LABELS[shape] || shape) : 'formato desconhecido';
     throw new Error(`Nenhum modelo de criativo cadastrado para "${postTypeLabel}" / "${shapeLabel}" neste segmento — cadastre um modelo antes de gerar.`);
@@ -7832,7 +8243,6 @@ async function buildImageReferencePayload(project, paths, options = {}) {
   const postType = deriveCreativePostType(options.topic);
   const layoutReferences = await buildSegmentLayoutReferences(project, paths, {
     postType,
-    fallbackPostType: postType === 'offer' ? undefined : 'offer',
     shape: creativeShapeGroupForChannel(options.channel),
   });
   return [...projectReferences, ...layoutReferences];
@@ -7868,7 +8278,7 @@ function buildCaptionDraft(project, dayNumber, contentTopic = null) {
   if (contentTopic) {
     return [
       `Dia ${dayNumber}: ${contentTopic.label || offerTypeLabel(contentTopic.type)} para ${project.name}.`,
-      `Assunto: ${contentTopic.offerName || contentTopic.objective || contentTopic.label}.`,
+      `Assunto: ${contentTopic.offerName || contentTopic.ideaTitle || contentTopic.objective || contentTopic.label}.`,
       contentTopic.price ? `Preço: ${contentTopic.price}.` : 'Preço: não informar preço se não estiver cadastrado.',
       contentTopic.items ? `Itens/detalhes: ${contentTopic.items}.` : '',
       `Gancho: [criar chamada curta alinhada ao assunto]`,
