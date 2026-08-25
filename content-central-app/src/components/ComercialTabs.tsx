@@ -5,6 +5,7 @@ const TABS = [
   { to: "/comercial/catalogo", label: "Catálogo" },
   { to: "/comercial/agencia", label: "Minha Agência" },
   { to: "/comercial/portfolio", label: "Portfólio" },
+  { to: "/comercial/prospeccao", label: "Prospecção" },
   { to: "/comercial/propostas", label: "Propostas" },
 ];
 
