@@ -1263,6 +1263,28 @@ export function deleteCommercialPortfolioItem(id: string): Promise<{ id: string;
   return api(`/api/commercial/portfolio/${encodeURIComponent(id)}/delete`, { method: "POST" });
 }
 
+export interface CommercialProspect {
+  id: string;
+  name: string;
+  googleMapsUrl: string;
+  instagram: string;
+  phone: string;
+  status: "nao_contatado" | "contatado" | "respondeu" | "fechou";
+  createdAt: string;
+}
+
+export function listCommercialProspects(): Promise<{ items: CommercialProspect[] }> {
+  return api("/api/commercial/prospeccao");
+}
+
+export function saveCommercialProspect(input: Partial<CommercialProspect>): Promise<{ item: CommercialProspect }> {
+  return api("/api/commercial/prospeccao", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function deleteCommercialProspect(id: string): Promise<{ id: string; deleted: boolean }> {
+  return api(`/api/commercial/prospeccao/${encodeURIComponent(id)}/delete`, { method: "POST" });
+}
+
 export const CONTENT_GOAL_LABELS: Record<string, string> = {
   sell_products: "Vender produtos",
   sell_services: "Vender serviços",
