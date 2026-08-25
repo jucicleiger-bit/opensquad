@@ -68,6 +68,7 @@ export function ComercialProspeccao() {
         instagram: form.instagram,
         phone: form.phone,
         status: existing?.status,
+        createdAt: existing?.createdAt,
       });
       setShowForm(false);
       load();
@@ -96,6 +97,7 @@ export function ComercialProspeccao() {
       load();
     } catch (err) {
       setError((err as Error).message);
+      load();
     } finally {
       setDeletingId(null);
     }
@@ -202,7 +204,7 @@ export function ComercialProspeccao() {
                   <td>
                     <button type="button" className={styles.nameButton} onClick={() => startEdit(item)}>{item.name}</button>
                   </td>
-                  <td>{item.googleMapsUrl ? <a href={item.googleMapsUrl} target="_blank" rel="noreferrer">abrir</a> : "—"}</td>
+                  <td>{/^https?:\/\//.test(item.googleMapsUrl) ? <a href={item.googleMapsUrl} target="_blank" rel="noreferrer">abrir</a> : item.googleMapsUrl || "—"}</td>
                   <td>{item.instagram ? <a href={`https://instagram.com/${item.instagram.replace(/^@/, "")}`} target="_blank" rel="noreferrer">{item.instagram}</a> : "—"}</td>
                   <td>{item.phone || "—"}</td>
                   <td>
