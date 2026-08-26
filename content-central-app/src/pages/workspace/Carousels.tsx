@@ -62,7 +62,7 @@ export function Carousels() {
   // Roteiro + images finish in the background — poll while any carousel is
   // still generating, same pattern as AdCreatives.
   useEffect(() => {
-    if (!carousels?.some((entry) => entry.status === "generating")) return;
+    if (!carousels?.some((entry) => entry.status === "generating" || entry.slides.some((s) => s.image.generating))) return;
     const timer = setInterval(refresh, 3000);
     return () => clearInterval(timer);
   }, [carousels, refresh]);

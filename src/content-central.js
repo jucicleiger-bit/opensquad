@@ -2740,16 +2740,17 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
 async function enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options) {
   if (typeof options.imageGenerator !== 'function') {
     slide.image.generating = false;
+    carousel.updatedAt = new Date().toISOString();
     await writeJson(carousel.filePath, carousel);
     return;
   }
-  slide.image.prompt = buildImagePrompt(project, [], [], slide.order, {
-    channel: slide.channel,
-    contentTopic: slide.contentTopic,
-    logoReference: getProjectLogoReference(project, paths),
-  });
-  slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
   try {
+    slide.image.prompt = buildImagePrompt(project, [], [], slide.order, {
+      channel: slide.channel,
+      contentTopic: slide.contentTopic,
+      logoReference: getProjectLogoReference(project, paths),
+    });
+    slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
     await generateAiImageWithReviewLoop(slide, project, projectId, {
       imageGenerator: options.imageGenerator,
       imageReviewer: options.imageReviewer,
@@ -2761,6 +2762,7 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
     slide.imageGenerationError = err.message;
   }
   slide.image.generating = false;
+  carousel.updatedAt = new Date().toISOString();
   await writeJson(carousel.filePath, carousel);
 }
 
@@ -2790,6 +2792,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
       slide.imageGenerationError = carousel.outlineGenerationError;
     }
     carousel.status = 'ready';
+    carousel.updatedAt = new Date().toISOString();
     await writeJson(carousel.filePath, carousel);
     return;
   }
@@ -2806,6 +2809,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
       slideText: slide.slideText,
     });
   });
+  carousel.updatedAt = new Date().toISOString();
   await writeJson(carousel.filePath, carousel);
 
   await mapWithConcurrency(carousel.slides, BATCH_IMAGE_CONCURRENCY, (slide) => (
@@ -2813,6 +2817,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
   ));
 
   carousel.status = 'ready';
+  carousel.updatedAt = new Date().toISOString();
   await writeJson(carousel.filePath, carousel);
 }
 
