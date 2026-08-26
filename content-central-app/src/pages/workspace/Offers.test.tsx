@@ -443,6 +443,16 @@ describe("Offers", () => {
         },
       },
       { body: { project: {}, group: { ...pizzasGroup, comboChance: 30 } } },
+      {
+        body: {
+          projects: [{
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria",
+            contentStrategy: { offers: [], offerGroups: [{ ...pizzasGroup, comboChance: 30 }] },
+          }],
+          globalRules: {},
+        },
+      },
     ]);
     renderOffers();
 
