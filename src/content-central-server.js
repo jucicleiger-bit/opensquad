@@ -109,6 +109,11 @@ import {
   validateMetaToken,
 } from './content-central.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
+import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
+import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
+import { qualifySocialSellingLead } from './social-selling-ai.js';
+import { notifySocialSellingOperator } from './social-selling-notify.js';
+import { loadSocialSellingConfig } from './social-selling-store.js';
 
 export { CONTENT_CENTRAL_PERSONAS };
 
@@ -395,6 +400,8 @@ export async function startContentCentralServer({
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
   const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
+  const socialSellingRadarSchedulerTimer = startSocialSellingRadarScheduler(targetDir);
+  const socialSellingEngagementSchedulerTimer = startSocialSellingEngagementScheduler(targetDir);
 
   return {
     server,
@@ -404,6 +411,9 @@ export async function startContentCentralServer({
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
       if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
+      if (socialSellingRadarSchedulerTimer) clearInterval(socialSellingRadarSchedulerTimer);
+      if (socialSellingEngagementSchedulerTimer) clearInterval(socialSellingEngagementSchedulerTimer);
+      closeSocialSellingBrowser().catch(() => {});
       server.close((err) => (err ? reject(err) : resolve()));
     }),
   };
@@ -4713,6 +4723,49 @@ export function startStuckMediaRetryScheduler(targetDir) {
   const sweep = () => retryStuckMediaUploads(targetDir, {
     mediaUploader: ({ content, project }) => uploadContentMediaFresh(content, project.projectId, targetDir),
   }).catch((err) => console.error('[content-central] stuck media retry sweep failed:', err.message));
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// Own master switch, separate from OPENSQUAD_ENABLE_REAL_PUBLISHING —
+// that one gates publishing content the operator wrote; this one gates
+// software acting on other people's Instagram accounts on the
+// operator's behalf, a materially different risk. Stays 'false' until
+// turned on on purpose, after a dry run (OPENSQUAD_SOCIAL_SELLING_DRY_RUN).
+export function startSocialSellingRadarScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING !== 'true') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_SOCIAL_SELLING_RADAR_INTERVAL_MS || 1800000);
+  const dryRun = process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN === 'true';
+  const sweep = () => runSocialSellingRadarSweep(targetDir, {
+    discover: (config) => discoverSocialSellingCandidates(config, { targetDir, dryRun }),
+    qualify: (candidate, config) => qualifySocialSellingLead(candidate, config),
+  }).then(async (result) => {
+    if (result.blocked) {
+      const config = await loadSocialSellingConfig(targetDir);
+      await notifySocialSellingOperator(`Social selling (radar) pausado: ${result.blocked}. Verifique a conta manualmente.`, config);
+    }
+  }).catch((err) => console.error('[content-central] social selling radar sweep failed:', err.message));
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// Business-hours + daily-cap gated by runSocialSellingEngagementSweep
+// itself — this scheduler just ticks it frequently so a due lead is
+// picked up promptly once its window opens.
+export function startSocialSellingEngagementScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING !== 'true') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_SOCIAL_SELLING_ENGAGEMENT_INTERVAL_MS || 300000);
+  const dryRun = process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN === 'true';
+  const sweep = () => runSocialSellingEngagementSweep(targetDir, {
+    performAction: (payload) => performSocialSellingAction(payload, { targetDir, dryRun }),
+  }).then(async (result) => {
+    if (result.blocked) {
+      const config = await loadSocialSellingConfig(targetDir);
+      await notifySocialSellingOperator(`Social selling (engajamento) pausado: ${result.reason}. Verifique a conta manualmente.`, config);
+    }
+  }).catch((err) => console.error('[content-central] social selling engagement sweep failed:', err.message));
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;

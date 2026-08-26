@@ -36,6 +36,8 @@ import {
   startPublishScheduler,
   startWhatsAppPublishScheduler,
   startStuckMediaRetryScheduler,
+  startSocialSellingRadarScheduler,
+  startSocialSellingEngagementScheduler,
   uploadGeneratedImagePublicly,
   uploadGeneratedVideoPublicly,
   xaiAspectRatioForChannel,
@@ -4361,6 +4363,49 @@ test('startStuckMediaRetryScheduler starts when both real publishing and OPENSQU
   } finally {
     delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
     delete process.env.OPENSQUAD_GAVETA_DIR;
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('startSocialSellingRadarScheduler does not start when OPENSQUAD_ENABLE_SOCIAL_SELLING is not true', async () => {
+  delete process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING;
+  const timer = startSocialSellingRadarScheduler(process.cwd());
+  assert.equal(timer, null);
+});
+
+test('startSocialSellingRadarScheduler starts an interval when OPENSQUAD_ENABLE_SOCIAL_SELLING=true, independent of OPENSQUAD_ENABLE_REAL_PUBLISHING', async () => {
+  delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING = 'true';
+  process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN = 'true';
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-social-selling-server-'));
+  try {
+    const timer = startSocialSellingRadarScheduler(dir);
+    assert.notEqual(timer, null);
+    clearInterval(timer);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING;
+    delete process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN;
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('startSocialSellingEngagementScheduler does not start when OPENSQUAD_ENABLE_SOCIAL_SELLING is not true', async () => {
+  delete process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING;
+  const timer = startSocialSellingEngagementScheduler(process.cwd());
+  assert.equal(timer, null);
+});
+
+test('startSocialSellingEngagementScheduler starts an interval when OPENSQUAD_ENABLE_SOCIAL_SELLING=true', async () => {
+  process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING = 'true';
+  process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN = 'true';
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-social-selling-server-'));
+  try {
+    const timer = startSocialSellingEngagementScheduler(dir);
+    assert.notEqual(timer, null);
+    clearInterval(timer);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING;
+    delete process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN;
     await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });
