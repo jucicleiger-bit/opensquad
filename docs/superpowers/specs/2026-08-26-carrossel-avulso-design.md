@@ -68,11 +68,12 @@ carouselsDir: join(projectDir, 'content', 'carousels')
   format: string,          // formato escolhido pela IA (ex: "listicle")
   slideCount: number,
   slides: [{
-    slideId, order,
+    slideId, order, contentId, channel, formatLabel,
     slideText: string,     // headline + texto de apoio daquele slide
-    role: string,          // "cover" | "content" | "cta"
-    image: { localPath, prompt, references, aspectRatio, dimensions,
-              generating, generatedSource, mimeType, version, previewDataUrl },
+    role: 'cover' | 'content' | 'cta',
+    contentTopic: object | null,   // null até o roteiro resolver esse slide
+    image: { generating, prompt, references, aspectRatio, dimensions,
+              mimeType, version, url?, generatedSource? },
     imageGenerationError: string | null,
   }],
   outlineGenerationError: string | null,
@@ -82,11 +83,17 @@ carouselsDir: join(projectDir, 'content', 'carousels')
 }
 ```
 
-Imagens em `content/carousels/images/<carouselId>-slide-<n>.svg`, mesmo
-mecanismo de `writeGeneratedImage` já usado por ad creatives. Dimensão
-fixa `instagram_feed` (1080x1080, via `imageDimensionsForChannel`/
-`imageAspectRatioForChannel` já existentes) pra todo slide — carrossel
-real do Instagram exige mesmo formato em todas as folhas.
+Dimensão fixa `instagram_feed` (1080x1350, via `imageDimensionsForChannel`/
+`imageAspectRatioForChannel` já existentes — mesmo valor real que
+`instagram_feed` já usa hoje, não 1:1) pra todo slide — carrossel real do
+Instagram exige mesmo formato em todas as folhas.
+
+Sem placeholder SVG por slide (diferente de `AdCreative`, que gera 1 SVG
+de prévia na criação síncrona): cada slide nasce só com
+`image.generating: true`, sem prompt/referências — o prompt e as
+referências só existem depois que o roteiro (passo seguinte) resolve o
+`slideText` daquele slide. O front mostra texto/spinner enquanto
+`generating`, igual já faz quando `AdCreative` não tem `src` ainda.
 
 ## Geração — backend (`src/content-central.js`)
 
