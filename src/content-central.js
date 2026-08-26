@@ -7930,9 +7930,15 @@ function normalizeProjectOfferGroup(input, now = new Date(), existingGroups = []
   if (!name) throw new Error('Nome do grupo é obrigatório');
   const id = String(input?.id || uniqueOfferGroupId(name, existingGroups)).trim();
   const createdAt = input?.createdAt || now.toISOString();
+  // % chance (0-100) that a scheduled draw from this group pairs the offer
+  // with a random same-group sibling into one combo arte instead of a
+  // single-product post — see pickComboPartner. 0 (default) is the
+  // unchanged single-product behavior.
+  const comboChance = Math.max(0, Math.min(100, Math.round(Number(input?.comboChance)) || 0));
   return {
     id,
     name,
+    comboChance,
     createdAt,
     updatedAt: now.toISOString(),
   };

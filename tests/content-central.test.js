@@ -5032,6 +5032,23 @@ test('offer groups can be created, edited and deleted, and an offer can be assig
   });
 });
 
+test('offer group comboChance defaults to 0 and clamps to 0-100', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'combo-chance-clamp', name: 'Combo Chance Clamp' }, dir);
+    const { group: defaulted } = await saveProjectOfferGroup('combo-chance-clamp', { name: 'Geral' }, dir);
+    assert.equal(defaulted.comboChance, 0);
+
+    const { group: clampedHigh } = await saveProjectOfferGroup('combo-chance-clamp', { name: 'Alto', comboChance: 500 }, dir);
+    assert.equal(clampedHigh.comboChance, 100);
+
+    const { group: clampedLow } = await saveProjectOfferGroup('combo-chance-clamp', { name: 'Baixo', comboChance: -10 }, dir);
+    assert.equal(clampedLow.comboChance, 0);
+
+    const { group: set } = await saveProjectOfferGroup('combo-chance-clamp', { name: 'Definido', comboChance: 25 }, dir);
+    assert.equal(set.comboChance, 25);
+  });
+});
+
 test('offers from a deleted group are retained as history but never re-enter the generation pool', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'grupo-removido', name: 'Grupo Removido' }, dir);
