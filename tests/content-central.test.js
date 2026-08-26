@@ -5302,6 +5302,49 @@ test('a paired combo topic carries exactly one photo per offer through to real i
   });
 });
 
+test('an offer flagged uniqueProposal never pulls in a combo partner, even at comboChance=100', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'unique-proposal-primary', name: 'Unique Proposal Primary' }, dir);
+    const { group } = await saveProjectOfferGroup('unique-proposal-primary', { name: 'Pizzas', comboChance: 100 }, dir);
+    await saveProjectOffer('unique-proposal-primary', { name: 'Pizza Exclusiva', price: 'R$60', groupId: group.id, uniqueProposal: true }, dir);
+    await saveProjectOffer('unique-proposal-primary', { name: 'Pizza Comum', price: 'R$45', groupId: group.id }, dir);
+
+    const batch = await generateContentBatch('unique-proposal-primary', {
+      days: 2,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    const exclusiva = batch.items.find((item) => item.contentTopic.offerName === 'Pizza Exclusiva');
+    assert.ok(exclusiva, 'Pizza Exclusiva should still be drawn on its own turn');
+    assert.equal(exclusiva.contentTopic.type, 'offer');
+  });
+});
+
+test('an offer flagged uniqueProposal is never picked as another offer\'s combo partner, even at comboChance=100', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'unique-proposal-partner', name: 'Unique Proposal Partner' }, dir);
+    const { group } = await saveProjectOfferGroup('unique-proposal-partner', { name: 'Pizzas', comboChance: 100 }, dir);
+    await saveProjectOffer('unique-proposal-partner', { name: 'Pizza Comum', price: 'R$45', groupId: group.id }, dir);
+    await saveProjectOffer('unique-proposal-partner', { name: 'Pizza Exclusiva', price: 'R$60', groupId: group.id, uniqueProposal: true }, dir);
+
+    const batch = await generateContentBatch('unique-proposal-partner', {
+      days: 2,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    // "Pizza Comum" is the only non-flagged offer in the group, so its only
+    // possible partner is the flagged "Pizza Exclusiva" — with that excluded,
+    // no combo topic can ever be produced.
+    assert.ok(batch.items.every((item) => item.contentTopic.type !== 'combo'));
+  });
+});
+
 test('offersOnly excludes goal-driven topics entirely, generating a batch that is 100% the requested group', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'grupo-exclusivo', name: 'Grupo Exclusivo' }, dir);

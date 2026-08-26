@@ -5791,13 +5791,14 @@ function fitsWeekday(offer, weekday) {
 }
 
 function pickComboPartner(offers, primary, project, weekday) {
-  if (primary.type === 'combo' || !primary.groupId) return null;
+  if (primary.type === 'combo' || primary.uniqueProposal || !primary.groupId) return null;
   const group = normalizeProjectOfferGroups(project?.contentStrategy?.offerGroups || [])
     .find((entry) => entry.id === primary.groupId);
   const chance = group?.comboChance || 0;
   if (chance <= 0 || Math.random() * 100 >= chance) return null;
   const candidates = offers.filter((offer) => (
-    offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo' && fitsWeekday(offer, weekday)
+    offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo'
+    && !offer.uniqueProposal && fitsWeekday(offer, weekday)
   ));
   if (!candidates.length) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
@@ -7883,6 +7884,11 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
       ? String(input.layoutStrength).trim()
       : '',
     active: input?.active === false ? false : true,
+    // A unique/flagship product the operator never wants blended into a
+    // combo arte with another product — blocks it in both combo-pairing
+    // roles (see pickComboPartner). Default false: every existing offer
+    // stays exactly as combo-eligible as it is today.
+    uniqueProposal: input?.uniqueProposal === true,
     pillarId: String(input?.pillarId || '').trim() || null,
     // Groups let the operator organize offers/products (e.g. "Geral",
     // "Black Friday") and later choose which group(s) drive a specific
