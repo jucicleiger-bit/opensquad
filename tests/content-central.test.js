@@ -43,6 +43,9 @@ import {
   generateCarousel,
   listAdCreatives,
   listCarousels,
+  enqueueCarouselGeneration,
+  regenerateCarouselSlide,
+  enqueueCarouselSlideRegeneration,
   generateCatalogSchedulePlan,
   creativeShapeGroupForChannel,
   generateContentBatch,
@@ -8411,5 +8414,120 @@ test('listCentralProjects (a read path) does not throw on an already-stored, unb
     const found = projects.find((project) => project.projectId === 'pesos-corrompidos');
     assert.ok(found);
     assert.deepEqual(found.brandInput.contentGoalWeights, { authority: 90, engagement: 5 });
+  });
+});
+
+test('enqueueCarouselGeneration fills the roteiro and generates a real image per slide, isolating one slide\'s failure from the rest', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-full', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-full', { briefing: '3 dicas de pizza', slideCount: 3 }, dir);
+
+    let imageCall = 0;
+    enqueueCarouselGeneration('carrossel-full', carousel, {
+      outlineGenerator: async ({ briefing, slideCount }) => {
+        assert.equal(briefing, '3 dicas de pizza');
+        assert.equal(slideCount, 3);
+        return {
+          format: 'listicle',
+          slides: [
+            { role: 'cover', slideText: '3 dicas de pizza' },
+            { role: 'content', slideText: 'Dica 1: use forno bem quente' },
+            { role: 'cta', slideText: 'Salve esse post' },
+          ],
+        };
+      },
+      imageGenerator: async (payload) => {
+        imageCall += 1;
+        if (payload.content.contentTopic.objective.includes('Dica 1')) {
+          throw new Error('provider timeout');
+        }
+        return { url: `https://cdn.example.com/slide-${imageCall}.png`, mimeType: 'image/png' };
+      },
+    }, dir);
+
+    // Fire-and-forget — poll disk for the background pipeline to finish.
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-full', dir)).find((entry) => entry.carouselId === carousel.carouselId);
+      if (reloaded?.status === 'ready') break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(reloaded.status, 'ready');
+    assert.equal(reloaded.format, 'listicle');
+    assert.equal(reloaded.slides[0].slideText, '3 dicas de pizza');
+    assert.equal(reloaded.slides[0].role, 'cover');
+    assert.equal(reloaded.slides[0].image.url, 'https://cdn.example.com/slide-1.png');
+    assert.equal(reloaded.slides[0].imageGenerationError, null);
+    assert.match(reloaded.slides[1].imageGenerationError, /provider timeout/);
+    assert.equal(reloaded.slides[2].image.url, `https://cdn.example.com/slide-${imageCall}.png`);
+    assert.equal(reloaded.slides[2].imageGenerationError, null);
+    reloaded.slides.forEach((slide) => assert.equal(slide.image.generating, false));
+  });
+});
+
+test('enqueueCarouselGeneration records outlineGenerationError and marks every slide errored when the outline is invalid', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-roteiro-falho', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-roteiro-falho', { briefing: 'teste', slideCount: 2 }, dir);
+
+    enqueueCarouselGeneration('carrossel-roteiro-falho', carousel, {
+      outlineGenerator: async () => null,
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir);
+
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-roteiro-falho', dir)).find((entry) => entry.carouselId === carousel.carouselId);
+      if (reloaded?.status === 'ready') break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(reloaded.status, 'ready');
+    assert.match(reloaded.outlineGenerationError, /roteiro/i);
+    reloaded.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.imageGenerationError, reloaded.outlineGenerationError);
+    });
+  });
+});
+
+test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only the target slide\'s image', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-regen', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-regen', { briefing: 'teste', slideCount: 2 }, dir);
+    await new Promise((resolveDone) => {
+      enqueueCarouselGeneration('carrossel-regen', carousel, {
+        outlineGenerator: async () => ({
+          format: 'listicle',
+          slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
+        }),
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
+      }, dir);
+      setTimeout(resolveDone, 200);
+    });
+
+    const before = (await listCarousels('carrossel-regen', dir))[0];
+    const targetSlideId = before.slides[0].slideId;
+
+    const refreshed = await regenerateCarouselSlide('carrossel-regen', before.carouselId, targetSlideId, dir);
+    assert.equal(refreshed.slides.find((s) => s.slideId === targetSlideId).image.url, 'https://cdn.example.com/original.png', 'regenerateCarouselSlide only refreshes references, image unchanged until enqueue runs');
+
+    enqueueCarouselSlideRegeneration('carrossel-regen', before.carouselId, targetSlideId, {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/regenerated.png', mimeType: 'image/png' }),
+    }, dir);
+
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-regen', dir))[0];
+      const slide = reloaded.slides.find((s) => s.slideId === targetSlideId);
+      if (slide?.image.url === 'https://cdn.example.com/regenerated.png' && !slide.image.generating) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    const changedSlide = reloaded.slides.find((s) => s.slideId === targetSlideId);
+    const untouchedSlide = reloaded.slides.find((s) => s.slideId !== targetSlideId);
+    assert.equal(changedSlide.image.url, 'https://cdn.example.com/regenerated.png');
+    assert.equal(untouchedSlide.image.url, 'https://cdn.example.com/original.png', 'the other slide must be untouched');
   });
 });

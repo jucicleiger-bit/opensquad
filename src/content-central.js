@@ -2717,6 +2717,160 @@ export async function deleteCarousel(projectId, carouselId, targetDir = process.
   });
 }
 
+function buildCarouselSlideContentTopic({ project, order, slideCount, slideText }) {
+  return {
+    id: `carousel-slide-${order}`,
+    type: 'institutional',
+    label: `Carrossel — slide ${order}/${slideCount}`,
+    source: 'carousel',
+    price: '',
+    items: '',
+    cta: '',
+    autoGenerateCta: false,
+    notes: '',
+    objective: `Slide ${order} de ${slideCount} de um carrossel para ${project.name}. ${slideText}`,
+  };
+}
+
+// Fills in the real prompt/references for one slide and runs the actual AI
+// image generation, same shape as enrichAdCreativeWithRealImage — a failure
+// is recorded on the slide instead of thrown, so one bad slide never takes
+// down the rest of the carousel (see runCarouselGeneration's concurrency
+// loop below).
+async function enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options) {
+  if (typeof options.imageGenerator !== 'function') {
+    slide.image.generating = false;
+    await writeJson(carousel.filePath, carousel);
+    return;
+  }
+  slide.image.prompt = buildImagePrompt(project, [], [], slide.order, {
+    channel: slide.channel,
+    contentTopic: slide.contentTopic,
+    logoReference: getProjectLogoReference(project, paths),
+  });
+  slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
+  try {
+    await generateAiImageWithReviewLoop(slide, project, projectId, {
+      imageGenerator: options.imageGenerator,
+      imageReviewer: options.imageReviewer,
+      channel: slide.channel,
+      maxAttempts: options.maxCreativeAttempts,
+    });
+    slide.imageGenerationError = null;
+  } catch (err) {
+    slide.imageGenerationError = err.message;
+  }
+  slide.image.generating = false;
+  await writeJson(carousel.filePath, carousel);
+}
+
+// Full pipeline for a freshly created carousel: roteiro first (decides
+// slideText/role/format for every slide), then 1 real image per slide in
+// bounded parallel. All 3 workers below share the same in-memory `carousel`
+// object (mutating different slides[i]) — every writeJson call serializes
+// the current full object, so concurrent writes are safe (no partial file,
+// last write always reflects the freshest combined state; Node has no
+// thread-level race on the same in-memory object).
+async function runCarouselGeneration(carousel, project, projectId, options, paths) {
+  let outline = null;
+  if (typeof options.outlineGenerator === 'function') {
+    try {
+      outline = await options.outlineGenerator({ project, briefing: carousel.briefing, slideCount: carousel.slideCount });
+    } catch (err) {
+      carousel.outlineGenerationError = err.message;
+    }
+  }
+  const validOutline = outline && Array.isArray(outline.slides) && outline.slides.length === carousel.slideCount;
+  if (!validOutline) {
+    if (!carousel.outlineGenerationError) {
+      carousel.outlineGenerationError = 'O roteirista de IA não retornou um roteiro válido para este carrossel (resposta vazia ou incompleta). Apague e gere de novo para tentar outra vez.';
+    }
+    for (const slide of carousel.slides) {
+      slide.image.generating = false;
+      slide.imageGenerationError = carousel.outlineGenerationError;
+    }
+    carousel.status = 'ready';
+    await writeJson(carousel.filePath, carousel);
+    return;
+  }
+
+  carousel.format = outline.format || '';
+  carousel.slides.forEach((slide, index) => {
+    const outlineSlide = outline.slides[index];
+    slide.role = outlineSlide.role || 'content';
+    slide.slideText = outlineSlide.slideText || '';
+    slide.contentTopic = buildCarouselSlideContentTopic({
+      project,
+      order: slide.order,
+      slideCount: carousel.slideCount,
+      slideText: slide.slideText,
+    });
+  });
+  await writeJson(carousel.filePath, carousel);
+
+  await mapWithConcurrency(carousel.slides, BATCH_IMAGE_CONCURRENCY, (slide) => (
+    enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options)
+  ));
+
+  carousel.status = 'ready';
+  await writeJson(carousel.filePath, carousel);
+}
+
+// Fire-and-forget dispatch for the route handler — the request that created
+// the carousel has already responded with the placeholder by the time this
+// runs; the panel polls listCarousels for progress, same pattern as
+// enqueueAdCreativeImageGeneration.
+export function enqueueCarouselGeneration(projectId, carousel, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  loadProject(paths)
+    .then((project) => runCarouselGeneration(carousel, project, projectId, options, paths))
+    .catch((err) => {
+      console.error(`[content-central] background carousel generation failed for ${projectId}/${carousel.carouselId}:`, err.message);
+    });
+}
+
+// "Regenerar esse slide" — refreshes just that slide's image references
+// (references can change if the project's reference library changed since
+// the carousel was generated, same reasoning as regenerateAdCreative).
+// Roteiro and every other slide stay untouched. The actual re-generation is
+// kicked off separately by enqueueCarouselSlideRegeneration below, same
+// two-step shape as regenerateAdCreative + enqueueAdCreativeImageGeneration.
+export async function regenerateCarouselSlide(projectId, carouselId, slideId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+    if (!safeId) throw new Error('ID do carrossel inválido.');
+    const filePath = join(paths.carouselsDir, `${safeId}.json`);
+    const carousel = await readJson(filePath);
+    const slide = carousel.slides.find((entry) => entry.slideId === slideId);
+    if (!slide) throw new Error('Slide não encontrado.');
+    if (slide.contentTopic) {
+      slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
+    }
+    await writeJson(filePath, carousel);
+    return carousel;
+  });
+}
+
+export function enqueueCarouselSlideRegeneration(projectId, carouselId, slideId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+  loadProject(paths)
+    .then(async (project) => {
+      const filePath = join(paths.carouselsDir, `${safeId}.json`);
+      const carousel = await readJson(filePath);
+      const slide = carousel.slides.find((entry) => entry.slideId === slideId);
+      if (!slide) throw new Error('Slide não encontrado.');
+      slide.image.generating = true;
+      await writeJson(filePath, carousel);
+      await enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options);
+    })
+    .catch((err) => {
+      console.error(`[content-central] background carousel slide regeneration failed for ${projectId}/${carouselId}/${slideId}:`, err.message);
+    });
+}
+
 // How many items get a real AI image generated at once when a batch is
 // scheduled. Each generation is a slow (30s-3min) external call, so a large
 // batch run fully sequential could take tens of minutes; a small concurrency
