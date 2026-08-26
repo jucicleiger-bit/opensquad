@@ -5125,6 +5125,73 @@ test('generating a schedule with groupIds only pulls offers from the requested g
   });
 });
 
+test('a group with comboChance=100 always pairs the drawn offer with a same-group sibling into one combo topic', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'combo-pairing', name: 'Combo Pairing' }, dir);
+    const { group } = await saveProjectOfferGroup('combo-pairing', { name: 'Pizzas', comboChance: 100 }, dir);
+    await saveProjectOffer('combo-pairing', { name: 'Pizza Calabresa', price: 'R$45', groupId: group.id }, dir);
+    await saveProjectOffer('combo-pairing', { name: 'Pizza Marguerita', price: 'R$50', groupId: group.id }, dir);
+
+    const batch = await generateContentBatch('combo-pairing', {
+      days: 1,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    const topic = batch.items[0].contentTopic;
+    assert.equal(topic.type, 'combo');
+    assert.ok(topic.offerName.includes('Pizza Calabresa'));
+    assert.ok(topic.offerName.includes('Pizza Marguerita'));
+    assert.ok(topic.notes.includes('R$45'));
+    assert.ok(topic.notes.includes('R$50'));
+  });
+});
+
+test('comboChance=100 with only one offer in the group falls back to a single-product topic', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'combo-pairing-sozinho', name: 'Combo Pairing Sozinho' }, dir);
+    const { group } = await saveProjectOfferGroup('combo-pairing-sozinho', { name: 'Pizzas', comboChance: 100 }, dir);
+    await saveProjectOffer('combo-pairing-sozinho', { name: 'Pizza Única', price: 'R$45', groupId: group.id }, dir);
+
+    const batch = await generateContentBatch('combo-pairing-sozinho', {
+      days: 1,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    const topic = batch.items[0].contentTopic;
+    assert.equal(topic.type, 'offer');
+    assert.equal(topic.offerName, 'Pizza Única');
+  });
+});
+
+test('an offer that is already type combo is never paired again even with comboChance=100', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'combo-no-nest', name: 'Combo No Nest' }, dir);
+    const { group } = await saveProjectOfferGroup('combo-no-nest', { name: 'Promos', comboChance: 100 }, dir);
+    await saveProjectOffer('combo-no-nest', { name: 'Combo Família', type: 'combo', price: 'R$60', groupId: group.id }, dir);
+    await saveProjectOffer('combo-no-nest', { name: 'Pizza Solo', price: 'R$45', groupId: group.id }, dir);
+
+    const batch = await generateContentBatch('combo-no-nest', {
+      days: 2,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    // Neither draw should become a synthetic merged topic (id pattern
+    // "<a.id>+<b.id>") — "Combo Família" is already type combo (skips
+    // pairing as the primary), and "Pizza Solo" has no eligible non-combo
+    // partner to pair with (the only sibling is the combo itself).
+    assert.ok(batch.items.every((item) => !String(item.contentTopic.id || '').includes('+')));
+  });
+});
+
 test('offersOnly excludes goal-driven topics entirely, generating a batch that is 100% the requested group', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'grupo-exclusivo', name: 'Grupo Exclusivo' }, dir);

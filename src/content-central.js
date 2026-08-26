@@ -1789,7 +1789,7 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     const contentId = `${project.projectId}-${scheduledDate}-${channel}`;
     const baseTopic = await buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) }, targetDir);
     const queuedOffer = forcedOfferTopic
-      || (baseTopic.source === 'offer' ? await nextSelectedOffer(selectedOfferRotator, weekdayFromDate(scheduledDate), targetDir) : null);
+      || (baseTopic.source === 'offer' ? await nextSelectedOffer(selectedOfferRotator, weekdayFromDate(scheduledDate), targetDir, project) : null);
     const contentTopic = withProductRotationSeed({ ...baseTopic, ...(queuedOffer || {}), channel }, contentId);
     const filePath = join(batchDir, `day-${String(dayNumber).padStart(2, '0')}.json`);
     const imageFileName = `day-${String(dayNumber).padStart(2, '0')}.svg`;
@@ -2918,7 +2918,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
       topicCursor += 1;
     }
     if (topic.source === 'offer') {
-      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir);
+      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir, project);
       if (queuedOffer) {
         const queuedPillar = resolveTopicPillar(queuedOffer, activePillars);
         topic = {
@@ -3138,7 +3138,7 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
       topicCursor += 1;
     }
     if (topic.source === 'offer') {
-      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir);
+      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir, project);
       if (queuedOffer) {
         const queuedPillar = resolveTopicPillar(queuedOffer, activePillars);
         topic = {
@@ -5668,12 +5668,14 @@ function createSelectedOfferRotator(project, options = {}) {
   };
 }
 
-async function nextSelectedOffer(rotator, weekday, targetDir) {
+async function nextSelectedOffer(rotator, weekday, targetDir, project) {
   if (!rotator) return null;
   for (let index = 0; index < rotator.offers.length; index += 1) {
     const offer = rotator.offers[rotator.cursor % rotator.offers.length];
     rotator.cursor = normalizeTopicIndex(rotator.cursor + 1, rotator.offers.length);
     if (!weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday)) {
+      const partner = pickComboPartner(rotator.offers, offer, project);
+      if (partner) return buildComboOfferTopic(offer, partner, targetDir);
       return offerToContentTopic(offer, targetDir);
     }
   }
@@ -5771,6 +5773,55 @@ async function offerToContentTopic(offer, targetDir) {
     photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
     learningEntries: learning.entries.filter((entry) => entry.bucket === 'approved').map((entry) => entry.text),
   };
+}
+
+// Occasionally pairs the primary offer with a random same-group sibling
+// into one combo arte, instead of always a single product per post — a
+// large homogeneous catalog (e.g. 40 pizza flavors) otherwise reads as
+// "always one product, one arte". Chance is per-group (see comboChance on
+// normalizeProjectOfferGroup); 0/missing group = today's unchanged
+// behavior. Never fires for an offer that is already a manual combo
+// (type: 'combo') — combos never nest.
+function pickComboPartner(offers, primary, project) {
+  if (primary.type === 'combo' || !primary.groupId) return null;
+  const group = normalizeProjectOfferGroups(project?.contentStrategy?.offerGroups || [])
+    .find((entry) => entry.id === primary.groupId);
+  const chance = group?.comboChance || 0;
+  if (chance <= 0 || Math.random() * 100 >= chance) return null;
+  const candidates = offers.filter((offer) => (
+    offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo'
+  ));
+  if (!candidates.length) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
+// Builds a single synthetic "offer" pairing two real offers into one combo
+// arte (see pickComboPartner), then delegates entirely to
+// offerToContentTopic — so type: 'combo' resolution (objective, per-type
+// learning, CTA) is the exact same code path a manually-created combo
+// offer already uses. Price is never summed nor picked: both original
+// prices are shown as separate text in `notes` instead.
+async function buildComboOfferTopic(a, b, targetDir) {
+  const priceLabel = (offer) => offer.price || 'sem preço informado';
+  const merged = {
+    id: `${a.id}+${b.id}`,
+    name: `${a.name} + ${b.name}`,
+    type: 'combo',
+    price: '',
+    items: [a.items, b.items].filter(Boolean).join(' | '),
+    cta: '',
+    autoGenerateCta: true,
+    notes: [
+      `${a.name} - ${priceLabel(a)} | ${b.name} - ${priceLabel(b)}`,
+      a.notes,
+      b.notes,
+    ].filter(Boolean).join('\n'),
+    productTreatment: a.productTreatment || b.productTreatment,
+    layoutStrength: a.layoutStrength,
+    pillarId: a.pillarId,
+    photoReferenceIds: [...(a.photoReferenceIds || []), ...(b.photoReferenceIds || [])],
+  };
+  return offerToContentTopic(merged, targetDir);
 }
 
 // Per-offer-type base instruction, editable through offer-type-learnings.json
