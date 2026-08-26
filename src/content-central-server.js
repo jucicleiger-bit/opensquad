@@ -109,6 +109,11 @@ import {
   validateMetaToken,
 } from './content-central.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
+import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
+import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
+import { qualifySocialSellingLead } from './social-selling-ai.js';
+import { notifySocialSellingOperator } from './social-selling-notify.js';
+import { loadSocialSellingConfig, randomDelayMs } from './social-selling-store.js';
 
 export { CONTENT_CENTRAL_PERSONAS };
 
@@ -395,6 +400,8 @@ export async function startContentCentralServer({
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
   const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
+  const socialSellingRadarSchedulerTimer = startSocialSellingRadarScheduler(targetDir);
+  const socialSellingEngagementSchedulerTimer = startSocialSellingEngagementScheduler(targetDir);
 
   return {
     server,
@@ -404,6 +411,9 @@ export async function startContentCentralServer({
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
       if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
+      if (socialSellingRadarSchedulerTimer) clearInterval(socialSellingRadarSchedulerTimer);
+      if (socialSellingEngagementSchedulerTimer) clearInterval(socialSellingEngagementSchedulerTimer);
+      closeSocialSellingBrowser().catch(() => {});
       server.close((err) => (err ? reject(err) : resolve()));
     }),
   };
@@ -4716,6 +4726,88 @@ export function startStuckMediaRetryScheduler(targetDir) {
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;
+}
+
+// Own master switch, separate from OPENSQUAD_ENABLE_REAL_PUBLISHING —
+// that one gates publishing content the operator wrote; this one gates
+// software acting on other people's Instagram accounts on the
+// operator's behalf, a materially different risk. Stays 'false' until
+// turned on on purpose, after a dry run (OPENSQUAD_SOCIAL_SELLING_DRY_RUN).
+export function startSocialSellingRadarScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING !== 'true') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_SOCIAL_SELLING_RADAR_INTERVAL_MS || 1800000);
+  const dryRun = process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN === 'true';
+  // A radar sweep opens a lot of pages and can easily outlast its own
+  // interval — skip the tick rather than stacking a second concurrent sweep
+  // on the same browser context and state file.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runSocialSellingRadarSweep(targetDir, {
+      discover: (config) => discoverSocialSellingCandidates(config, { targetDir, dryRun }),
+      qualify: (candidate, config) => qualifySocialSellingLead(candidate, config),
+    }).then(async (result) => {
+      if (result.blocked) {
+        const config = await loadSocialSellingConfig(targetDir);
+        await notifySocialSellingOperator(`Social selling (radar) pausado: ${result.blocked}. Verifique a conta manualmente.`, config);
+      }
+    }).catch((err) => console.error('[content-central] social selling radar sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// The operator isn't watching the server console — anything that stops a
+// lead from moving has to reach them on WhatsApp, not just `blocked`.
+function socialSellingEngagementAlert(result) {
+  if (result.blocked) {
+    return `Social selling (engajamento) pausado: ${result.blockedReason || result.reason}. Verifique a conta manualmente.`;
+  }
+  if (result.giveUp) {
+    return `Social selling (engajamento): lead ${result.handle || '?'} descartado após falhas repetidas (${result.error}).`;
+  }
+  if (result.reason === 'action_failed') {
+    return `Social selling (engajamento): ação falhou em ${result.handle || '?'} (${result.error}). Nova tentativa em ~30-60 min.`;
+  }
+  return null;
+}
+
+// Business-hours + daily-cap gated by runSocialSellingEngagementSweep
+// itself — this scheduler just ticks it frequently so a due lead is
+// picked up promptly once its window opens.
+export function startSocialSellingEngagementScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING !== 'true') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_SOCIAL_SELLING_ENGAGEMENT_INTERVAL_MS || 300000);
+  const dryRun = process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN === 'true';
+  const sweep = () => runSocialSellingEngagementSweep(targetDir, {
+    performAction: (payload) => performSocialSellingAction(payload, { targetDir, dryRun }),
+  }).then(async (result) => {
+    const alert = socialSellingEngagementAlert(result);
+    if (!alert) return;
+    const config = await loadSocialSellingConfig(targetDir);
+    await notifySocialSellingOperator(alert, config);
+  }).catch((err) => console.error('[content-central] social selling engagement sweep failed:', err.message));
+
+  // Anti-ban (design doc): the gap between engagement sweeps must never be a
+  // fixed rhythm, so each sweep is scheduled a fresh random 60-140% of the
+  // configured interval after the previous one finished. The interval below
+  // is only a cheap clock ticking against that deadline — keeping one real
+  // timer handle means the caller's clearInterval always stops the chain,
+  // which a self-rescheduling setTimeout couldn't guarantee (the handle it
+  // returns goes stale on the first reschedule).
+  let dueAt = Date.now() + randomDelayMs(Math.round(intervalMs * 0.6), Math.round(intervalMs * 1.4));
+  let running = false;
+  return setInterval(() => {
+    if (running || Date.now() < dueAt) return;
+    running = true;
+    sweep().finally(() => {
+      running = false;
+      dueAt = Date.now() + randomDelayMs(Math.round(intervalMs * 0.6), Math.round(intervalMs * 1.4));
+    });
+  }, Math.max(1, Math.min(intervalMs, 15000)));
 }
 
 // Reuses the same authenticated Gmail account the old squads' approval/
