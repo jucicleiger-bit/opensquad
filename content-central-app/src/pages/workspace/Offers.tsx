@@ -51,6 +51,7 @@ const EMPTY_FORM = {
   groupId: "",
   daysOfWeek: [] as string[],
   active: true,
+  uniqueProposal: false,
   photoReferenceIds: [] as string[],
   productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
@@ -375,6 +376,7 @@ export function Offers() {
       groupId: offer.groupId || "",
       daysOfWeek: offer.daysOfWeek || [],
       active: offer.active !== false,
+      uniqueProposal: offer.uniqueProposal || false,
       photoReferenceIds: offer.photoReferenceIds || [],
       productTreatment: offer.productTreatment === "exact_asset" || offer.productTreatment === "creative_redraw"
         ? offer.productTreatment
@@ -744,6 +746,16 @@ export function Offers() {
               {isCatalog ? "Em estoque (entra na rotação de posts)" : "Ativo (entra nas próximas gerações)"}
             </label>
 
+            <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "8px 0 0" }}>
+              <input
+                type="checkbox"
+                checked={form.uniqueProposal}
+                onChange={(e) => setForm({ ...form, uniqueProposal: e.target.checked })}
+                style={{ width: 16, height: 16, minHeight: 0, flex: "0 0 auto" }}
+              />
+              Proposta única (nunca combinar)
+            </label>
+
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", marginTop: 12 }}>
               <label htmlFor="offer-notes" style={{ margin: 0 }}>Observações</label>
               <Button type="button" variant="secondary" onClick={handleSuggestDirection} disabled={suggestingDirection}>
@@ -915,6 +927,7 @@ export function Offers() {
                                 {offer.daysOfWeek.map((day) => WEEKDAY_LABELS[day] || day).join(", ")}
                               </span>
                             ) : null}
+                            {offer.uniqueProposal ? <span className="pill">proposta única</span> : null}
                           </div>
                           <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
                             {offer.items ? <div>{isCatalog ? "Detalhes" : "Itens"}: {offer.items}</div> : null}

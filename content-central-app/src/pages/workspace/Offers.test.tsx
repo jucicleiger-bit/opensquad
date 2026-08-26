@@ -111,6 +111,31 @@ describe("Offers", () => {
     expect(payload.layoutStrength).toBe("strict");
   });
 
+  it("saves an offer flagged as a unique proposal (never combined into a combo) and shows a pill for it", async () => {
+    const uniqueOffer = { ...RODIZIO_OFFER, name: "Pizza Exclusiva", uniqueProposal: true };
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {}, offer: uniqueOffer } },
+      { body: projectState([uniqueOffer]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Pizza Exclusiva");
+    await userEvent.click(screen.getByLabelText("Proposta única (nunca combinar)"));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    await screen.findByRole("button", { name: /Sem grupo/ });
+    await expandSection("Sem grupo");
+    expect(await screen.findByText("Pizza Exclusiva")).toBeInTheDocument();
+    expect(await screen.findByText("proposta única")).toBeInTheDocument();
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const payload = JSON.parse(saveCall[1].body as string);
+    expect(payload.uniqueProposal).toBe(true);
+  });
+
   it("deletes an offer through the real endpoint after confirmation", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     stubFetchSequence([{ body: projectState([RODIZIO_OFFER]) }, { body: { deleted: true } }, { body: projectState() }]);
