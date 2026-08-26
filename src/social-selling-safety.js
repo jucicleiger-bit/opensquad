@@ -7,7 +7,12 @@ export const ACTION_TYPES = ['like', 'comment', 'follow', 'dm'];
 export function isWithinBusinessHours(now, businessHours) {
   const day = now.getDay();
   const hour = now.getHours();
-  return businessHours.days.includes(day) && hour >= businessHours.startHour && hour < businessHours.endHour;
+  // businessHours is hand-edited by the operator — a missing or malformed
+  // `days` means "no window", never a crash inside the scheduler tick.
+  return Array.isArray(businessHours?.days)
+    && businessHours.days.includes(day)
+    && hour >= businessHours.startHour
+    && hour < businessHours.endHour;
 }
 
 function todayKey(now) {

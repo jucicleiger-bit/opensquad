@@ -10,6 +10,14 @@ test('isWithinBusinessHours is true only on configured weekdays within the hour 
   assert.equal(isWithinBusinessHours(new Date(2026, 7, 23, 10, 0), businessHours), false); // Sun Aug 23 2026
 });
 
+test('isWithinBusinessHours returns false instead of throwing when the hand-edited config has no usable days list', () => {
+  const now = new Date(2026, 7, 25, 10, 0); // Tue, inside any normal window
+  assert.equal(isWithinBusinessHours(now, { startHour: 9, endHour: 18 }), false);
+  assert.equal(isWithinBusinessHours(now, { days: null, startHour: 9, endHour: 18 }), false);
+  assert.equal(isWithinBusinessHours(now, { days: '1,2,3', startHour: 9, endHour: 18 }), false);
+  assert.equal(isWithinBusinessHours(now, {}), false);
+});
+
 test('recordAction resets counters on a new day and isUnderDailyLimit respects the configured cap', () => {
   const counters = { date: '2026-08-24', like: 5 };
   const dailyLimits = { like: 5, comment: 10, follow: 5, dm: 8 };

@@ -20,6 +20,11 @@ export const DEFAULT_SOCIAL_SELLING_CONFIG = {
     toSeguidoDays: { min: 1, max: 3 },
     toDmEnviado: { min: 0, max: 900000 },
   },
+  // Spread the first action of every lead discovered in the same radar
+  // sweep over the next half hour — otherwise N leads all become due at
+  // the same instant and fire back to back, which is exactly the burst
+  // pattern Instagram flags.
+  initialActionDelayMs: { min: 0, max: 1800000 },
   notifications: { wahaSessionName: null, operatorChatId: null },
 };
 

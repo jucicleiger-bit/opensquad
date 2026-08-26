@@ -10,6 +10,10 @@ import { draftSocialSellingDm } from './social-selling-ai.js';
 // looks far more like a bot than one long-lived session.
 let contextPromise = null;
 
+// Requires `npx playwright install chromium` to have been run once on this
+// machine before the first real (non-dry-run) use: `npm install playwright`
+// installs the library but not the browser binary itself, so without it this
+// call fails with "Executable doesn't exist".
 function getBrowserContext(targetDir) {
   if (!contextPromise) {
     const { socialSellingBrowserProfileDir } = getCentralPaths(targetDir);
@@ -110,6 +114,7 @@ export async function discoverSocialSellingCandidates(config, { targetDir, dryRu
       if (!(await latestPost.count())) continue;
       const postHref = await latestPost.getAttribute('href');
       await latestPost.click();
+      if (isBlockedUrl(page.url())) throw blockedError('instagram_blocked');
       await clickByAnyLabel(page, 'link', ['likes', 'curtidas']);
       const likers = await page.locator('div[role="dialog"] a[role="link"]').all();
       for (const liker of likers.slice(0, 10)) {
@@ -140,19 +145,29 @@ export async function performSocialSellingAction({ lead, action, config }, { tar
   const context = await getBrowserContext(targetDir);
   const page = await context.newPage();
   try {
-    await page.goto(lead.postUrl, { waitUntil: 'domcontentloaded' });
+    // like/comment must happen on the specific post the lead was found on;
+    // follow/dm are profile-level controls (the Follow button and the Message
+    // control only exist on a profile page) and must happen on the lead's own
+    // profile — never on whatever post surfaced them, which for a
+    // reference-mined lead belongs to the reference account, not to them.
+    const profileUrl = lead.profileUrl || `https://www.instagram.com/${String(lead.handle || '').replace(/^@/, '')}/`;
+    await page.goto(action === 'follow' || action === 'dm' ? profileUrl : lead.postUrl, { waitUntil: 'domcontentloaded' });
     if (isBlockedUrl(page.url())) return { blocked: true, reason: 'instagram_blocked' };
 
+    // A control we can't find is a selector/UI-copy problem, not evidence the
+    // account is flagged — throw a plain error so the sweep retries this one
+    // lead (and eventually drops it) instead of pausing the whole engine.
     if (action === 'like') {
-      await clickByAnyLabel(page, 'button', ['Like', 'Curtir']);
+      if (!(await clickByAnyLabel(page, 'button', ['Like', 'Curtir']))) throw new Error('Like button not found');
       return { ok: true };
     }
 
     if (action === 'comment') {
       const box = page.getByPlaceholder(/add a comment|adicione um comentário/i);
+      if (!(await box.count())) throw new Error('Comment box not found');
       await box.click();
       await box.fill(lead.draftComment || '');
-      await clickByAnyLabel(page, 'button', ['Post', 'Publicar']);
+      if (!(await clickByAnyLabel(page, 'button', ['Post', 'Publicar']))) throw new Error('Post button not found');
       return { ok: true };
     }
 

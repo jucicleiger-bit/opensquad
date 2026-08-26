@@ -49,6 +49,7 @@ import {
   approveContent,
   createCentralProject,
   generateCatalogSchedulePlan,
+  getCentralPaths,
   generateContentSchedulePlan,
   registerSegmentTemplate,
   saveLearningEntry,
@@ -4406,6 +4407,41 @@ test('startSocialSellingEngagementScheduler starts an interval when OPENSQUAD_EN
   } finally {
     delete process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING;
     delete process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN;
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
+test('startSocialSellingEngagementScheduler keeps sweeping on a jittered cadence and stops for good once its timer is cleared', async () => {
+  process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING = 'true';
+  process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN = 'true';
+  process.env.OPENSQUAD_SOCIAL_SELLING_ENGAGEMENT_INTERVAL_MS = '20';
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-social-selling-server-'));
+  let timer = null;
+  try {
+    const paths = getCentralPaths(dir);
+    await mkdir(paths.root, { recursive: true });
+    // All days, all hours — otherwise the sweep short-circuits on business
+    // hours and never touches the state file when this test happens to run
+    // at night or on a weekend.
+    await writeFile(paths.socialSellingConfigPath, JSON.stringify({ businessHours: { days: [0, 1, 2, 3, 4, 5, 6], startHour: 0, endHour: 24 } }), 'utf-8');
+
+    timer = startSocialSellingEngagementScheduler(dir);
+    assert.notEqual(timer, null);
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+    for (let waited = 0; waited < 5000 && !existsSync(paths.socialSellingStatePath); waited += 25) await sleep(25);
+    assert.equal(existsSync(paths.socialSellingStatePath), true, 'the scheduler never ran a sweep');
+
+    clearInterval(timer);
+    timer = null;
+    await sleep(200); // let any sweep still in flight finish writing
+    const stoppedAt = (await stat(paths.socialSellingStatePath)).mtimeMs;
+    await sleep(400); // ~20 more ticks would have landed if the chain were alive
+    assert.equal((await stat(paths.socialSellingStatePath)).mtimeMs, stoppedAt, 'clearInterval left the chain running');
+  } finally {
+    if (timer) clearInterval(timer);
+    delete process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING;
+    delete process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN;
+    delete process.env.OPENSQUAD_SOCIAL_SELLING_ENGAGEMENT_INTERVAL_MS;
     await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 });

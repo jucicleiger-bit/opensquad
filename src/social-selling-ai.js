@@ -7,8 +7,15 @@ const here = dirname(fileURLToPath(import.meta.url));
 const PROMPTS_DIR = join(here, 'social-selling-prompts');
 
 let cachedClient = null;
+// Prefer this project's own key (OPENSQUAD_* prefix, same convention as
+// OPENSQUAD_OPENAI_API_KEY) but keep the SDK's normal fallback chain
+// (ANTHROPIC_API_KEY / `ant auth login`) working when it isn't set.
 function getClient() {
-  if (!cachedClient) cachedClient = new Anthropic();
+  if (!cachedClient) {
+    cachedClient = process.env.OPENSQUAD_ANTHROPIC_API_KEY
+      ? new Anthropic({ apiKey: process.env.OPENSQUAD_ANTHROPIC_API_KEY })
+      : new Anthropic();
+  }
   return cachedClient;
 }
 

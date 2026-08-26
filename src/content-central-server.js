@@ -113,7 +113,7 @@ import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './s
 import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
 import { qualifySocialSellingLead } from './social-selling-ai.js';
 import { notifySocialSellingOperator } from './social-selling-notify.js';
-import { loadSocialSellingConfig } from './social-selling-store.js';
+import { loadSocialSellingConfig, randomDelayMs } from './social-selling-store.js';
 
 export { CONTENT_CENTRAL_PERSONAS };
 
@@ -4737,18 +4737,42 @@ export function startSocialSellingRadarScheduler(targetDir) {
   if (process.env.OPENSQUAD_ENABLE_SOCIAL_SELLING !== 'true') return null;
   const intervalMs = Number(process.env.OPENSQUAD_SOCIAL_SELLING_RADAR_INTERVAL_MS || 1800000);
   const dryRun = process.env.OPENSQUAD_SOCIAL_SELLING_DRY_RUN === 'true';
-  const sweep = () => runSocialSellingRadarSweep(targetDir, {
-    discover: (config) => discoverSocialSellingCandidates(config, { targetDir, dryRun }),
-    qualify: (candidate, config) => qualifySocialSellingLead(candidate, config),
-  }).then(async (result) => {
-    if (result.blocked) {
-      const config = await loadSocialSellingConfig(targetDir);
-      await notifySocialSellingOperator(`Social selling (radar) pausado: ${result.blocked}. Verifique a conta manualmente.`, config);
-    }
-  }).catch((err) => console.error('[content-central] social selling radar sweep failed:', err.message));
+  // A radar sweep opens a lot of pages and can easily outlast its own
+  // interval — skip the tick rather than stacking a second concurrent sweep
+  // on the same browser context and state file.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runSocialSellingRadarSweep(targetDir, {
+      discover: (config) => discoverSocialSellingCandidates(config, { targetDir, dryRun }),
+      qualify: (candidate, config) => qualifySocialSellingLead(candidate, config),
+    }).then(async (result) => {
+      if (result.blocked) {
+        const config = await loadSocialSellingConfig(targetDir);
+        await notifySocialSellingOperator(`Social selling (radar) pausado: ${result.blocked}. Verifique a conta manualmente.`, config);
+      }
+    }).catch((err) => console.error('[content-central] social selling radar sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;
+}
+
+// The operator isn't watching the server console — anything that stops a
+// lead from moving has to reach them on WhatsApp, not just `blocked`.
+function socialSellingEngagementAlert(result) {
+  if (result.blocked) {
+    return `Social selling (engajamento) pausado: ${result.blockedReason || result.reason}. Verifique a conta manualmente.`;
+  }
+  if (result.giveUp) {
+    return `Social selling (engajamento): lead ${result.handle || '?'} descartado após falhas repetidas (${result.error}).`;
+  }
+  if (result.reason === 'action_failed') {
+    return `Social selling (engajamento): ação falhou em ${result.handle || '?'} (${result.error}). Nova tentativa em ~30-60 min.`;
+  }
+  return null;
 }
 
 // Business-hours + daily-cap gated by runSocialSellingEngagementSweep
@@ -4761,14 +4785,29 @@ export function startSocialSellingEngagementScheduler(targetDir) {
   const sweep = () => runSocialSellingEngagementSweep(targetDir, {
     performAction: (payload) => performSocialSellingAction(payload, { targetDir, dryRun }),
   }).then(async (result) => {
-    if (result.blocked) {
-      const config = await loadSocialSellingConfig(targetDir);
-      await notifySocialSellingOperator(`Social selling (engajamento) pausado: ${result.reason}. Verifique a conta manualmente.`, config);
-    }
+    const alert = socialSellingEngagementAlert(result);
+    if (!alert) return;
+    const config = await loadSocialSellingConfig(targetDir);
+    await notifySocialSellingOperator(alert, config);
   }).catch((err) => console.error('[content-central] social selling engagement sweep failed:', err.message));
-  const timer = setInterval(sweep, intervalMs);
-  sweep();
-  return timer;
+
+  // Anti-ban (design doc): the gap between engagement sweeps must never be a
+  // fixed rhythm, so each sweep is scheduled a fresh random 60-140% of the
+  // configured interval after the previous one finished. The interval below
+  // is only a cheap clock ticking against that deadline — keeping one real
+  // timer handle means the caller's clearInterval always stops the chain,
+  // which a self-rescheduling setTimeout couldn't guarantee (the handle it
+  // returns goes stale on the first reschedule).
+  let dueAt = Date.now() + randomDelayMs(Math.round(intervalMs * 0.6), Math.round(intervalMs * 1.4));
+  let running = false;
+  return setInterval(() => {
+    if (running || Date.now() < dueAt) return;
+    running = true;
+    sweep().finally(() => {
+      running = false;
+      dueAt = Date.now() + randomDelayMs(Math.round(intervalMs * 0.6), Math.round(intervalMs * 1.4));
+    });
+  }, Math.max(1, Math.min(intervalMs, 15000)));
 }
 
 // Reuses the same authenticated Gmail account the old squads' approval/
