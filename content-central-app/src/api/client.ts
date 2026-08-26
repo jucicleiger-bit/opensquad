@@ -121,6 +121,7 @@ export const AUDIENCE_TYPE_LABELS: Record<string, string> = {
 export interface OfferGroup {
   id: string;
   name: string;
+  comboChance?: number;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1001,7 +1002,7 @@ export function deleteOffer(projectId: string, offerId: string): Promise<{ delet
   });
 }
 
-export function saveOfferGroup(projectId: string, input: { id?: string; name: string }): Promise<{ project: ProjectSummary; group: OfferGroup }> {
+export function saveOfferGroup(projectId: string, input: { id?: string; name: string; comboChance?: number }): Promise<{ project: ProjectSummary; group: OfferGroup }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/offer-groups`, {
     method: "POST",
     body: JSON.stringify(input),
