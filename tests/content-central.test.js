@@ -31,6 +31,7 @@ import {
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
   deleteAdCreative,
+  deleteCarousel,
   deleteLearningEntry,
   deleteProjectContent,
   deleteProjectReference,
@@ -39,7 +40,9 @@ import {
   enrichBatchItemsWithRealImages,
   enrichSegmentTemplateItemsForProspect,
   generateAdCreative,
+  generateCarousel,
   listAdCreatives,
+  listCarousels,
   generateCatalogSchedulePlan,
   creativeShapeGroupForChannel,
   generateContentBatch,
@@ -7858,6 +7861,70 @@ test('listAdCreatives returns an empty list for a project that never generated a
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'anuncio-vazio', name: 'Boss Pizzaria' }, dir);
     assert.deepEqual(await listAdCreatives('anuncio-vazio', dir), []);
+  });
+});
+
+test('generateCarousel creates a placeholder carousel with N generating slides, no image/roteiro yet', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-base', name: 'Boss Pizzaria' }, dir);
+
+    const carousel = await generateCarousel('carrossel-base', { briefing: '5 dicas de pizza', slideCount: 5 }, dir);
+
+    assert.equal(carousel.slideCount, 5);
+    assert.equal(carousel.slides.length, 5);
+    assert.equal(carousel.status, 'generating');
+    assert.equal(carousel.format, '');
+    assert.equal(carousel.outlineGenerationError, null);
+    carousel.slides.forEach((slide, index) => {
+      assert.equal(slide.order, index + 1);
+      assert.equal(slide.channel, 'instagram_feed');
+      assert.equal(slide.image.generating, true);
+      assert.deepEqual(slide.image.dimensions, { width: 1080, height: 1350 });
+      assert.equal(slide.contentTopic, null);
+      assert.equal(slide.slideText, '');
+    });
+  });
+});
+
+test('generateCarousel clamps slideCount to the 2-10 range and requires a briefing', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-clamp', name: 'Boss Pizzaria' }, dir);
+
+    const tooFew = await generateCarousel('carrossel-clamp', { briefing: 'teste', slideCount: 1 }, dir);
+    assert.equal(tooFew.slideCount, 2);
+
+    const tooMany = await generateCarousel('carrossel-clamp', { briefing: 'teste', slideCount: 99 }, dir);
+    assert.equal(tooMany.slideCount, 10);
+
+    await assert.rejects(
+      () => generateCarousel('carrossel-clamp', { briefing: '   ' }, dir),
+      /briefing/i,
+    );
+  });
+});
+
+test('listCarousels and deleteCarousel round-trip real files on disk', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-lista', name: 'Boss Pizzaria' }, dir);
+    const a = await generateCarousel('carrossel-lista', { briefing: 'briefing A', slideCount: 3 }, dir);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const b = await generateCarousel('carrossel-lista', { briefing: 'briefing B', slideCount: 4 }, dir);
+
+    const listed = await listCarousels('carrossel-lista', dir);
+    assert.equal(listed.length, 2);
+    assert.equal(listed[0].carouselId, b.carouselId, 'newest first');
+
+    await deleteCarousel('carrossel-lista', a.carouselId, dir);
+    const afterDelete = await listCarousels('carrossel-lista', dir);
+    assert.equal(afterDelete.length, 1);
+    assert.equal(afterDelete[0].carouselId, b.carouselId);
+  });
+});
+
+test('listCarousels returns an empty list for a project that never generated a carousel', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-vazio', name: 'Boss Pizzaria' }, dir);
+    assert.deepEqual(await listCarousels('carrossel-vazio', dir), []);
   });
 });
 

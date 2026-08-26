@@ -428,6 +428,10 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     // operator runs the actual campaign themselves in Ads Manager; this is
     // just where generated creative+copy variations live until downloaded.
     adCreativesDir: join(projectDir, 'content', 'ad-creatives'),
+    // Carousel (avulso) — same "separate from organic content" shape as
+    // ad creatives: no scheduledDate, no approval, no calendar. Each JSON
+    // holds N independently-regenerable slides instead of 1 image.
+    carouselsDir: join(projectDir, 'content', 'carousels'),
     tokenSecretPath: join(secretsDir, `${normalized}.token`),
   };
 }
@@ -2616,6 +2620,99 @@ export async function deleteAdCreative(projectId, adCreativeId, targetDir = proc
     const safeId = String(adCreativeId || '').replace(/[\\/]/g, '');
     if (!safeId) throw new Error('ID do criativo inválido.');
     await rm(join(paths.adCreativesDir, `${safeId}.json`), { force: true });
+    return { deleted: true };
+  });
+}
+
+const CAROUSEL_SLIDE_COUNT_MIN = 2;
+const CAROUSEL_SLIDE_COUNT_MAX = 10;
+
+function clampCarouselSlideCount(value) {
+  const numeric = Math.trunc(Number(value));
+  if (!Number.isFinite(numeric)) return CAROUSEL_SLIDE_COUNT_MIN;
+  return Math.min(CAROUSEL_SLIDE_COUNT_MAX, Math.max(CAROUSEL_SLIDE_COUNT_MIN, numeric));
+}
+
+function buildCarouselSlideSkeleton(carouselId, order) {
+  return {
+    slideId: `${carouselId}-slide-${order}`,
+    order,
+    role: 'content',
+    slideText: '',
+    contentTopic: null,
+    contentId: `${carouselId}-slide-${order}`,
+    channel: 'instagram_feed',
+    formatLabel: CHANNEL_LABELS.instagram_feed,
+    image: {
+      generating: true,
+      prompt: '',
+      references: [],
+      aspectRatio: imageAspectRatioForChannel(),
+      dimensions: imageDimensionsForChannel('instagram_feed'),
+      mimeType: 'image/png',
+      version: 1,
+    },
+    imageGenerationError: null,
+  };
+}
+
+// Carrossel avulso — same "separate from organic content" shape as ad
+// creatives (no scheduledDate, no approval, no calendar), but 1 JSON holds
+// N independently-regenerable slides instead of 1 image. This only builds
+// the placeholder skeleton synchronously (fast HTTP response); the actual
+// roteiro + per-slide images are filled in by enqueueCarouselGeneration in
+// the background — see that function below.
+export async function generateCarousel(projectId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const briefing = String(options.briefing || '').trim();
+    if (!briefing) throw new Error('Informe o briefing do carrossel.');
+    const slideCount = clampCarouselSlideCount(options.slideCount);
+    const carouselId = `${project.projectId}-carrossel-${Date.now()}`;
+    await mkdir(paths.carouselsDir, { recursive: true });
+    const filePath = join(paths.carouselsDir, `${carouselId}.json`);
+    const createdAt = new Date().toISOString();
+    const carousel = {
+      schemaVersion: 1,
+      carouselId,
+      projectId: project.projectId,
+      briefing,
+      format: '',
+      slideCount,
+      slides: Array.from({ length: slideCount }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1)),
+      outlineGenerationError: null,
+      status: 'generating',
+      createdAt,
+      updatedAt: createdAt,
+      filePath,
+    };
+    await writeJson(filePath, carousel);
+    return carousel;
+  });
+}
+
+export async function listCarousels(projectId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  let files;
+  try {
+    files = await readdir(paths.carouselsDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const items = await Promise.all(
+    files.filter((name) => name.endsWith('.json')).map((name) => readJson(join(paths.carouselsDir, name)))
+  );
+  return items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+export async function deleteCarousel(projectId, carouselId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+    if (!safeId) throw new Error('ID do carrossel inválido.');
+    await rm(join(paths.carouselsDir, `${safeId}.json`), { force: true });
     return { deleted: true };
   });
 }
