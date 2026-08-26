@@ -93,6 +93,7 @@ export interface ProjectOffer {
   autoGenerateCta?: boolean;
   notes?: string;
   active?: boolean;
+  uniqueProposal?: boolean;
   pillarId?: string | null;
   groupId?: string | null;
   daysOfWeek?: string[];
@@ -973,6 +974,7 @@ export interface SaveOfferInput {
   groupId?: string | null;
   daysOfWeek?: string[];
   active?: boolean;
+  uniqueProposal?: boolean;
   photoReferenceIds?: string[];
   productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
