@@ -15,6 +15,7 @@ import {
   buildAiImageReviewPrompt,
   buildCatalogOutpaintPrompt,
   buildAdCopyPrompt,
+  buildCarouselOutlinePrompt,
   CONTENT_CENTRAL_PERSONAS,
   buildDanteOptimizerPrompt,
   buildSofiaSocialCaptionPrompt,
@@ -492,6 +493,22 @@ test('ad copy prompt folds in the project\'s approved/avoid learnings from past 
 
   const promptWithoutLearnings = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' } });
   assert.doesNotMatch(promptWithoutLearnings, /APRENDIZADOS DE CONTEÚDOS ANTERIORES/i);
+});
+
+test('buildCarouselOutlinePrompt embeds the briefing, the requested slide count, and the instagram-feed.md formats reference verbatim', () => {
+  const prompt = buildCarouselOutlinePrompt({
+    project: { name: 'Boss Pizzaria', brandInput: { segment: 'Pizzaria' } },
+    briefing: '5 dicas de pizza',
+    slideCount: 5,
+    formatsReference: 'CONTEUDO-DE-REFERENCIA-UNICO-12345',
+  });
+
+  assert.match(prompt, /5 dicas de pizza/);
+  assert.match(prompt, /exatamente 5 slides/);
+  assert.match(prompt, /CONTEUDO-DE-REFERENCIA-UNICO-12345/);
+  assert.match(prompt, /Boss Pizzaria/);
+  assert.match(prompt, /"format"/);
+  assert.match(prompt, /"slideText"/);
 });
 
 test('content central loads OpenAI image settings from local env file without overriding process env', async () => {

@@ -64,6 +64,12 @@ import {
   enqueueAdCreativeImageGeneration,
   generateAdCreative,
   regenerateAdCreative,
+  deleteCarousel,
+  enqueueCarouselGeneration,
+  enqueueCarouselSlideRegeneration,
+  generateCarousel,
+  listCarousels,
+  regenerateCarouselSlide,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -347,6 +353,7 @@ export async function startContentCentralServer({
   imageReviewer = null,
   captionGenerator = null,
   adCopyGenerator = null,
+  carouselOutlineGenerator = null,
   brandAnalyzer = null,
   pillarSuggester = null,
   logoColorAnalyzer = null,
@@ -367,6 +374,7 @@ export async function startContentCentralServer({
     imageReviewer: imageReviewer || (enableAiImages ? reviewImageForActiveTextProvider : null),
     captionGenerator: captionGenerator || (enableAiImages ? writeAiCaptionWithHermes : null),
     adCopyGenerator: adCopyGenerator || (enableAiImages ? writeAdCopyVariationsWithHermes : null),
+    carouselOutlineGenerator: carouselOutlineGenerator || (enableAiImages ? (payload) => writeCarouselOutlineWithHermes({ ...payload, targetDir }) : null),
     brandAnalyzer: brandAnalyzer || (enableAiImages ? generateBrandXrayWithAi : null),
     pillarSuggester: pillarSuggester || (enableAiImages ? generatePillarSuggestionsWithAi : null),
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
@@ -4129,6 +4137,67 @@ async function writeAdCopyVariationsWithHermes({ adCreative, project, note, note
       cta: cleanText(entry?.cta),
     }))
     .filter((entry) => entry.headline && entry.primaryText);
+}
+
+// Reads the same carousel-format knowledge squads already use
+// (_opensquad/core/best-practices/instagram-feed.md) as prompt reference —
+// read from disk, never duplicated/hardcoded here. Missing file (e.g. a
+// stripped-down deployment) degrades gracefully: the AI still writes a
+// carousel, just without the format-specific slide-flow guidance.
+async function readCarouselFormatsReference(targetDir) {
+  try {
+    return await readFile(join(targetDir, '_opensquad', 'core', 'best-practices', 'instagram-feed.md'), 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }) {
+  return [
+    contentCentralPersonaLine('sofia'),
+    contentCentralPersonaResponsibilityLine('sofia'),
+    'Você é a roteirista responsável por transformar um briefing em um carrossel de Instagram.',
+    '',
+    'REFERÊNCIA DE FORMATOS DE CARROSSEL (escolha o mais adequado ao briefing; use como guia de estrutura, não copie o texto de exemplo)',
+    formatsReference || '(referência não disponível — use seu próprio critério editorial)',
+    '',
+    'EMPRESA',
+    `- Nome: ${project.name}`,
+    `- Segmento: ${project.brandInput?.segment || project.companyProfile?.segment || 'não informado'}`,
+    '',
+    'BRIEFING DO OPERADOR',
+    briefing,
+    '',
+    `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
+    'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
+    '- Nunca inventar preço, promoção, prazo, estoque, depoimento ou dado que não foi passado no briefing.',
+    '',
+    'Responda APENAS com um JSON válido, sem markdown e sem texto fora do JSON, neste formato exato:',
+    `{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`,
+  ].filter(Boolean).join('\n');
+}
+
+async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir }) {
+  const formatsReference = await readCarouselFormatsReference(targetDir);
+  const raw = await callAiText(buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }), 'OPENSQUAD_COPY_TIMEOUT_MS');
+  if (!raw) return null;
+  const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
+  if (!jsonText) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!parsed || !Array.isArray(parsed.slides)) return null;
+  const slides = parsed.slides
+    .map((entry) => ({
+      role: ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content',
+      slideText: String(entry?.slideText || '').trim(),
+    }))
+    .filter((entry) => entry.slideText);
+  if (slides.length !== slideCount) return null;
+  return { format: String(parsed.format || '').trim(), slides };
 }
 
 function audienceTypeToneLine(project) {
