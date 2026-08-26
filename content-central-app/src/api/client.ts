@@ -748,6 +748,72 @@ export function deleteAdCreative(projectId: string, adCreativeId: string): Promi
   });
 }
 
+// Carrossel avulso — same "separate from organic content" shape as
+// AdCreative: no scheduledDate, no approval, no calendar. 1 carousel holds
+// N independently-regenerable slides instead of 1 image.
+export interface CarouselSlide {
+  slideId: string;
+  order: number;
+  role: "cover" | "content" | "cta";
+  slideText: string;
+  image: {
+    url?: string;
+    previewUrl?: string;
+    generating?: boolean;
+    aspectRatio?: string;
+    dimensions?: { width: number; height: number };
+  };
+  imageGenerationError: string | null;
+}
+
+export interface Carousel {
+  carouselId: string;
+  projectId: string;
+  briefing: string;
+  format: string;
+  slideCount: number;
+  slides: CarouselSlide[];
+  outlineGenerationError: string | null;
+  status: "generating" | "ready";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function listCarousels(projectId: string): Promise<{ carousels: Carousel[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels`);
+}
+
+export interface GenerateCarouselInput {
+  briefing: string;
+  slideCount: number;
+}
+
+export function generateCarousel(
+  projectId: string,
+  input: GenerateCarouselInput,
+): Promise<{ carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function regenerateCarouselSlide(
+  projectId: string,
+  carouselId: string,
+  slideId: string,
+): Promise<{ carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-regenerate-slide/${encodeURIComponent(carouselId)}/${encodeURIComponent(slideId)}`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteCarousel(projectId: string, carouselId: string): Promise<{ deleted: boolean }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-delete/${encodeURIComponent(carouselId)}`, {
+    method: "POST",
+  });
+}
 
 // For catalog (venda direta) projects: no formats/channels matrix — just
 // how many days, how many stories per day, and when the first one goes out.
