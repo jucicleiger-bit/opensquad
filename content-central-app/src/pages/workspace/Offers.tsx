@@ -136,6 +136,7 @@ export function Offers() {
   const [editingGroupName, setEditingGroupName] = useState("");
   const [savingGroupId, setSavingGroupId] = useState<string | null>(null);
   const [deletingGroupId, setDeletingGroupId] = useState<string | null>(null);
+  const [savingComboGroupId, setSavingComboGroupId] = useState<string | null>(null);
 
   const [generalInfo, setGeneralInfo] = useState(project.contentSettings?.catalogGeneralInfo || "");
   const [generalInfoBusy, setGeneralInfoBusy] = useState(false);
@@ -268,6 +269,20 @@ export function Offers() {
       setGroupError((err as Error).message);
     } finally {
       setSavingGroupId(null);
+    }
+  }
+
+  async function handleSaveComboChance(group: OfferGroup, rawValue: string) {
+    const parsed = Math.max(0, Math.min(100, Math.round(Number(rawValue)) || 0));
+    setSavingComboGroupId(group.id);
+    setGroupError(null);
+    try {
+      await saveOfferGroup(project.projectId, { id: group.id, name: group.name, comboChance: parsed });
+      await refreshProject();
+    } catch (err) {
+      setGroupError((err as Error).message);
+    } finally {
+      setSavingComboGroupId(null);
     }
   }
 
@@ -479,6 +494,20 @@ export function Offers() {
                   ) : (
                     <>
                       <span className="pill" style={{ flex: 1, width: "max-content" }}>{group.name}</span>
+                      <label htmlFor={`combo-chance-${group.id}`} className="muted" style={{ fontSize: 12 }}>
+                        Combo %
+                      </label>
+                      <input
+                        id={`combo-chance-${group.id}`}
+                        type="number"
+                        min={0}
+                        max={100}
+                        defaultValue={group.comboChance ?? 0}
+                        disabled={savingComboGroupId === group.id}
+                        onBlur={(e) => handleSaveComboChance(group, e.target.value)}
+                        style={{ width: 64 }}
+                        title="Chance (0-100%) de juntar 2 produtos parecidos deste grupo na mesma arte"
+                      />
                       <Button type="button" variant="secondary" onClick={() => handleStartRenameGroup(group)}>
                         Renomear
                       </Button>

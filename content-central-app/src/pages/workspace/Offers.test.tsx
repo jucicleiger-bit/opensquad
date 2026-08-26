@@ -429,6 +429,47 @@ describe("Offers", () => {
     expect(JSON.parse(saveOfferCall[1].body as string).groupId).toBe("black-friday");
   });
 
+  it("saves a group's combo % (chance of pairing two similar products in one arte) on blur", async () => {
+    const pizzasGroup = { id: "pizzas", name: "Pizzas", comboChance: 0 };
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria",
+            contentStrategy: { offers: [], offerGroups: [pizzasGroup] },
+          }],
+          globalRules: {},
+        },
+      },
+      { body: { project: {}, group: { ...pizzasGroup, comboChance: 30 } } },
+      {
+        body: {
+          projects: [{
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria",
+            contentStrategy: { offers: [], offerGroups: [{ ...pizzasGroup, comboChance: 30 }] },
+          }],
+          globalRules: {},
+        },
+      },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Grupos de ofertas" }));
+    const comboInput = await screen.findByLabelText("Combo %");
+    await userEvent.clear(comboInput);
+    await userEvent.type(comboInput, "30");
+    await userEvent.tab();
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(saveCall[0]).toBe("/api/projects/boss-pizzaria/offer-groups");
+    const savedBody = JSON.parse(saveCall[1].body as string);
+    expect(savedBody.id).toBe("pizzas");
+    expect(savedBody.name).toBe("Pizzas");
+    expect(savedBody.comboChance).toBe(30);
+  });
+
   it("restricts an offer to selected weekdays and shows the chosen days as a pill in the list", async () => {
     const weekdayOffer = { ...RODIZIO_OFFER, name: "Rodízio Seg-Sex", daysOfWeek: ["mon", "tue", "wed", "thu", "fri"] };
     stubFetchSequence([
