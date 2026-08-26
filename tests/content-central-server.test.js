@@ -4204,6 +4204,124 @@ test('POST generate-special-date creates a real content card for the chosen date
   );
 });
 
+test('POST carousels creates a placeholder immediately and the background pipeline fills in the roteiro + real images', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'carrossel-http', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+
+      const generated = await request(server, '/api/projects/carrossel-http/carousels', {
+        method: 'POST',
+        body: JSON.stringify({ briefing: '3 dicas de pizza', slideCount: 3 }),
+      });
+      assert.equal(generated.response.status, 201);
+      assert.equal(generated.body.carousel.slideCount, 3);
+      assert.equal(generated.body.carousel.status, 'generating');
+
+      const carouselId = generated.body.carousel.carouselId;
+      let finalCarousel;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-http/carousels');
+        finalCarousel = body.carousels.find((entry) => entry.carouselId === carouselId);
+        if (finalCarousel?.status === 'ready') break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      assert.equal(finalCarousel.status, 'ready');
+      assert.equal(finalCarousel.format, 'listicle');
+      assert.equal(finalCarousel.slides.length, 3);
+      finalCarousel.slides.forEach((slide) => {
+        assert.equal(slide.image.generating, false);
+        assert.equal(slide.image.url, 'https://cdn.example.com/carrossel.png');
+      });
+    },
+    {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/carrossel.png', mimeType: 'image/png' }),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, index) => ({
+          role: index === 0 ? 'cover' : index === slideCount - 1 ? 'cta' : 'content',
+          slideText: `Slide ${index + 1}`,
+        })),
+      }),
+    },
+  );
+});
+
+test('carousels-delete removes it from the listing, and carousels-regenerate-slide replaces only the target slide', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'carrossel-http-2', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+      const generated = await request(server, '/api/projects/carrossel-http-2/carousels', {
+        method: 'POST',
+        body: JSON.stringify({ briefing: 'teste', slideCount: 2 }),
+      });
+      const carouselId = generated.body.carousel.carouselId;
+
+      let ready;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-http-2/carousels');
+        ready = body.carousels.find((entry) => entry.carouselId === carouselId);
+        if (ready?.status === 'ready') break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      const targetSlideId = ready.slides[0].slideId;
+      const otherSlideId = ready.slides[1].slideId;
+
+      const regenerated = await request(server, `/api/projects/carrossel-http-2/carousels-regenerate-slide/${carouselId}/${targetSlideId}`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      assert.equal(regenerated.response.status, 200);
+
+      let final;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-http-2/carousels');
+        final = body.carousels.find((entry) => entry.carouselId === carouselId);
+        const slide = final.slides.find((s) => s.slideId === targetSlideId);
+        if (slide?.image.url === 'https://cdn.example.com/regen.png' && !slide.image.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      assert.equal(final.slides.find((s) => s.slideId === targetSlideId).image.url, 'https://cdn.example.com/regen.png');
+      assert.equal(final.slides.find((s) => s.slideId === otherSlideId).image.url, 'https://cdn.example.com/original.png');
+
+      const deleted = await request(server, `/api/projects/carrossel-http-2/carousels-delete/${carouselId}`, { method: 'POST' });
+      assert.equal(deleted.response.status, 200);
+      const { body: afterDelete } = await request(server, '/api/projects/carrossel-http-2/carousels');
+      assert.equal(afterDelete.carousels.length, 0);
+    },
+    {
+      // Task 2's regenerate path never sends a `note` — unlike ad creatives,
+      // there's no edit-note UI for a carousel slide in this plan (it's a
+      // plain "regenerate this slide" click). So the original-vs-regenerated
+      // image is distinguished by call order instead: the 2 slides from
+      // `POST carousels` are calls 1-2 (concurrency 2, but both resolve
+      // synchronously here so call order is still deterministic array
+      // order), and the later `carousels-regenerate-slide` call is always
+      // call 3.
+      imageGenerator: (() => {
+        let call = 0;
+        return async () => {
+          call += 1;
+          return {
+            url: call <= 2 ? 'https://cdn.example.com/original.png' : 'https://cdn.example.com/regen.png',
+            mimeType: 'image/png',
+          };
+        };
+      })(),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, index) => ({ role: 'content', slideText: `Slide ${index + 1}` })),
+      }),
+    },
+  );
+});
+
 test('POST ad-creatives with format "ambos" generates one Story and one Feed ad creative in a single call', async () => {
   await withServer(
     async (_dir, server) => {
