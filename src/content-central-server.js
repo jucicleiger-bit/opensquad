@@ -723,6 +723,10 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { adCreatives: await listAdCreatives(projectId, targetDir) });
   }
 
+  if (method === 'GET' && parts.length === 4 && parts[3] === 'carousels') {
+    return sendJson(res, 200, { carousels: await listCarousels(projectId, targetDir) });
+  }
+
   if (method === 'GET' && parts.length === 4 && parts[3] === 'briefing') {
     const [projects, content] = await Promise.all([
       listCentralProjects(targetDir),
@@ -1160,6 +1164,36 @@ async function handleRequest(req, res, targetDir, context = {}) {
       skipCopy: true,
     }, targetDir);
     return sendJson(res, 200, { adCreative });
+  }
+
+  // Carrossel avulso — separate from every organic/ad-creative route above:
+  // no scheduledDate, no approval, no calendar, no publish. 1 briefing + N
+  // slide count in, N independently-regenerable slides out.
+  if (parts.length === 4 && parts[3] === 'carousels') {
+    const body = await readBody(req);
+    const briefing = String(body.briefing || '').trim();
+    if (!briefing) return sendJson(res, 400, { error: 'Informe o briefing do carrossel.' });
+    const carousel = await generateCarousel(projectId, { briefing, slideCount: body.slideCount }, targetDir);
+    enqueueCarouselGeneration(projectId, carousel, {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      outlineGenerator: context.carouselOutlineGenerator,
+    }, targetDir);
+    return sendJson(res, 201, { carousel });
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-delete') {
+    await deleteCarousel(projectId, parts[4], targetDir);
+    return sendJson(res, 200, { deleted: true });
+  }
+
+  if (parts.length === 6 && parts[3] === 'carousels-regenerate-slide') {
+    const carousel = await regenerateCarouselSlide(projectId, parts[4], parts[5], targetDir);
+    enqueueCarouselSlideRegeneration(projectId, parts[4], parts[5], {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+    }, targetDir);
+    return sendJson(res, 200, { carousel });
   }
 
   // Parallel endpoint for catalog (venda direta) projects: no formats/channels
