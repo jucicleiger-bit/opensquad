@@ -41,12 +41,14 @@
     "dashboard/"
   ],
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.120.0",
     "@inquirer/checkbox": "^5.1.0",
     "@inquirer/input": "^5.0.0",
     "@inquirer/select": "^5.1.0",
     "@jimp/core": "^1.6.1",
     "@jimp/plugin-print": "^1.6.1",
     "jimp": "^1.6.1",
+    "playwright": "^1.62.1",
     "sharp": "^0.35.3"
   },
   "devDependencies": {

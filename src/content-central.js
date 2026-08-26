@@ -400,6 +400,9 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     commercialProcessesPath: join(root, 'commercial-processes.json'),
     commercialPortfolioPath: join(root, 'commercial-portfolio.json'),
     commercialProspeccaoPath: join(root, 'commercial-prospeccao.json'),
+    socialSellingConfigPath: join(root, 'social-selling-instagram-config.json'),
+    socialSellingStatePath: join(root, 'social-selling-instagram-state.json'),
+    socialSellingBrowserProfileDir: join(root, 'social-selling-instagram-browser-profile'),
   };
 
   if (!projectId) return paths;
