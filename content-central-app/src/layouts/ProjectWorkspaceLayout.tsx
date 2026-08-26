@@ -22,6 +22,7 @@ const SECTIONS = [
   { to: "pilares", label: "Pilares", hideForCatalog: true, group: "Configuração" },
   { to: "gerar", label: "Agenda e geração", group: "Conteúdo" },
   { to: "anuncios", label: "Criativos de Anúncio", group: "Conteúdo" },
+  { to: "carrossel", label: "Carrossel", group: "Conteúdo" },
   { to: "teste", label: "Teste seguro", group: "Conteúdo" },
   { to: "aguardando", label: "Aguardando aprovação", group: "Conteúdo" },
   { to: "calendario", label: "Calendário", group: "Conteúdo" },
