@@ -5049,6 +5049,19 @@ test('offer group comboChance defaults to 0 and clamps to 0-100', async () => {
   });
 });
 
+test('renaming a group (partial payload, no comboChance) preserves its existing comboChance and createdAt', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'renomear-grupo', name: 'Renomear Grupo' }, dir);
+    const { group: created } = await saveProjectOfferGroup('renomear-grupo', { name: 'Pizzas', comboChance: 40 }, dir);
+    assert.equal(created.comboChance, 40);
+
+    const { group: renamed } = await saveProjectOfferGroup('renomear-grupo', { id: created.id, name: 'Pizzas Grandes' }, dir);
+    assert.equal(renamed.name, 'Pizzas Grandes');
+    assert.equal(renamed.comboChance, 40);
+    assert.equal(renamed.createdAt, created.createdAt);
+  });
+});
+
 test('offers from a deleted group are retained as history but never re-enter the generation pool', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'grupo-removido', name: 'Grupo Removido' }, dir);
@@ -5146,6 +5159,10 @@ test('a group with comboChance=100 always pairs the drawn offer with a same-grou
     assert.ok(topic.offerName.includes('Pizza Marguerita'));
     assert.ok(topic.notes.includes('R$45'));
     assert.ok(topic.notes.includes('R$50'));
+    // The price field itself must carry both prices too — leaving it empty
+    // would make downstream "no price registered" prompt logic contradict
+    // the notes text, which does mention both (see finding 2).
+    assert.equal(topic.price, 'R$45 + R$50');
   });
 });
 
@@ -5189,6 +5206,99 @@ test('an offer that is already type combo is never paired again even with comboC
     // pairing as the primary), and "Pizza Solo" has no eligible non-combo
     // partner to pair with (the only sibling is the combo itself).
     assert.ok(batch.items.every((item) => !String(item.contentTopic.id || '').includes('+')));
+  });
+});
+
+test('a combo partner restricted to a weekday the primary is NOT drawn on is never picked, falling back to single-product', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'combo-parceiro-dia', name: 'Combo Parceiro Dia' }, dir);
+    const { group } = await saveProjectOfferGroup('combo-parceiro-dia', { name: 'Pizzas', comboChance: 100 }, dir);
+    // Primary offer has no weekday restriction, so it is always drawn.
+    await saveProjectOffer('combo-parceiro-dia', { name: 'Pizza Calabresa', price: 'R$45', groupId: group.id }, dir);
+    // Its only same-group sibling is restricted to Saturdays — ineligible
+    // as a combo partner on a Monday draw (see finding 3).
+    await saveProjectOffer('combo-parceiro-dia', { name: 'Pizza Marguerita', price: 'R$50', groupId: group.id, daysOfWeek: ['sat'] }, dir);
+
+    // 2026-08-03 is a Monday.
+    const batch = await generateContentBatch('combo-parceiro-dia', {
+      days: 1,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+
+    const topic = batch.items[0].contentTopic;
+    assert.equal(topic.type, 'offer');
+    assert.equal(topic.offerName, 'Pizza Calabresa');
+  });
+});
+
+test('a paired combo topic carries exactly one photo per offer through to real image generation, never duplicating one offer\'s photos while dropping the other\'s', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'combo-fotos',
+      name: 'Combo Fotos',
+      handle: '@combofotos',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
+    const photoA = await saveProjectAsset('combo-fotos', {
+      kind: 'reference',
+      filename: 'pizza-calabresa.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da Pizza Calabresa, autorizada pela marca.',
+    }, dir);
+    const photoB = await saveProjectAsset('combo-fotos', {
+      kind: 'reference',
+      filename: 'pizza-marguerita.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da Pizza Marguerita, autorizada pela marca.',
+    }, dir);
+
+    const { group } = await saveProjectOfferGroup('combo-fotos', { name: 'Pizzas', comboChance: 100 }, dir);
+    await saveProjectOffer('combo-fotos', {
+      name: 'Pizza Calabresa', price: 'R$45', groupId: group.id, photoReferenceIds: [photoA.metadata.id],
+    }, dir);
+    await saveProjectOffer('combo-fotos', {
+      name: 'Pizza Marguerita', price: 'R$50', groupId: group.id, photoReferenceIds: [photoB.metadata.id],
+    }, dir);
+    await updateProjectBrandInput('combo-fotos', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'combo', 'feed', dir);
+
+    const batch = await generateContentBatch('combo-fotos', {
+      days: 1,
+      startDate: '2026-08-03',
+      channel: 'instagram_feed',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+    assert.equal(batch.items[0].contentTopic.type, 'combo');
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'combo-fotos');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'combo-fotos', {
+      imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/combo.png', mimeType: 'image/png' }; },
+    });
+
+    assert.equal(calls.length, 1);
+    // buildPrimaryAiImageReferences must end up with exactly one product
+    // photo from EACH paired offer — not two from one and none from the
+    // other (see finding 4).
+    const productPhotoIds = calls[0].content.image.references
+      .filter((reference) => reference.role === 'product_photo')
+      .map((reference) => reference.id)
+      .sort();
+    assert.deepEqual(productPhotoIds, [photoA.metadata.id, photoB.metadata.id].sort());
   });
 });
 

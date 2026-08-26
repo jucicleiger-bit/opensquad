@@ -1349,7 +1349,8 @@ export async function saveProjectOfferGroup(projectId, groupInput, targetDir = p
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
-  const group = normalizeProjectOfferGroup(groupInput, now, project.contentStrategy?.offerGroups || []);
+  const existing = (project.contentStrategy?.offerGroups || []).find((g) => g.id === String(groupInput?.id || '').trim());
+  const group = normalizeProjectOfferGroup({ ...existing, ...groupInput }, now, project.contentStrategy?.offerGroups || []);
   const currentGroups = normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []);
   const byId = new Map(currentGroups.map((item) => [item.id, item]));
   byId.set(group.id, group);
@@ -5673,8 +5674,8 @@ async function nextSelectedOffer(rotator, weekday, targetDir, project) {
   for (let index = 0; index < rotator.offers.length; index += 1) {
     const offer = rotator.offers[rotator.cursor % rotator.offers.length];
     rotator.cursor = normalizeTopicIndex(rotator.cursor + 1, rotator.offers.length);
-    if (!weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday)) {
-      const partner = pickComboPartner(rotator.offers, offer, project);
+    if (fitsWeekday(offer, weekday)) {
+      const partner = pickComboPartner(rotator.offers, offer, project, weekday);
       if (partner) return buildComboOfferTopic(offer, partner, targetDir);
       return offerToContentTopic(offer, targetDir);
     }
@@ -5782,14 +5783,18 @@ async function offerToContentTopic(offer, targetDir) {
 // normalizeProjectOfferGroup); 0/missing group = today's unchanged
 // behavior. Never fires for an offer that is already a manual combo
 // (type: 'combo') — combos never nest.
-function pickComboPartner(offers, primary, project) {
+function fitsWeekday(offer, weekday) {
+  return !weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday);
+}
+
+function pickComboPartner(offers, primary, project, weekday) {
   if (primary.type === 'combo' || !primary.groupId) return null;
   const group = normalizeProjectOfferGroups(project?.contentStrategy?.offerGroups || [])
     .find((entry) => entry.id === primary.groupId);
   const chance = group?.comboChance || 0;
   if (chance <= 0 || Math.random() * 100 >= chance) return null;
   const candidates = offers.filter((offer) => (
-    offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo'
+    offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo' && fitsWeekday(offer, weekday)
   ));
   if (!candidates.length) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
@@ -5799,15 +5804,19 @@ function pickComboPartner(offers, primary, project) {
 // arte (see pickComboPartner), then delegates entirely to
 // offerToContentTopic — so type: 'combo' resolution (objective, per-type
 // learning, CTA) is the exact same code path a manually-created combo
-// offer already uses. Price is never summed nor picked: both original
-// prices are shown as separate text in `notes` instead.
+// offer already uses. Price is never summed nor picked: both original price
+// labels are joined as text into the `price` field (and repeated in `notes`)
+// so downstream prompt code that treats an empty price as "don't mention a
+// price" still shows both. Only one photo per paired offer is carried over,
+// so the combo image can't end up using two photos from one offer and none
+// from the other (see buildPrimaryAiImageReferences' top-2 slice).
 async function buildComboOfferTopic(a, b, targetDir) {
   const priceLabel = (offer) => offer.price || 'sem preço informado';
   const merged = {
     id: `${a.id}+${b.id}`,
     name: `${a.name} + ${b.name}`,
     type: 'combo',
-    price: '',
+    price: [a.price, b.price].filter(Boolean).join(' + '),
     items: [a.items, b.items].filter(Boolean).join(' | '),
     cta: '',
     autoGenerateCta: true,
@@ -5819,7 +5828,7 @@ async function buildComboOfferTopic(a, b, targetDir) {
     productTreatment: a.productTreatment || b.productTreatment,
     layoutStrength: a.layoutStrength,
     pillarId: a.pillarId,
-    photoReferenceIds: [...(a.photoReferenceIds || []), ...(b.photoReferenceIds || [])],
+    photoReferenceIds: [(a.photoReferenceIds || [])[0], (b.photoReferenceIds || [])[0]].filter(Boolean),
   };
   return offerToContentTopic(merged, targetDir);
 }
