@@ -176,6 +176,36 @@ describe("Offers", () => {
     expect(JSON.parse(saveCall[1].body as string).id).toBe(RODIZIO_OFFER.id);
   });
 
+  it("preserves the uniqueProposal flag when editing an offer (round-trip through form)", async () => {
+    const uniqueOffer = { ...RODIZIO_OFFER, uniqueProposal: true };
+    const updated = { ...uniqueOffer, price: "R$59,90" };
+    stubFetchSequence([
+      { body: projectState([uniqueOffer]) },
+      { body: { project: {}, offer: updated } },
+      { body: projectState([updated]) },
+    ]);
+    renderOffers();
+
+    await expandSection("Sem grupo");
+    await screen.findByText("Rodízio da Boss");
+    await userEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    // Assert that handleEdit correctly populated form.uniqueProposal from the offer
+    const uniqueCheckbox = screen.getByLabelText("Proposta única (nunca combinar)") as HTMLInputElement;
+    expect(uniqueCheckbox).toBeChecked();
+
+    // Make a change to trigger a save (modify the price)
+    const priceField = screen.getByLabelText("Preço") as HTMLInputElement;
+    await userEvent.clear(priceField);
+    await userEvent.type(priceField, "R$59,90");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar edição" }));
+
+    // Verify the save call round-tripped uniqueProposal: true in the payload
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const payload = JSON.parse(saveCall[1].body as string);
+    expect(payload.uniqueProposal).toBe(true);
+  });
+
   it("renders catalog (venda direta) projects as Produtos, hiding Tipo/CTA/Pilar and requiring a photo upload field", async () => {
     stubFetchSequence([{
       body: {
