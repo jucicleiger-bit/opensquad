@@ -2734,6 +2734,10 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
     // an independent one-off flyer instead of part of one sequence — see
     // formatContentTopicLines for the matching "vary structure" opt-out.
     objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Escrever literalmente, de forma legível e bem diagramada, este texto neste slide: "${slideText}". Usar o mesmo template visual (paleta, tipografia, moldura, posição da logo) em todos os slides deste carrossel — muda só o conteúdo de texto de cada slide, o restante da diagramação deve parecer a mesma peça continuando.`,
+    // Read by buildChatGptFinalCardPrompt's carousel FORMATO branch to
+    // decide whether this slide gets the "swipe for more" arrow — every
+    // slide except the last one, which is where the sequence actually ends.
+    isLastCarouselSlide: order === slideCount,
   };
 }
 
@@ -6621,6 +6625,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       topic.source === 'carousel'
         ? 'Manter respiro/margem nas bordas do canvas; título ocupando no máximo ~25-30% da altura do slide, sem letras gigantes tomando o slide inteiro; hierarquia de texto proporcional, como um card de carrossel explicativo, não um anúncio de impacto único.'
         : 'Preencher todo o canvas; manter título, preço, CTA e logo dentro da área segura.',
+      // Only slides that actually have a next page — the last slide (CTA)
+      // is where the sequence ends, an arrow there would point at nothing.
+      topic.source === 'carousel' && !topic.isLastCarouselSlide
+        ? 'Adicionar um pequeno indicador visual de "arraste para o lado" no canto inferior direito do slide (ex.: seta/chevron simples, discreto, na cor de acento da marca) — sinaliza que o carrossel continua no próximo slide.'
+        : '',
     ]),
     // Only present when runCarouselGeneration/enqueueCarouselSlideRegeneration
     // resolved slide 1's own generated file — see generateAiImageWithReviewLoop,
