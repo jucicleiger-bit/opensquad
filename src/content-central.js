@@ -2742,7 +2742,7 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
 // is recorded on the slide instead of thrown, so one bad slide never takes
 // down the rest of the carousel (see runCarouselGeneration's concurrency
 // loop below).
-async function enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options) {
+async function enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath = null) {
   if (typeof options.imageGenerator !== 'function') {
     slide.image.generating = false;
     carousel.updatedAt = new Date().toISOString();
@@ -2765,6 +2765,10 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
       imageReviewer: options.imageReviewer,
       channel: slide.channel,
       maxAttempts: options.maxCreativeAttempts,
+      // Slide 1's own already-generated image, attached as an actual
+      // reference file (not just a text instruction) — see
+      // runCarouselGeneration for how this is resolved.
+      styleReferenceAbsolutePath: styleReferencePath,
     });
     slide.imageGenerationError = null;
   } catch (err) {
@@ -2821,8 +2825,25 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
   carousel.updatedAt = new Date().toISOString();
   await writeJson(carousel.filePath, carousel);
 
-  await mapWithConcurrency(carousel.slides, BATCH_IMAGE_CONCURRENCY, (slide) => (
-    enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options)
+  // Slide 1 goes first, alone — every other slide then gets its finished
+  // image as a real reference file (not just a prompt instruction), so the
+  // template/palette/typography actually repeats instead of each slide
+  // being its own independent roll of the dice. options.resolveCarouselStyleReference
+  // is optional and best-effort: no AI images configured, provider doesn't
+  // expose a local file, or slide 1 itself failed all resolve to null and
+  // the rest of the carousel still generates fine, just back to
+  // prompt-only consistency (see the "MESMO template" line in
+  // buildCarouselSlideContentTopic).
+  const [firstSlide, ...restSlides] = carousel.slides;
+  if (firstSlide) {
+    await enrichCarouselSlideWithRealImage(carousel, firstSlide, project, projectId, paths, options);
+  }
+  const styleReferencePath = typeof options.resolveCarouselStyleReference === 'function' && firstSlide
+    ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+    : null;
+
+  await mapWithConcurrency(restSlides, BATCH_IMAGE_CONCURRENCY, (slide) => (
+    enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath)
   ));
 
   carousel.status = 'ready';
@@ -2878,7 +2899,16 @@ export function enqueueCarouselSlideRegeneration(projectId, carouselId, slideId,
       if (!slide) throw new Error('Slide não encontrado.');
       slide.image.generating = true;
       await writeJson(filePath, carousel);
-      await enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options);
+      // Manual "regenerar esse slide" should stay consistent with the rest
+      // of the carousel too — same style reference as the original
+      // generation, unless slide 1 itself is the one being regenerated (it
+      // defines the style, nothing to reference).
+      const firstSlide = carousel.slides[0];
+      const styleReferencePath = firstSlide && firstSlide.slideId !== slide.slideId
+        && typeof options.resolveCarouselStyleReference === 'function'
+        ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+        : null;
+      await enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath);
     })
     .catch((err) => {
       console.error(`[content-central] background carousel slide regeneration failed for ${projectId}/${carouselId}/${slideId}:`, err.message);
@@ -6263,6 +6293,22 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       allOffers: project.contentStrategy?.offers || [],
     }
   );
+  // Attached AFTER buildPrimaryAiImageReferences on purpose, not fed into
+  // it — that function's role/kind gating (segment_structure match,
+  // rotation caps, etc.) is tuned for the project's own registered
+  // reference library and would happily drop or rotate away a one-off
+  // cross-slide reference like this one. A forced style reference always
+  // gets a slot; it only ever adds one extra reference image, never
+  // replaces the project's own logo/product/layout references above.
+  if (options.styleReferenceAbsolutePath) {
+    baseReferences.push({
+      id: 'carousel-style-reference',
+      role: 'visual_reference',
+      absolutePath: options.styleReferenceAbsolutePath,
+      relativePath: 'carousel-style-reference.png',
+      mimeType: 'image/png',
+    });
+  }
   content.creativeSpec = buildCreativeSpec(
     content,
     project,
@@ -6568,8 +6614,24 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       isVerticalStory ? 'A composição deve ser nativa de Story vertical.' : '',
       isVerticalStory ? 'Não criar um flyer quadrado ou bloco central com aparência 1:1.' : '',
       isVerticalStory ? 'Distribuir os elementos ao longo da altura do canvas, aproveitando bem topo, centro e base.' : '',
-      'Preencher todo o canvas; manter título, preço, CTA e logo dentro da área segura.',
+      // "Preencher todo o canvas" (texto grande, tela cheia) é regra de
+      // anúncio avulso pra parar o scroll — num carrossel sequencial isso
+      // vira texto gigante em todo slide, sem respiro. Testado 27/08/2026:
+      // sem esta exceção o título tomava quase metade do slide.
+      topic.source === 'carousel'
+        ? 'Manter respiro/margem nas bordas do canvas; título ocupando no máximo ~25-30% da altura do slide, sem letras gigantes tomando o slide inteiro; hierarquia de texto proporcional, como um card de carrossel explicativo, não um anúncio de impacto único.'
+        : 'Preencher todo o canvas; manter título, preço, CTA e logo dentro da área segura.',
     ]),
+    // Only present when runCarouselGeneration/enqueueCarouselSlideRegeneration
+    // resolved slide 1's own generated file — see generateAiImageWithReviewLoop,
+    // where this exact reference gets force-attached (id 'carousel-style-reference').
+    selectedReferences.some((reference) => reference.id === 'carousel-style-reference')
+      ? section('CONSISTÊNCIA DO CARROSSEL', [
+        'Uma das imagens anexadas é o slide 1, já gerado, deste MESMO carrossel.',
+        'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — usar como referência exata de template, não apenas inspiração livre.',
+        'Mudar somente o texto/conteúdo específico deste slide; o resto deve parecer a mesma peça gráfica continuando, não uma arte nova.',
+      ])
+      : '',
     section('OBJETIVO DO CRIATIVO', [
       // Skip the generic filler line when the topic already carries its own
       // specific objective (e.g. an offer's real name/price) — repeating a

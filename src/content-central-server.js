@@ -1178,6 +1178,14 @@ async function handleRequest(req, res, targetDir, context = {}) {
       imageGenerator: context.imageGenerator,
       imageReviewer: context.imageReviewer,
       outlineGenerator: context.carouselOutlineGenerator,
+      // Real cross-slide consistency: resolves slide 1's own generated file
+      // on disk (reusing the same URL->path resolution the targeted-edit
+      // "regenerate with a note" flow already relies on) so every other
+      // slide gets it as an actual attached reference image, not just a
+      // prompt instruction. Returns null (no-op) for anything not a real
+      // local file — a missing key, an unconfigured provider, slide 1
+      // itself failing.
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
     }, targetDir);
     return sendJson(res, 201, { carousel });
   }
@@ -1192,6 +1200,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
     enqueueCarouselSlideRegeneration(projectId, parts[4], parts[5], {
       imageGenerator: context.imageGenerator,
       imageReviewer: context.imageReviewer,
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
     }, targetDir);
     return sendJson(res, 200, { carousel });
   }
