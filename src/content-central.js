@@ -2728,7 +2728,12 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
     cta: '',
     autoGenerateCta: false,
     notes: '',
-    objective: `Slide ${order} de ${slideCount} de um carrossel para ${project.name}. ${slideText}`,
+    // Explicit and repeated on purpose: without "escrever literalmente" the
+    // model tends to treat slideText as loose inspiration and paraphrase or
+    // drop it; without the "MESMO template" line each slide is generated as
+    // an independent one-off flyer instead of part of one sequence — see
+    // formatContentTopicLines for the matching "vary structure" opt-out.
+    objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Escrever literalmente, de forma legível e bem diagramada, este texto neste slide: "${slideText}". Usar o mesmo template visual (paleta, tipografia, moldura, posição da logo) em todos os slides deste carrossel — muda só o conteúdo de texto de cada slide, o restante da diagramação deve parecer a mesma peça continuando.`,
   };
 }
 
@@ -2749,6 +2754,10 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
       channel: slide.channel,
       contentTopic: slide.contentTopic,
       logoReference: getProjectLogoReference(project, paths),
+      // Surface the same objective at the top OBJETIVO section too — left
+      // to the default it falls back to a generic "criativo do dia" line
+      // and the real slide instruction only shows up buried in ASSUNTO.
+      objective: slide.contentTopic?.objective,
     });
     slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
     await generateAiImageWithReviewLoop(slide, project, projectId, {
@@ -6178,7 +6187,12 @@ function formatContentTopicLines(topic) {
     topic.objective ? `Objetivo criativo: ${topic.objective}` : '',
     topic.learningEntries?.length ? `Aprendizados registrados para este tipo de publicação: ${topic.learningEntries.join(' | ')}` : '',
     'Não misturar oferta de delivery com rodízio/presencial se isso não estiver cadastrado no assunto.',
-    'Variar o tipo de publicação entre os cards; não fazer todos com a mesma estrutura de oferta.',
+    // A carrossel is one sequential piece — every slide should look like
+    // part of the same set. The "vary structure" rule below exists for the
+    // opposite case (a batch of separate ad-creative cards, each its own
+    // offer) and actively fights carousel cohesion if left on, so skip it
+    // for carousel-sourced topics.
+    topic.source !== 'carousel' ? 'Variar o tipo de publicação entre os cards; não fazer todos com a mesma estrutura de oferta.' : '',
   ];
 }
 
@@ -8885,6 +8899,8 @@ async function readJson(path, fallback) {
   }
 }
 
+let writeJsonTempCounter = 0;
+
 async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
   // Write to a temp file in the same directory, then rename over the real
@@ -8892,7 +8908,13 @@ async function writeJson(path, value) {
   // (this session's dev server has died mid-request more than once) can
   // never leave the real file truncated/corrupted; readers either see the
   // old complete file or the new complete file, never a partial one.
-  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  // The counter matters: pid+Date.now() alone collides when two calls for
+  // the SAME path (e.g. two carousel slides finishing in the same
+  // millisecond, both writing carousel.filePath) land in the same
+  // millisecond — the second rename then throws ENOENT because its temp
+  // file was already consumed by the first call's rename (reproduced
+  // 100% of the time with concurrent carousel slide writes).
+  const tempPath = `${path}.${process.pid}.${Date.now()}.${writeJsonTempCounter++}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
   // On Windows, rename-over-an-existing-file transiently fails with EPERM
   // if anything else (antivirus, a search indexer, another process's brief
