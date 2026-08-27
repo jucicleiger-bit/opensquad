@@ -76,8 +76,11 @@
 
 .arrow {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
+  /* Fixed offset, not top:50%+translateY(-50%) — the global button:hover
+     rule (tokens.css) sets its own transform on hover, which replaces
+     (doesn't add to) this one and would un-center the button the moment
+     the mouse enters it. */
+  top: calc(50% - 16px);
   width: 32px;
   height: 32px;
   border-radius: 50%;
