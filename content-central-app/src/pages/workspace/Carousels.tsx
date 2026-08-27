@@ -11,6 +11,7 @@ import {
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import { CarouselPreview } from "@/components/CarouselPreview";
 import { EmptyState } from "@/components/EmptyState";
 import { ImageLightbox } from "@/components/ImageLightbox";
 import { Skeleton } from "@/components/Skeleton";
@@ -43,6 +44,7 @@ export function Carousels() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [slideState, setSlideState] = useState<Record<string, SlideActionState>>({});
   const [preview, setPreview] = useState<{ src: string; title: string; fileName: string } | null>(null);
+  const [feedPreviewId, setFeedPreviewId] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -215,6 +217,14 @@ export function Carousels() {
               <div className={styles.actions}>
                 <Button
                   type="button"
+                  variant="secondary"
+                  disabled={!carousel.slides.some((slide) => slide.image.url || slide.image.previewUrl)}
+                  onClick={() => setFeedPreviewId(carousel.carouselId)}
+                >
+                  Visualizar como no feed
+                </Button>
+                <Button
+                  type="button"
                   variant="ghost"
                   disabled={deletingId === carousel.carouselId}
                   onClick={() => handleDelete(carousel.carouselId)}
@@ -235,6 +245,20 @@ export function Carousels() {
           onClose={() => setPreview(null)}
         />
       ) : null}
+
+      {(() => {
+        const previewCarousel = carousels.find((entry) => entry.carouselId === feedPreviewId);
+        // Guards a carousel getting deleted (by this tab or another) while
+        // its feed preview is open — refresh() would otherwise leave
+        // feedPreviewId pointing at nothing.
+        return previewCarousel ? (
+          <CarouselPreview
+            carousel={previewCarousel}
+            handle={project.instagram?.handle}
+            onClose={() => setFeedPreviewId(null)}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }
