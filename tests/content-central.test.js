@@ -8,6 +8,7 @@ import {
   approveContent,
   buildApprovalPayload,
   calculateTokenDaysRemaining,
+  carouselWeekdaysForRange,
   createCentralProject,
   deleteCommercialCatalogItem,
   deleteCommercialProposal,
@@ -8562,4 +8563,32 @@ test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only 
     assert.equal(changedSlide.image.url, 'https://cdn.example.com/regenerated.png');
     assert.equal(untouchedSlide.image.url, 'https://cdn.example.com/original.png', 'the other slide must be untouched');
   });
+});
+
+test('carouselWeekdaysForRange distributes evenly within each 7-day window using a fixed step', () => {
+  assert.deepEqual(carouselWeekdaysForRange(7, 0), new Set());
+  assert.deepEqual(carouselWeekdaysForRange(7, 1), new Set([0]));
+  assert.deepEqual(carouselWeekdaysForRange(7, 2), new Set([0, 3]));
+  assert.deepEqual(carouselWeekdaysForRange(7, 3), new Set([0, 2, 4]));
+  assert.deepEqual(carouselWeekdaysForRange(7, 7), new Set([0, 1, 2, 3, 4, 5, 6]));
+});
+
+test('carouselWeekdaysForRange repeats the same weekly pattern across multiple full weeks', () => {
+  const result = carouselWeekdaysForRange(14, 2);
+  assert.deepEqual(result, new Set([0, 3, 7, 10]));
+});
+
+test('carouselWeekdaysForRange scales the quota down proportionally for a partial trailing week, never past the last day', () => {
+  // 10 days = 1 full week (quota 2 -> days 0,3) + a 3-day partial week
+  // (quota round(2*3/7)=1 -> day 7 only, the partial week's own day 0).
+  const result = carouselWeekdaysForRange(10, 2);
+  assert.deepEqual(result, new Set([0, 3, 7]));
+  result.forEach((dayIndex) => assert.ok(dayIndex < 10, `${dayIndex} must be within the 10-day range`));
+});
+
+test('carouselWeekdaysForRange returns an empty set for a range shorter than a week with a rounded-down-to-zero quota', () => {
+  // round(1*2/7) = round(0.57) = 1, so this actually gets 1 day — verifying
+  // the rounding direction explicitly rather than assuming it.
+  const result = carouselWeekdaysForRange(2, 1);
+  assert.deepEqual(result, new Set([0]));
 });

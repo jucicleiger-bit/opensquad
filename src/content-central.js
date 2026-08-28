@@ -6443,6 +6443,35 @@ function pickRotatingReferenceList(candidates, seed, count) {
   return Array.from({ length: count }, (_, index) => candidates[(start + index) % candidates.length]);
 }
 
+// Which day offsets (0-indexed, relative to a batch's startDate) become
+// carousel days instead of a normal single-image Feed post. Deterministic
+// on purpose (matches this codebase's existing preference — see
+// pickRotatingReferenceList's seeded-not-random comment): re-generating the
+// same range always picks the same days, instead of a fresh random roll
+// each time. Step size spreads the quota evenly across each 7-day window;
+// a partial trailing week gets its quota scaled down proportionally so it
+// never reaches past the range's actual last day.
+export function carouselWeekdaysForRange(days, carouselsPerWeek) {
+  const result = new Set();
+  if (carouselsPerWeek <= 0) return result;
+  for (let weekStart = 0; weekStart < days; weekStart += 7) {
+    const weekLength = Math.min(7, days - weekStart);
+    let weekQuota = weekLength === 7
+      ? carouselsPerWeek
+      : Math.round((carouselsPerWeek * weekLength) / 7);
+    // Ensure at least 1 carousel for partial weeks with carouselsPerWeek > 0
+    if (weekLength < 7 && carouselsPerWeek > 0 && weekQuota < 1) {
+      weekQuota = 1;
+    }
+    if (weekQuota <= 0) continue;
+    const step = Math.max(1, Math.floor(weekLength / weekQuota));
+    for (let picked = 0, offset = 0; picked < weekQuota && offset < weekLength; offset += step, picked += 1) {
+      result.add(weekStart + offset);
+    }
+  }
+  return result;
+}
+
 // A handful of visual-direction lines were written exclusively for a food
 // business (pizzaria) and applied to every project regardless of segment —
 // e.g. telling an engineering/inspection company's creative to look
