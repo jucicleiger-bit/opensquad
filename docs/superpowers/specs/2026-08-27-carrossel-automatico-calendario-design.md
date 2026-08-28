@@ -60,6 +60,8 @@ Concurrency: a batch with several carousel days generates each carousel's slide-
 
 `item.approval`/the email-approval flow stay structurally the same (one `approved`/`rejected` decision per item, same fields). The rendering changes: wherever the approval email/review page today embeds `item.image`'s single preview, it branches on `item.format` — `'carousel'` renders all N `slides[].image` stacked vertically, in order, each labeled with its role (Capa/Conteúdo/CTA) — a plain list of images, not the standalone tab's swipe/scroll-snap `CarouselPreview` component. One approve/reject action still covers the entire carousel, not per-slide. Porting the swipe-style feed preview into the review screen is real, but separate, follow-up scope — out of this design.
 
+Each rendered slide gets its own **"Regenerar esse slide"** action, same one the standalone tab already has (`regenerateCarouselSlide`/`enqueueCarouselSlideRegeneration`) — routed at whichever item/slide identifiers this batch-item shape uses instead of a standalone `Carousel`. This is the actual point of putting the carousel through review before publish: fixing one bad slide (wrong text, ugly composition) never means regenerating the other N-1, and never means the operator has to build the whole carousel by hand.
+
 ## 6. Real publish — Graph API `CAROUSEL_ALBUM`
 
 New `publishInstagramCarousel(target)` in `squads/conteudo-multicanal/tools/meta-publish-multi.js`, alongside the existing `publishInstagramFeed`/`publishInstagramStory`/`publishInstagramReels` (`meta-publish-multi.js:191-250`). Same two-step container pattern those already use, with an extra fan-out step:
@@ -75,7 +77,7 @@ Retry semantics (`maxAttempts`/`retryDelayMs`/`settleDelayMs`) stay identical �
 ## Error handling
 
 - **Outline/roteiro fails** (same failure mode `runCarouselGeneration` already handles for the standalone flow): the item's `slides` all get `imageGenerationError` set to the roteiro error, `format` stays `'carousel'`, item still reaches a terminal, reviewable state instead of hanging — approval screen shows the error same as any other generation failure today.
-- **One slide's image fails**: isolated per-slide, same as the standalone flow — the carousel still reaches "ready" with N-1 real slides and one errored slot the operator can regenerate individually before approving (reuses the existing per-slide regenerate machinery, exposed through whichever review UI ships with this — see open question below).
+- **One slide's image fails**: isolated per-slide, same as the standalone flow — the carousel still reaches "ready" with N-1 real slides and one errored slot. The operator regenerates just that slide (see section 5 — this is standard, not an edge case: fixing one bad slide should never require redoing the whole carousel).
 - **Publish fails mid-way** (e.g. child container 3 of 5 fails): whole publish attempt fails and retries per the existing retry loop; no partial-carousel is ever left "half published" on Meta since nothing is published until the final parent-container publish call, which only happens after every child container succeeded.
 
 ## Testing
