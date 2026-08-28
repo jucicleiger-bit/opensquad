@@ -4524,6 +4524,39 @@ test('generateContentSchedulePlan organizes multiple formats by frequency and in
   });
 });
 
+test('generateContentSchedulePlan clamps carouselsPerWeek to 0-7 and maxCarouselSlides to 2-10', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-clamp-config', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-clamp-config', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 99,
+      maxCarouselSlides: 1,
+    }, dir);
+    assert.equal(batch.carouselsPerWeek, 7);
+    assert.equal(batch.maxCarouselSlides, 2);
+
+    const negative = await generateContentSchedulePlan('carrossel-clamp-config', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: -3,
+      maxCarouselSlides: 999,
+    }, dir);
+    assert.equal(negative.carouselsPerWeek, 0);
+    assert.equal(negative.maxCarouselSlides, 10);
+
+    const defaulted = await generateContentSchedulePlan('carrossel-clamp-config', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+    }, dir);
+    assert.equal(defaulted.carouselsPerWeek, 0);
+    assert.equal(defaulted.maxCarouselSlides, 3);
+  });
+});
+
 test('content offers drive varied schedule topics with exact prices and post types', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

@@ -1031,6 +1031,8 @@ async function handleRequest(req, res, targetDir, context = {}) {
         offersOnly: Boolean(body.offersOnly),
         approvedPlan: body.approvedPlan,
         topicIdeaGenerator: context.topicIdeaGenerator,
+        carouselsPerWeek: body.carouselsPerWeek,
+        maxCarouselSlides: body.maxCarouselSlides,
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       return sendJson(res, 201, { batch, batches: [batch] });

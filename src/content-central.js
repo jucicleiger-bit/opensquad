@@ -3162,6 +3162,11 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   if (!Number.isInteger(days) || days < 1 || days > 60) {
     throw new Error('Days must be an integer between 1 and 60');
   }
+  // Per-generation, not a persisted setting — same non-persistence as `days`
+  // and `formats` above (GenerateContent.tsx sends these fresh every time,
+  // there is no "Agenda e Geração" settings screen in this codebase).
+  const carouselsPerWeek = Math.max(0, Math.min(7, Math.trunc(Number(options.carouselsPerWeek) || 0)));
+  const maxCarouselSlides = Math.max(2, Math.min(10, Math.trunc(Number(options.maxCarouselSlides) || 3)));
 
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
@@ -3188,6 +3193,8 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     days,
     startDate,
     formats,
+    carouselsPerWeek,
+    maxCarouselSlides,
     items: [],
   };
 

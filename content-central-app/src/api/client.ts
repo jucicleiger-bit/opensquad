@@ -558,6 +558,11 @@ export interface GenerateContentInput {
   // Optional reviewed/edited planning preview. When present, the backend
   // applies per-card subject/orientation edits to the generated drafts.
   approvedPlan?: PlannedContentSchedule;
+  // 0 (or omitted) = off. Distributed evenly across each week of the range
+  // (see carouselWeekdaysForRange in content-central.js) rather than
+  // front-loaded.
+  carouselsPerWeek?: string;
+  maxCarouselSlides?: string;
 }
 
 export function generateContent(

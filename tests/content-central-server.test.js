@@ -1764,6 +1764,28 @@ test('content central API saves company raio-x profile and uses it in prompts', 
   });
 });
 
+test('POST generate forwards carouselsPerWeek and maxCarouselSlides through to the batch', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'carrossel-http-config', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+    });
+    const { body, response } = await request(server, '/api/projects/carrossel-http-config/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        days: 7,
+        startDate: '2026-08-24',
+        formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+        carouselsPerWeek: 2,
+        maxCarouselSlides: 4,
+      }),
+    });
+    assert.equal(response.status, 201);
+    assert.equal(body.batch.carouselsPerWeek, 2);
+    assert.equal(body.batch.maxCarouselSlides, 4);
+  });
+});
+
 test('content central API analyzes and approves brand briefing before it enters prompts', async () => {
   await withServer(async (_dir, server) => {
     await request(server, '/api/projects', {
