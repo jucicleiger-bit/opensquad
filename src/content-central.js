@@ -4641,12 +4641,32 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
     try {
       const content = await listProjectContent(entry.name, targetDir);
       for (const item of content) {
-        if (!item.image?.generating) continue;
-        item.image.generating = false;
-        item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
-        item.updatedAt = new Date().toISOString();
-        await writeJson(item.filePath, item);
-        fixed.push({ projectId: entry.name, contentId: item.contentId });
+        if (item.image?.generating) {
+          item.image.generating = false;
+          item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
+          item.updatedAt = new Date().toISOString();
+          await writeJson(item.filePath, item);
+          fixed.push({ projectId: entry.name, contentId: item.contentId });
+          continue;
+        }
+        // Same bug, batch-item carousel shape: no top-level `image`, N
+        // slides each with their own `image.generating`. This item's own
+        // `.status` field (draft_generated/aprovado/...) is unrelated
+        // bookkeeping from the rest of the pipeline — never touch it here,
+        // only the slide-level generation flags.
+        if (item.format === 'carousel' && Array.isArray(item.slides)) {
+          let touched = false;
+          for (const slide of item.slides) {
+            if (!slide.image?.generating) continue;
+            slide.image.generating = false;
+            slide.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar esse slide" para tentar de novo.';
+            touched = true;
+          }
+          if (!touched) continue;
+          item.updatedAt = new Date().toISOString();
+          await writeJson(item.filePath, item);
+          fixed.push({ projectId: entry.name, contentId: item.contentId });
+        }
       }
 
       // Same class of bug, carousel shape: a slide's own `image.generating`

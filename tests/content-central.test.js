@@ -7426,6 +7426,33 @@ test('reconcileInterruptedGenerations also clears a stuck carousel slide, and on
   });
 });
 
+test('reconcileInterruptedGenerations also clears a stuck slide inside a batch-item (calendar) carousel', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-calendario-travado', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-calendario-travado', {
+      days: 1,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 7,
+      maxCarouselSlides: 2,
+    }, dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    const raw = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    raw.slides[0].image.generating = true;
+    raw.slides[1].image.generating = false;
+    await writeFile(carouselItem.filePath, JSON.stringify(raw, null, 2), 'utf-8');
+
+    const fixed = await reconcileInterruptedGenerations(dir);
+    assert.ok(fixed.some((entry) => entry.contentId === carouselItem.contentId));
+
+    const reloaded = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(reloaded.slides[0].image.generating, false);
+    assert.match(reloaded.slides[0].imageGenerationError, /servidor foi reiniciado/);
+    assert.equal(reloaded.status, 'draft_generated', 'a batch item\'s own status field must never be touched by this reconcile — only image.generating and slide-level errors');
+  });
+});
+
 test('listCentralProjects returns safe project summaries without secrets', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
