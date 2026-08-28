@@ -28,6 +28,7 @@ import {
   nousFalAspectRatioForChannel,
   normalizeProspectExtraction,
   openAiImageSizeForChannel,
+  publishCarouselToInstagram,
   publishContentToWhatsAppStatus,
   publishWithGaveteSync,
   resolveContentImageAbsolutePath,
@@ -52,6 +53,7 @@ import {
   generateCatalogSchedulePlan,
   getCentralPaths,
   generateContentSchedulePlan,
+  loadProjectForTest,
   registerSegmentTemplate,
   saveLearningEntry,
   saveProjectAsset,
@@ -2174,6 +2176,70 @@ test('publishWithGaveteSync skips the real publish and syncs local state when th
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+test('publishCarouselToInstagram uploads every slide and sends image_urls (plural) to meta-publish-multi, not image_url', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+  try {
+    await createCentralProject({ projectId: 'carrossel-publish', name: 'Boss Pizzaria' }, dir);
+    // expiresAt present so saveProjectToken's local-validation branch is
+    // taken, never a real call to graph.facebook.com — same reasoning as
+    // the 'POST .../token calls syncTokenSecretsToGitHub...' test's own
+    // comment at content-central-server.test.js:4502-4508.
+    await saveProjectToken('carrossel-publish', {
+      token: 'EAAB-fake',
+      expiresAt: '2026-12-01T00:00:00.000Z',
+      account: { handle: '@bosspizzaria', instagramUserId: '999' },
+    }, dir);
+
+    const batch = await generateContentSchedulePlan('carrossel-publish', {
+      days: 1,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 7,
+      maxCarouselSlides: 2,
+    }, dir);
+    const item = batch.items.find((entry) => entry.format === 'carousel');
+    // Point each slide at a real local file resolveGeneratedImageAbsolutePath
+    // can find — same /api/projects/:id/assets/ URL convention every
+    // generated image already uses.
+    const assetsDir = join(dir, '_opensquad', 'content-central', 'projects', 'carrossel-publish', 'assets', 'generated');
+    await mkdir(assetsDir, { recursive: true });
+    for (const [index, slide] of item.slides.entries()) {
+      const filename = `slide-${index}.png`;
+      await writeFile(join(assetsDir, filename), Buffer.from('fake-png'));
+      slide.image.url = `/api/projects/carrossel-publish/assets/assets/generated/${filename}`;
+    }
+    item.caption = { text: 'Legenda do carrossel', version: 1 };
+    const project = await loadProjectForTest('carrossel-publish', dir);
+
+    const execCalls = [];
+    const uploadedPaths = [];
+    const result = await publishCarouselToInstagram({ content: item, project }, dir, {
+      uploader: async (localPath) => {
+        uploadedPaths.push(localPath);
+        return `https://cdn.example.com/${uploadedPaths.length}.png`;
+      },
+      execFileAsync: async (cmd, args) => {
+        execCalls.push({ cmd, args });
+        return { stdout: JSON.stringify({ ok: true, results: [{ ok: true, media_id: 'media-carrossel', permalink: 'https://instagram.com/p/carrossel' }] }) };
+      },
+    });
+
+    assert.equal(uploadedPaths.length, 2, 'one upload per slide');
+    assert.equal(result.mediaId, 'media-carrossel');
+    assert.equal(result.permalink, 'https://instagram.com/p/carrossel');
+
+    assert.equal(execCalls.length, 1);
+    const payloadArgIndex = execCalls[0].args.indexOf('--payload-json');
+    const payload = JSON.parse(execCalls[0].args[payloadArgIndex + 1]);
+    const target = payload.publish_targets[0];
+    assert.deepEqual(target.image_urls, ['https://cdn.example.com/1.png', 'https://cdn.example.com/2.png']);
+    assert.equal(target.image_url, undefined, 'must never send the singular field for a carousel');
+    assert.equal(target.caption, 'Legenda do carrossel');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('GET .../content syncs gaveta-published items so the calendar shows them as published', async () => {

@@ -4583,6 +4583,56 @@ async function uploadWithRetry(uploadFn) {
   throw lastError;
 }
 
+// Same shape as publishContentToInstagram's single-image path (token/user-id
+// checks, retry loop) but uploads every slide and sends image_urls (plural)
+// instead of image_url — meta-publish-multi.js's publishTarget dispatches to
+// publishInstagramCarousel when it sees that field. Exported and DI'd
+// (options.uploader/options.execFileAsync) the same way publishWithGaveteSync
+// already is — see that function's own comment on why.
+export async function publishCarouselToInstagram({ content, project }, targetDir, options = {}) {
+  const uploader = options.uploader || uploadGeneratedImagePublicly;
+  const execFile = options.execFileAsync || execFileAsync;
+  const localImagePaths = content.slides.map((slide) => resolveGeneratedImageAbsolutePath({ image: slide.image }, project.projectId, targetDir));
+  if (localImagePaths.some((path) => !path)) throw new Error('Uma ou mais imagens do carrossel não foram encontradas para publicar.');
+
+  const token = await readProjectToken(project.projectId, targetDir);
+  if (!token) throw new Error('Nenhum token Meta cadastrado para este projeto.');
+  const instagramUserId = project.instagram?.instagramUserId;
+  if (!instagramUserId) throw new Error('Projeto sem Instagram User ID cadastrado — valide o token na aba "Conta e token".');
+
+  const maxAttempts = Math.max(1, Number(process.env.OPENSQUAD_PUBLISH_RETRY_ATTEMPTS || 3));
+  const retryDelayMs = Math.max(0, Number(process.env.OPENSQUAD_PUBLISH_RETRY_DELAY_MS || 4000));
+  const settleDelayMs = Math.max(0, Number(process.env.OPENSQUAD_PUBLISH_SETTLE_DELAY_MS || 2500));
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const imageUrls = await Promise.all(localImagePaths.map((path) => uploader(path)));
+      await delay(settleDelayMs);
+      const payload = {
+        publish_targets: [{
+          channel: content.channel,
+          image_urls: imageUrls,
+          caption: content.caption?.text || '',
+        }],
+      };
+      const { stdout } = await execFile('node', [META_PUBLISH_SCRIPT, '--payload-json', JSON.stringify(payload)], {
+        timeout: Number(process.env.OPENSQUAD_PUBLISH_TIMEOUT_MS || 300000),
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, INSTAGRAM_ACCESS_TOKEN: token, INSTAGRAM_USER_ID: instagramUserId },
+      });
+      const parsed = JSON.parse(stdout);
+      const result = parsed.results?.[0];
+      if (!result?.ok) throw new Error('Publicação do carrossel na Meta falhou sem detalhe.');
+      return { mediaId: result.media_id, permalink: result.permalink || null };
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) await delay(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
 // The real "metaPublisher" injected into runDuePublishSweep — everything
 // that actually talks to the outside world (imgBB upload, the Meta Graph
 // API subprocess) lives here, kept out of content-central.js so the
@@ -4602,6 +4652,7 @@ async function publishContentToInstagram({ content, project }, targetDir) {
   if (!PUBLISHABLE_CHANNELS.has(content.channel)) {
     throw new Error(`Canal "${content.channel}" ainda não tem publicação real suportada (só Instagram/Facebook Feed, Story e Reels hoje).`);
   }
+  if (content.format === 'carousel') return publishCarouselToInstagram({ content, project }, targetDir);
   const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
   const localImagePath = isVideoChannel ? null : resolveGeneratedImageAbsolutePath(content, project.projectId, targetDir);
   if (!isVideoChannel && !localImagePath) throw new Error('Imagem gerada não encontrada para publicar.');
