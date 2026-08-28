@@ -62,6 +62,8 @@ Concurrency: a batch with several carousel days generates each carousel's slide-
 
 Each rendered slide gets its own **"Regenerar esse slide"** action, same one the standalone tab already has (`regenerateCarouselSlide`/`enqueueCarouselSlideRegeneration`) — routed at whichever item/slide identifiers this batch-item shape uses instead of a standalone `Carousel`. This is the actual point of putting the carousel through review before publish: fixing one bad slide (wrong text, ugly composition) never means regenerating the other N-1, and never means the operator has to build the whole carousel by hand.
 
+Also carried over: an optional note per slide turns that regenerate into a **targeted edit** of the slide's current image (same `targetedEdit`/`note` mechanism AdCreatives already had, added to carousel slides on 2026-08-27) instead of a fresh take — a small fix ("texto menor", "tira esse ícone") doesn't have to reroll the whole slide either.
+
 ## 6. Real publish — Graph API `CAROUSEL_ALBUM`
 
 New `publishInstagramCarousel(target)` in `squads/conteudo-multicanal/tools/meta-publish-multi.js`, alongside the existing `publishInstagramFeed`/`publishInstagramStory`/`publishInstagramReels` (`meta-publish-multi.js:191-250`). Same two-step container pattern those already use, with an extra fan-out step:
