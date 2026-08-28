@@ -2728,12 +2728,17 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
     cta: '',
     autoGenerateCta: false,
     notes: '',
-    // Explicit and repeated on purpose: without "escrever literalmente" the
-    // model tends to treat slideText as loose inspiration and paraphrase or
-    // drop it; without the "MESMO template" line each slide is generated as
-    // an independent one-off flyer instead of part of one sequence — see
+    // Explicit and repeated on purpose: without an instruction anchoring the
+    // model to slideText, it treats it as loose inspiration and paraphrases
+    // or drops it; without the visual-identity line each slide is generated
+    // as an independent one-off flyer instead of part of one sequence — see
     // formatContentTopicLines for the matching "vary structure" opt-out.
-    objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Escrever literalmente, de forma legível e bem diagramada, este texto neste slide: "${slideText}". Usar o mesmo template visual (paleta, tipografia, moldura, posição da logo) em todos os slides deste carrossel — muda só o conteúdo de texto de cada slide, o restante da diagramação deve parecer a mesma peça continuando.`,
+    // Feedback 27/08/2026: "escrever literalmente" produced correct-but-dense
+    // slides (a whole sentence crammed in, no bullets) — fidelity to the
+    // message matters, not fidelity to the exact sentence shape. And "mesmo
+    // template" read as "identical layout every slide", not just "same
+    // brand identity" — now split those two apart explicitly.
+    objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Manter fiel o sentido, a mensagem e qualquer preço/promessa/CTA mencionado — mas adaptar a FORMA para leitura visual: pode quebrar em frases curtas, virar bullets/lista, destacar uma frase principal e reduzir o resto. Nunca mudar o significado nem inventar informação que não estava no texto original. Manter a MESMA identidade visual (paleta, tipografia, moldura, grafismos, posição da logo) dos outros slides deste carrossel, mas a composição/disposição dos elementos pode variar de slide para slide dentro dessa identidade — não repetir sempre o exato mesmo layout.`,
     // Read by buildChatGptFinalCardPrompt's carousel FORMATO branch to
     // decide whether this slide gets the "swipe for more" arrow — every
     // slide except the last one, which is where the sequence actually ends.
@@ -6622,8 +6627,15 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // anúncio avulso pra parar o scroll — num carrossel sequencial isso
       // vira texto gigante em todo slide, sem respiro. Testado 27/08/2026:
       // sem esta exceção o título tomava quase metade do slide.
+      // Height budget varies by slide role instead of one fixed number —
+      // a cover/CTA slide is meant to hit harder (bigger headline is fine),
+      // a middle/explanation slide needs more room for actual body text.
+      // Feedback 27/08/2026: a single flat "25-30% max" ceiling ignored
+      // that a slide's job changes what "too big" even means.
       topic.source === 'carousel'
-        ? 'Manter respiro/margem nas bordas do canvas; título ocupando no máximo ~25-30% da altura do slide, sem letras gigantes tomando o slide inteiro; hierarquia de texto proporcional, como um card de carrossel explicativo, não um anúncio de impacto único.'
+        ? (content.role === 'cover' || content.role === 'cta'
+          ? 'Manter respiro/margem nas bordas do canvas; é um slide de capa/CTA — título pode ser maior e mais impactante, ocupando até ~35% da altura, sem preencher o canvas inteiro nem cortar a margem.'
+          : 'Manter respiro/margem nas bordas do canvas; título ocupando geralmente entre 20-30% da altura do slide, deixando espaço equilibrado pro corpo de texto/explicação — sem letras gigantes tomando o slide inteiro.')
         : 'Preencher todo o canvas; manter título, preço, CTA e logo dentro da área segura.',
       // Only slides that actually have a next page — the last slide (CTA)
       // is where the sequence ends, an arrow there would point at nothing.
@@ -6637,8 +6649,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     selectedReferences.some((reference) => reference.id === 'carousel-style-reference')
       ? section('CONSISTÊNCIA DO CARROSSEL', [
         'Uma das imagens anexadas é o slide 1, já gerado, deste MESMO carrossel.',
-        'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — usar como referência exata de template, não apenas inspiração livre.',
-        'Mudar somente o texto/conteúdo específico deste slide; o resto deve parecer a mesma peça gráfica continuando, não uma arte nova.',
+        'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — mesma identidade visual, não apenas inspiração livre.',
+        'A composição/disposição dos elementos deste slide pode ser diferente da do slide 1 (ex.: título maior de um lado, bloco de texto do outro, lista de bullets) — o que precisa ser idêntico é a identidade visual, não o layout exato.',
       ])
       : '',
     section('OBJETIVO DO CRIATIVO', [
