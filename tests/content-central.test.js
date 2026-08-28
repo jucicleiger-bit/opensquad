@@ -31,6 +31,7 @@ import {
   saveCommercialProposal,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
+  carouselBriefingFromContentTopic,
   deleteAdCreative,
   deleteCarousel,
   deleteLearningEntry,
@@ -8555,6 +8556,65 @@ test('enqueueCarouselGeneration records outlineGenerationError and marks every s
       assert.equal(slide.image.generating, false);
       assert.equal(slide.imageGenerationError, reloaded.outlineGenerationError);
     });
+  });
+});
+
+test('carouselBriefingFromContentTopic turns a regular contentTopic into a free-text briefing', () => {
+  assert.match(
+    carouselBriefingFromContentTopic({ offerName: 'Pizza Família', objective: 'Vender mais no fim de semana', items: 'Borda recheada, refri grátis' }),
+    /Pizza Família/,
+  );
+  assert.match(
+    carouselBriefingFromContentTopic({ offerName: 'Pizza Família', objective: 'Vender mais no fim de semana', items: 'Borda recheada, refri grátis' }),
+    /Vender mais no fim de semana/,
+  );
+  // A goal-driven topic (no offerName) still produces something usable —
+  // falls back to label/objective only, never throws on a missing field.
+  assert.doesNotThrow(() => carouselBriefingFromContentTopic({ label: 'Autoridade', objective: 'Mostrar bastidores' }));
+});
+
+test('runCarouselGeneration/enqueueCarouselGeneration accept a briefing/slideCount override and a markReady override instead of reading carousel.briefing/status directly', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-override', name: 'Boss Pizzaria' }, dir);
+    // Deliberately built without generateCarousel — simulates a batch-item
+    // shaped object that has no .briefing field and a foreign .status value
+    // the carousel engine must never overwrite.
+    const paths = getCentralPaths(dir, 'carrossel-override');
+    const filePath = join(paths.draftsDir, 'fake-batch-item.json');
+    await mkdir(paths.draftsDir, { recursive: true });
+    const fakeItem = {
+      contentId: 'fake-1',
+      status: 'draft_generated',
+      slideCount: 2,
+      slides: [
+        { slideId: 's1', order: 1, role: 'content', slideText: '', contentTopic: null, image: { generating: true, references: [] }, imageGenerationError: null },
+        { slideId: 's2', order: 2, role: 'content', slideText: '', contentTopic: null, image: { generating: true, references: [] }, imageGenerationError: null },
+      ],
+      outlineGenerationError: null,
+      filePath,
+    };
+    await writeFile(filePath, JSON.stringify(fakeItem, null, 2), 'utf-8');
+
+    let receivedBriefing;
+    await new Promise((resolveDone) => {
+      enqueueCarouselGeneration('carrossel-override', fakeItem, {
+        outlineGenerator: async ({ briefing, slideCount }) => {
+          receivedBriefing = briefing;
+          return { format: 'listicle', slides: Array.from({ length: slideCount }, (_, i) => ({ role: 'content', slideText: `Slide ${i + 1}` })) };
+        },
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      }, dir, {
+        briefing: 'briefing sintetizado do contentTopic',
+        slideCount: 2,
+        markReady: () => {}, // no-op — a batch item's own .status must be left alone
+      });
+      setTimeout(resolveDone, 300);
+    });
+
+    assert.equal(receivedBriefing, 'briefing sintetizado do contentTopic');
+    const reloaded = JSON.parse(await readFile(filePath, 'utf-8'));
+    assert.equal(reloaded.status, 'draft_generated', 'markReady override must prevent the engine from touching .status');
+    assert.equal(reloaded.slides[0].image.url, 'https://cdn.example.com/x.png');
   });
 });
 

@@ -2717,6 +2717,16 @@ export async function deleteCarousel(projectId, carouselId, targetDir = process.
   });
 }
 
+// Turns a regular contentTopic (the same shape every non-carousel post's
+// topic already has — offerName/label/objective/items) into the free-text
+// briefing the roteiro prompt (buildCarouselOutlinePrompt) expects. Used by
+// the automatic-calendar path, where nothing types a briefing by hand —
+// the topic pool already picked the subject the same way it does for
+// every other post that day.
+export function carouselBriefingFromContentTopic(topic) {
+  return [topic.offerName || topic.label, topic.objective, topic.items].filter(Boolean).join(' — ');
+}
+
 function buildCarouselSlideContentTopic({ project, order, slideCount, slideText }) {
   return {
     id: `carousel-slide-${order}`,
@@ -2803,16 +2813,19 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
 // the current full object, so concurrent writes are safe (no partial file,
 // last write always reflects the freshest combined state; Node has no
 // thread-level race on the same in-memory object).
-async function runCarouselGeneration(carousel, project, projectId, options, paths) {
+async function runCarouselGeneration(carousel, project, projectId, options, paths, overrides = {}) {
+  const briefing = overrides.briefing ?? carousel.briefing;
+  const slideCount = overrides.slideCount ?? carousel.slideCount;
+  const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
   let outline = null;
   if (typeof options.outlineGenerator === 'function') {
     try {
-      outline = await options.outlineGenerator({ project, briefing: carousel.briefing, slideCount: carousel.slideCount });
+      outline = await options.outlineGenerator({ project, briefing, slideCount });
     } catch (err) {
       carousel.outlineGenerationError = err.message;
     }
   }
-  const validOutline = outline && Array.isArray(outline.slides) && outline.slides.length === carousel.slideCount;
+  const validOutline = outline && Array.isArray(outline.slides) && outline.slides.length === slideCount;
   if (!validOutline) {
     if (!carousel.outlineGenerationError) {
       carousel.outlineGenerationError = 'O roteirista de IA não retornou um roteiro válido para este carrossel (resposta vazia ou incompleta). Apague e gere de novo para tentar outra vez.';
@@ -2821,7 +2834,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
       slide.image.generating = false;
       slide.imageGenerationError = carousel.outlineGenerationError;
     }
-    carousel.status = 'ready';
+    markReady(carousel);
     carousel.updatedAt = new Date().toISOString();
     await writeJson(carousel.filePath, carousel);
     return;
@@ -2835,7 +2848,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
     slide.contentTopic = buildCarouselSlideContentTopic({
       project,
       order: slide.order,
-      slideCount: carousel.slideCount,
+      slideCount,
       slideText: slide.slideText,
     });
   });
@@ -2863,7 +2876,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
     enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath)
   ));
 
-  carousel.status = 'ready';
+  markReady(carousel);
   carousel.updatedAt = new Date().toISOString();
   await writeJson(carousel.filePath, carousel);
 }
@@ -2872,10 +2885,10 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
 // the carousel has already responded with the placeholder by the time this
 // runs; the panel polls listCarousels for progress, same pattern as
 // enqueueAdCreativeImageGeneration.
-export function enqueueCarouselGeneration(projectId, carousel, options = {}, targetDir = process.cwd()) {
+export function enqueueCarouselGeneration(projectId, carousel, options = {}, targetDir = process.cwd(), overrides = {}) {
   const paths = getCentralPaths(targetDir, projectId);
   loadProject(paths)
-    .then((project) => runCarouselGeneration(carousel, project, projectId, options, paths))
+    .then((project) => runCarouselGeneration(carousel, project, projectId, options, paths, overrides))
     .catch((err) => {
       console.error(`[content-central] background carousel generation failed for ${projectId}/${carousel.carouselId}:`, err.message);
     });
