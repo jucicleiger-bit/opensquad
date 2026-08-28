@@ -4558,6 +4558,54 @@ test('generateContentSchedulePlan clamps carouselsPerWeek to 0-7 and maxCarousel
   });
 });
 
+test('generateContentSchedulePlan builds carousel-format placeholder items on the quota days, leaving other days single-image', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-calendario', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-calendario', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 2,
+      maxCarouselSlides: 4,
+    }, dir);
+
+    const feedItems = batch.items.filter((item) => item.channel === 'instagram_feed');
+    assert.equal(feedItems.length, 7, 'one Feed item per day regardless of format');
+    const carouselItems = feedItems.filter((item) => item.format === 'carousel');
+    assert.equal(carouselItems.length, 2, 'exactly carouselsPerWeek items became carousels');
+    // carouselWeekdaysForRange(7, 2) = {0, 3} — day 1 and day 4 (1-indexed dayNumber).
+    assert.deepEqual(carouselItems.map((item) => item.dayNumber).sort(), [1, 4]);
+
+    for (const item of carouselItems) {
+      assert.equal(item.image, undefined, 'a carousel item has no top-level image');
+      assert.equal(item.slides.length, 4, 'uses maxCarouselSlides, not the standalone tab\'s own field');
+      assert.equal(item.creativeGroupKey, null, 'a carousel item is never shared with a sibling channel');
+      item.slides.forEach((slide, index) => {
+        assert.equal(slide.order, index + 1);
+        assert.equal(slide.image.generating, true);
+        assert.equal(slide.channel, 'instagram_feed');
+      });
+    }
+
+    const singleItems = feedItems.filter((item) => item.format !== 'carousel');
+    assert.equal(singleItems.length, 5);
+    singleItems.forEach((item) => assert.ok(item.image, 'every non-carousel item keeps its normal single image'));
+  });
+});
+
+test('generateContentSchedulePlan skips the carousel quota entirely when the batch has no instagram_feed format', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-sem-feed', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-sem-feed', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 5,
+    }, dir);
+    assert.ok(batch.items.every((item) => item.format !== 'carousel'));
+  });
+});
+
 test('content offers drive varied schedule topics with exact prices and post types', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

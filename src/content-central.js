@@ -3269,6 +3269,8 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     return topic;
   }
 
+  const carouselDayIndexes = carouselWeekdaysForRange(days, carouselsPerWeek);
+
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
     const dayNumber = dayIndex + 1;
     const scheduledDate = addDays(startDate, dayIndex);
@@ -3295,7 +3297,62 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const imageLocalPath = `content/drafts/${batchId}/images/${fileName}.svg`;
         const ruleLabel = `${format.label}: ${format.postsPerDay}x por dia, a cada ${format.everyDays} dia(s), intervalo ${format.intervalMinutes} min.`;
         const itemContentRules = contentRulesWithApprovedPlan(contentRules, approvedPlanOverride);
-        const item = {
+        const isCarouselDay = format.channel === 'instagram_feed' && slotIndex === 0 && carouselDayIndexes.has(dayIndex);
+        const item = isCarouselDay
+          ? (() => {
+              const carouselId = `${contentId}-carrossel`;
+              const briefing = carouselBriefingFromContentTopic(contentTopic);
+              return {
+                schemaVersion: 1,
+                contentId,
+                projectId: project.projectId,
+                batchId,
+                dayNumber,
+                slotNumber,
+                scheduledDate,
+                scheduledTime,
+                channel: format.channel,
+                formatLabel: format.label,
+                contentTopic,
+                creativeGroupKey: null,
+                creativeSharedWith: null,
+                contentReview: buildContentReview({ channel: format.channel, aspectRatio, dimensions, contentTopic }),
+                status: 'draft_generated',
+                title: `Dia ${dayNumber} · Carrossel — ${project.name}`,
+                format: 'carousel',
+                briefing,
+                carouselFormat: '',
+                slideCount: maxCarouselSlides,
+                slides: Array.from({ length: maxCarouselSlides }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1)),
+                outlineGenerationError: null,
+                caption: {
+                  text: buildCaptionDraft(project, dayNumber, contentTopic),
+                  version: 1,
+                },
+                dayRules: [],
+                scheduleRule: { ...format },
+                generationContext: {
+                  globalRules: globalRules.rules.map((rule) => rule.text),
+                  projectRules: [...project.rules.project],
+                  contentRules: [...itemContentRules, ruleLabel],
+                },
+                approval: {
+                  required: project.mode !== 'automatic',
+                  emailSentAt: null,
+                  approvedAt: null,
+                  approvalSource: null,
+                },
+                publish: {
+                  publishedAt: null,
+                  metaMediaId: null,
+                  error: null,
+                },
+                filePath,
+                createdAt,
+                updatedAt: createdAt,
+              };
+            })()
+          : {
           schemaVersion: 1,
           contentId,
           projectId: project.projectId,
@@ -3348,7 +3405,9 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           createdAt,
           updatedAt: createdAt,
         };
-        item.image.previewDataUrl = await writeGeneratedImage(join(paths.projectDir, imageLocalPath), item, project);
+        if (!isCarouselDay) {
+          item.image.previewDataUrl = await writeGeneratedImage(join(paths.projectDir, imageLocalPath), item, project);
+        }
         await writeJson(filePath, item);
         batch.items.push(item);
       }
