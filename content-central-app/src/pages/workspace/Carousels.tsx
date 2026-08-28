@@ -43,6 +43,7 @@ export function Carousels() {
   const [generating, setGenerating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [slideState, setSlideState] = useState<Record<string, SlideActionState>>({});
+  const [slideNotes, setSlideNotes] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<{ src: string; title: string; fileName: string } | null>(null);
   const [feedPreviewId, setFeedPreviewId] = useState<string | null>(null);
 
@@ -100,10 +101,14 @@ export function Carousels() {
     }
   }
 
-  async function handleRegenerateSlide(carouselId: string, slideId: string) {
+  // No note = "Regenerar esse slide" (fresh take). A note = "Aplicar
+  // correção" — a targeted edit of the slide's current image, same
+  // distinction AdCreatives already makes.
+  async function handleRegenerateSlide(carouselId: string, slideId: string, note?: string) {
     setSlideState((current) => ({ ...current, [slideId]: { busy: true, error: null } }));
     try {
-      await regenerateCarouselSlide(project.projectId, carouselId, slideId);
+      await regenerateCarouselSlide(project.projectId, carouselId, slideId, note);
+      setSlideNotes((current) => ({ ...current, [slideId]: "" }));
       await refresh();
       setSlideState((current) => ({ ...current, [slideId]: IDLE_SLIDE_STATE }));
     } catch (err) {
@@ -178,6 +183,7 @@ export function Carousels() {
                 {carousel.slides.map((slide) => {
                   const src = slideSource(slide);
                   const state = stateFor(slide.slideId);
+                  const note = slideNotes[slide.slideId] || "";
                   return (
                     <div key={slide.slideId} className={styles.slide}>
                       <div className={styles.slidePhoto}>
@@ -199,6 +205,15 @@ export function Carousels() {
                         {slide.imageGenerationError ? (
                           <div className="pill bad">⚠ {slide.imageGenerationError}</div>
                         ) : null}
+                        <label htmlFor={`slide-edit-${slide.slideId}`} className="muted" style={{ fontSize: 12 }}>
+                          Pedido de correção (opcional)
+                        </label>
+                        <textarea
+                          id={`slide-edit-${slide.slideId}`}
+                          placeholder="Ex: texto menor, tirar esse ícone, cor mais escura..."
+                          value={note}
+                          onChange={(e) => setSlideNotes((current) => ({ ...current, [slide.slideId]: e.target.value }))}
+                        />
                         <Button
                           type="button"
                           variant="secondary"
@@ -207,6 +222,16 @@ export function Carousels() {
                         >
                           {state.busy ? "Regenerando..." : "Regenerar esse slide"}
                         </Button>
+                        {note.trim() ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            disabled={state.busy || slide.image.generating}
+                            onClick={() => handleRegenerateSlide(carousel.carouselId, slide.slideId, note.trim())}
+                          >
+                            {state.busy ? "Aplicando..." : "Aplicar correção"}
+                          </Button>
+                        ) : null}
                         {state.error ? <div className="pill bad">{state.error}</div> : null}
                       </div>
                     </div>

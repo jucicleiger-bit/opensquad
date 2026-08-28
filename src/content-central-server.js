@@ -1196,11 +1196,16 @@ async function handleRequest(req, res, targetDir, context = {}) {
   }
 
   if (parts.length === 6 && parts[3] === 'carousels-regenerate-slide') {
+    const body = await readBody(req).catch(() => ({}));
     const carousel = await regenerateCarouselSlide(projectId, parts[4], parts[5], targetDir);
     enqueueCarouselSlideRegeneration(projectId, parts[4], parts[5], {
       imageGenerator: context.imageGenerator,
       imageReviewer: context.imageReviewer,
       resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+      // A note here turns the regenerate into a targeted edit of the
+      // slide's own current image instead of a fresh take — see
+      // enrichCarouselSlideWithRealImage.
+      note: String(body.note || '').trim() || undefined,
     }, targetDir);
     return sendJson(res, 200, { carousel });
   }

@@ -2774,6 +2774,14 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
       imageReviewer: options.imageReviewer,
       channel: slide.channel,
       maxAttempts: options.maxCreativeAttempts,
+      // A note turns this into a targeted edit of the slide's own current
+      // image (same mechanism enqueueAdCreativeImageGeneration already
+      // uses) instead of a fresh generation — "deixa o texto menor", "tira
+      // esse ícone" fixes the one thing asked without re-rolling everything
+      // else. No note (fresh "Regenerar esse slide" click) behaves exactly
+      // as before.
+      note: options.note,
+      targetedEdit: Boolean(options.note),
       // Slide 1's own already-generated image, attached as an actual
       // reference file (not just a text instruction) — see
       // runCarouselGeneration for how this is resolved.

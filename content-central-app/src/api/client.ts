@@ -802,10 +802,11 @@ export function regenerateCarouselSlide(
   projectId: string,
   carouselId: string,
   slideId: string,
+  note?: string,
 ): Promise<{ carousel: Carousel }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-regenerate-slide/${encodeURIComponent(carouselId)}/${encodeURIComponent(slideId)}`, {
     method: "POST",
-    body: JSON.stringify({}),
+    body: JSON.stringify({ note }),
   });
 }
 
