@@ -3310,9 +3310,10 @@ test('animateContentForReels attaches a rendered video to the card using the inj
     await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const batch = await generateContentBatch('animar-reels', { days: 1, startDate: '2026-07-20', channel: 'instagram_reels' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'animar-reels');
+    const paths = getCentralPaths(dir, 'animar-reels');
     await enrichBatchItemsWithRealImages(batch, project, 'animar-reels', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/reels.png', mimeType: 'image/png' }),
-    });
+    }, paths);
     const targetContentId = batch.items[0].contentId;
 
     const content = await animateContentForReels('animar-reels', targetContentId, {
@@ -3378,9 +3379,10 @@ test('animateContentForReels rejects an animator that resolves without a usable 
     await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const batch = await generateContentBatch('animar-vazio', { days: 1, startDate: '2026-07-20', channel: 'instagram_reels' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'animar-vazio');
+    const paths = getCentralPaths(dir, 'animar-vazio');
     await enrichBatchItemsWithRealImages(batch, project, 'animar-vazio', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/reels.png', mimeType: 'image/png' }),
-    });
+    }, paths);
 
     await assert.rejects(
       () => animateContentForReels('animar-vazio', batch.items[0].contentId, {
@@ -3713,12 +3715,13 @@ test('multi-product offers rotate a persisted hero focus and prioritize its matc
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'rodizio-rotativo');
     const calls = [];
+    const paths = getCentralPaths(dir, 'rodizio-rotativo');
     await enrichBatchItemsWithRealImages(batch, project, 'rodizio-rotativo', {
       imageGenerator: async (payload) => {
         calls.push(payload);
         return { url: 'https://cdn.example.com/rodizio.png', mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     const focusedProducts = calls.map((call) => {
       const match = call.content.image.prompt.match(/O foco visual desta peça é ([^.]+)\./i);
@@ -3896,9 +3899,10 @@ test('a project whose ONLY product photo was uploaded offer-scoped (scope: "offe
     const batch = await generateContentBatch('so-foto-de-oferta', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'so-foto-de-oferta');
     const calls = [];
+    const paths = getCentralPaths(dir, 'so-foto-de-oferta');
     await enrichBatchItemsWithRealImages(batch, project, 'so-foto-de-oferta', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/img.png', mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     const productBPayload = calls.find((call) => call.content.contentTopic.offerName === 'Produto B');
     assert.ok(productBPayload, 'expected a generation call for the photo-less offer');
@@ -4189,12 +4193,13 @@ test('a marketing offer with NO photo of its own never borrows a photo already c
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'rei-do-xiaomi-sem-foto');
     const calls = [];
+    const paths = getCentralPaths(dir, 'rei-do-xiaomi-sem-foto');
     await enrichBatchItemsWithRealImages(batch, project, 'rei-do-xiaomi-sem-foto', {
       imageGenerator: async (payload) => {
         calls.push(payload);
         return { url: 'https://cdn.example.com/img.png', mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     const notePayload = calls.find((call) => call.content.contentTopic.offerName === 'Redmi Note 15 8/256GB');
     assert.ok(notePayload, 'expected a generation call for the photo-less offer');
@@ -4750,9 +4755,10 @@ test('a plain orientation/institutional offer with no pillar and no explicit CTA
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'conteudo-sem-venda');
 
     const calls = [];
+    const paths = getCentralPaths(dir, 'conteudo-sem-venda');
     await enrichBatchItemsWithRealImages(batch, project, 'conteudo-sem-venda', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: `https://cdn.example.com/${calls.length}.png`, mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     assert.equal(calls.length, 2);
     for (const call of calls) {
@@ -5375,9 +5381,10 @@ test('a paired combo topic carries exactly one photo per offer through to real i
 
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'combo-fotos');
     const calls = [];
+    const paths = getCentralPaths(dir, 'combo-fotos');
     await enrichBatchItemsWithRealImages(batch, project, 'combo-fotos', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/combo.png', mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     assert.equal(calls.length, 1);
     // buildPrimaryAiImageReferences must end up with exactly one product
@@ -5993,9 +6000,10 @@ test('a resolved "convida" pillar drives a real sales CTA, while a non-sales pil
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'cta-pilar');
 
     const calls = [];
+    const paths = getCentralPaths(dir, 'cta-pilar');
     await enrichBatchItemsWithRealImages(batch, project, 'cta-pilar', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: `https://cdn.example.com/${calls.length}.png`, mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     const convidaCall = calls.find((call) => call.content.contentTopic.pillar?.role === 'convida');
     const ensinaCall = calls.find((call) => call.content.contentTopic.pillar?.role === 'ensina');
@@ -6273,10 +6281,11 @@ test('enrichBatchItemsWithRealImages writes real captions in parallel with the i
     const batch = await generateContentBatch('copy-agent-batch', { days: 1, startDate: '2026-07-20' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'copy-agent-batch');
 
+    const paths = getCentralPaths(dir, 'copy-agent-batch');
     await enrichBatchItemsWithRealImages(batch, project, 'copy-agent-batch', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/batch.png', mimeType: 'image/png' }),
       captionGenerator: async () => 'Legenda pronta escrita pelo Agente Redator.',
-    });
+    }, paths);
 
     assert.equal(batch.items[0].image.generatedSource, 'ai');
     assert.equal(batch.items[0].caption.text, 'Legenda pronta escrita pelo Agente Redator.');
@@ -6296,11 +6305,12 @@ test('enrichBatchItemsWithRealImages records an error instead of silently leavin
     const skeletonText = batch.items[0].caption.text;
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'copy-agent-empty');
 
+    const paths = getCentralPaths(dir, 'copy-agent-empty');
     await enrichBatchItemsWithRealImages(batch, project, 'copy-agent-empty', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/batch.png', mimeType: 'image/png' }),
       // Simulates Hermes resolving without throwing but with an empty response.
       captionGenerator: async () => null,
-    });
+    }, paths);
 
     assert.equal(batch.items[0].caption.text, skeletonText);
     assert.notEqual(batch.items[0].caption.generatedSource, 'ai');
@@ -6321,12 +6331,13 @@ test('enrichBatchItemsWithRealImages records an error instead of silently keepin
     const batch = await generateContentBatch('imagem-sem-url', { days: 1, startDate: '2026-07-20' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'imagem-sem-url');
 
+    const paths = getCentralPaths(dir, 'imagem-sem-url');
     await enrichBatchItemsWithRealImages(batch, project, 'imagem-sem-url', {
       // Resolves without throwing, but with no usable url — used to be
       // silently treated as success (imageGenerationError stayed null)
       // while the card kept its local SVG placeholder forever.
       imageGenerator: async () => ({}),
-    });
+    }, paths);
 
     assert.notEqual(batch.items[0].image.generatedSource, 'ai');
     assert.match(batch.items[0].imageGenerationError, /não retornou uma URL de imagem/);
@@ -6396,6 +6407,7 @@ test('enrichBatchItemsWithRealImages generates one creative per shape group and 
 
     let imageCalls = 0;
     let captionCalls = 0;
+    const paths = getCentralPaths(dir, 'compartilhar-criativo');
     await enrichBatchItemsWithRealImages(batch, project, 'compartilhar-criativo', {
       imageGenerator: async () => {
         imageCalls += 1;
@@ -6405,7 +6417,7 @@ test('enrichBatchItemsWithRealImages generates one creative per shape group and 
         captionCalls += 1;
         return `Legenda gerada ${captionCalls}`;
       },
-    });
+    }, paths);
 
     // Only two AI calls total: one for the Story/Facebook Story group, one for the solo Feed item.
     assert.equal(imageCalls, 2);
@@ -6448,6 +6460,7 @@ test('enrichBatchItemsWithRealImages animates Reels slots automatically once the
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'reels-auto-animar');
 
     let animateCalls = 0;
+    const paths = getCentralPaths(dir, 'reels-auto-animar');
     await enrichBatchItemsWithRealImages(batch, project, 'reels-auto-animar', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/generated.png', mimeType: 'image/png' }),
       captionGenerator: async () => 'Legenda gerada',
@@ -6456,7 +6469,7 @@ test('enrichBatchItemsWithRealImages animates Reels slots automatically once the
         assert.equal(content.channel, 'instagram_reels', 'videoAnimator should only ever be called for the Reels item');
         return { url: 'https://cdn.example.com/generated.mp4', mimeType: 'video/mp4', durationSeconds: 7 };
       },
-    });
+    }, paths);
 
     assert.equal(animateCalls, 1);
     const content = await listProjectContent('reels-auto-animar', dir);
@@ -6490,10 +6503,11 @@ test('enrichBatchItemsWithRealImages records a videoGenerationError instead of f
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'reels-auto-falha');
 
+    const paths = getCentralPaths(dir, 'reels-auto-falha');
     await enrichBatchItemsWithRealImages(batch, project, 'reels-auto-falha', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/generated.png', mimeType: 'image/png' }),
       videoAnimator: async () => { throw new Error('ffmpeg indisponível'); },
-    });
+    }, paths);
 
     const content = await listProjectContent('reels-auto-falha', dir);
     const reels = content[0];
@@ -6530,9 +6544,10 @@ test('regenerating a card picks up a real photo attached to the offer AFTER the 
       channel: 'instagram_feed',
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'foto-anexada-depois');
+    const paths = getCentralPaths(dir, 'foto-anexada-depois');
     await enrichBatchItemsWithRealImages(batch, project, 'foto-anexada-depois', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/generico.png', mimeType: 'image/png' }),
-    });
+    }, paths);
     const beforePhoto = await listProjectContent('foto-anexada-depois', dir);
     assert.doesNotMatch(beforePhoto[0].image.prompt, /Foto selecionada:/);
 
@@ -6589,9 +6604,10 @@ test('a "Pedido de alteração" note asks the image generator for a targeted edi
       channel: 'instagram_feed',
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'pedido-alteracao');
+    const paths = getCentralPaths(dir, 'pedido-alteracao');
     await enrichBatchItemsWithRealImages(batch, project, 'pedido-alteracao', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
-    });
+    }, paths);
     const [before] = await listProjectContent('pedido-alteracao', dir);
 
     const withNoteCalls = [];
@@ -6641,9 +6657,10 @@ test('regenerating one card\'s image individually unlinks it from its shared-cre
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'desvincular-criativo');
 
+    const paths = getCentralPaths(dir, 'desvincular-criativo');
     await enrichBatchItemsWithRealImages(batch, project, 'desvincular-criativo', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/shared.png', mimeType: 'image/png' }),
-    });
+    }, paths);
 
     const before = await listProjectContent('desvincular-criativo', dir);
     const story = before.find((item) => item.channel === 'instagram_story');
@@ -6689,10 +6706,11 @@ test('regenerateContentGroup regenerates a shared creative once and copies it to
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'regenerar-grupo');
 
+    const paths = getCentralPaths(dir, 'regenerar-grupo');
     await enrichBatchItemsWithRealImages(batch, project, 'regenerar-grupo', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
       captionGenerator: async () => 'Legenda original.',
-    });
+    }, paths);
 
     const before = await listProjectContent('regenerar-grupo', dir);
     const groupIds = before.map((item) => item.contentId);
@@ -7733,12 +7751,13 @@ test('an institutional special-date post (no offer linked) gets a warm, celebrat
 
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-sem-oferta');
     const generatorCalls = [];
+    const paths = getCentralPaths(dir, 'data-sem-oferta');
     await enrichBatchItemsWithRealImages(batch, project, 'data-sem-oferta', {
       imageGenerator: async (payload) => {
         generatorCalls.push(payload);
         return { url: 'https://cdn.example.com/dia-dos-pais.png', mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     assert.equal(generatorCalls.length, 1);
     const prompt = generatorCalls[0].content.image.prompt;
@@ -7825,12 +7844,13 @@ test('generateSpecialDateContent shares one creative across same-shape channels 
 
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-varios-formatos');
     let imageCalls = 0;
+    const paths = getCentralPaths(dir, 'data-varios-formatos');
     await enrichBatchItemsWithRealImages(batch, project, 'data-varios-formatos', {
       imageGenerator: async () => {
         imageCalls += 1;
         return { url: `https://cdn.example.com/dia-dos-pais-${imageCalls}.png`, mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     // One AI generation for the vertical group (Story/Reels/Facebook Story),
     // one for the feed group (Feed/Facebook Feed) — 2 total, not 5.
@@ -8663,6 +8683,43 @@ test('runCarouselGeneration/enqueueCarouselGeneration accept a briefing/slideCou
     const reloaded = JSON.parse(await readFile(filePath, 'utf-8'));
     assert.equal(reloaded.status, 'draft_generated', 'markReady override must prevent the engine from touching .status');
     assert.equal(reloaded.slides[0].image.url, 'https://cdn.example.com/x.png');
+  });
+});
+
+test('enrichBatchItemsWithRealImages fills in the roteiro and real per-slide images for a carousel-format item, leaving single-image items untouched', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-enrich', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-enrich', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-enrich');
+    const project = await loadProjectForTest('carrossel-enrich', dir);
+
+    await enrichBatchItemsWithRealImages(batch, project, 'carrossel-enrich', {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, i) => ({ role: i === 0 ? 'cover' : 'cta', slideText: `Slide ${i + 1}` })),
+      }),
+    }, paths);
+
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+    const singleItem = batch.items.find((item) => item.format !== 'carousel');
+
+    const reloadedCarousel = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(reloadedCarousel.status, 'draft_generated', 'must not be overwritten by the carousel engine\'s own ready/generating status field');
+    reloadedCarousel.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.image.url, 'https://cdn.example.com/x.png');
+    });
+
+    const reloadedSingle = JSON.parse(await readFile(singleItem.filePath, 'utf-8'));
+    assert.equal(reloadedSingle.image.generating, false);
+    assert.ok(reloadedSingle.image.url || reloadedSingle.image.previewDataUrl);
   });
 });
 

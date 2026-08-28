@@ -2990,11 +2990,46 @@ function creativeGroupsFromItems(items) {
 // generation per group — the "leader" (first item in the group) runs the
 // real generation, and its result is copied onto the other members so they
 // all publish with the exact same creative instead of each rolling its own.
-export async function enrichBatchItemsWithRealImages(batch, project, projectId, options) {
+export async function enrichBatchItemsWithRealImages(batch, project, projectId, options, paths) {
   if (typeof options.imageGenerator !== 'function') return;
   const groups = creativeGroupsFromItems(batch.items);
   await mapWithConcurrency(groups, BATCH_IMAGE_CONCURRENCY, async (group) => {
     const [leader, ...followers] = group;
+    // A carousel item's own creativeGroupKey is always null (Task 4), so
+    // it is always alone in its group — followers is always empty here.
+    // It needs the multi-slide roteiro pipeline instead of the
+    // single-image path below, and its own status field (draft_generated,
+    // aprovado, ...) must never be overwritten by the carousel engine's
+    // internal 'generating'/'ready' bookkeeping — hence markReady: () => {}.
+    if (leader.format === 'carousel') {
+      leader.slides.forEach((slide) => { slide.image.generating = true; });
+      leader.updatedAt = new Date().toISOString();
+      await writeJson(leader.filePath, leader);
+      const captionWork = writeAiCaptionForItem(leader, project, options);
+      const carouselWork = runCarouselGeneration(leader, project, projectId, {
+        imageGenerator: options.imageGenerator,
+        imageReviewer: options.imageReviewer,
+        outlineGenerator: options.carouselOutlineGenerator,
+        resolveCarouselStyleReference: options.resolveCarouselStyleReference,
+        maxCreativeAttempts: options.maxCreativeAttempts,
+      }, paths, {
+        briefing: leader.briefing,
+        slideCount: leader.slideCount,
+        markReady: () => {},
+      });
+      await Promise.all([carouselWork, captionWork]);
+      // runCarouselGeneration writes the outline's visual style (e.g.
+      // 'listicle') into carousel.format — the field a standalone carousel
+      // uses for its style. A batch item overloads that same field name as
+      // its 'carousel' vs single-image discriminator, so restore it and
+      // keep the generated style in carouselFormat instead (the field this
+      // item's schema already reserves for it — see Task 4).
+      leader.carouselFormat = leader.format || '';
+      leader.format = 'carousel';
+      leader.updatedAt = new Date().toISOString();
+      await writeJson(leader.filePath, leader);
+      return;
+    }
     for (const item of group) {
       item.image.generating = true;
       item.updatedAt = new Date().toISOString();
@@ -3091,7 +3126,7 @@ export function enqueueBatchImageGeneration(projectId, batch, options = {}, targ
   if (typeof options.imageGenerator !== 'function') return;
   const paths = getCentralPaths(targetDir, projectId);
   loadProject(paths)
-    .then((project) => enrichBatchItemsWithRealImages(batch, project, projectId, options))
+    .then((project) => enrichBatchItemsWithRealImages(batch, project, projectId, options, paths))
     .catch((err) => {
       // Best-effort background job — surface nothing synchronously; a
       // project-load failure here would already have failed the request
