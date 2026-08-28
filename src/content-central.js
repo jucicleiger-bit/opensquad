@@ -4519,14 +4519,47 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
   const fixed = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const content = await listProjectContent(entry.name, targetDir);
-    for (const item of content) {
-      if (!item.image?.generating) continue;
-      item.image.generating = false;
-      item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
-      item.updatedAt = new Date().toISOString();
-      await writeJson(item.filePath, item);
-      fixed.push({ projectId: entry.name, contentId: item.contentId });
+    // One broken/incomplete project directory (missing project.json — a
+    // leftover test folder, an interrupted delete) used to throw out of
+    // listProjectContent and abort this whole function, silently skipping
+    // reconciliation for every OTHER project too, on every single startup.
+    // Isolate each project so a bad one only loses its own reconcile pass.
+    try {
+      const content = await listProjectContent(entry.name, targetDir);
+      for (const item of content) {
+        if (!item.image?.generating) continue;
+        item.image.generating = false;
+        item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
+        item.updatedAt = new Date().toISOString();
+        await writeJson(item.filePath, item);
+        fixed.push({ projectId: entry.name, contentId: item.contentId });
+      }
+
+      // Same class of bug, carousel shape: a slide's own `image.generating`
+      // (or the whole carousel's `status: 'generating'`, e.g. the roteiro
+      // call itself was in flight) can get stranded true forever if the
+      // server dies mid-generation — nothing else ever flips it back, and
+      // "Regenerar esse slide" stays disabled thinking one is still running.
+      const carousels = await listCarousels(entry.name, targetDir);
+      for (const carousel of carousels) {
+        let touched = false;
+        for (const slide of carousel.slides) {
+          if (!slide.image?.generating) continue;
+          slide.image.generating = false;
+          slide.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar esse slide" para tentar de novo.';
+          touched = true;
+        }
+        if (carousel.status === 'generating') {
+          carousel.status = 'ready';
+          touched = true;
+        }
+        if (!touched) continue;
+        carousel.updatedAt = new Date().toISOString();
+        await writeJson(carousel.filePath, carousel);
+        fixed.push({ projectId: entry.name, carouselId: carousel.carouselId });
+      }
+    } catch (err) {
+      console.error(`[content-central] reconcile interrupted generations skipped project "${entry.name}":`, err.message);
     }
   }
   return fixed;

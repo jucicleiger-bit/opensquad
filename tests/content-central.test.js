@@ -7293,6 +7293,38 @@ test('reconcileInterruptedGenerations clears a card stuck "generating" from a pr
   });
 });
 
+test('reconcileInterruptedGenerations also clears a stuck carousel slide, and one broken project directory does not block reconciling the rest', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-travado', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-travado', { briefing: 'teste', slideCount: 2 }, dir);
+
+    // Simulates the exact scenario this fixes: the server got killed
+    // (process manager restart, a forced kill during a deploy) while a
+    // slide's real image generation was mid-flight. Slide 1 already
+    // finished fine (generateCarousel's own skeleton defaults every slide
+    // to generating:true — flip it here so only slide 0 looks stuck).
+    const raw = JSON.parse(await readFile(carousel.filePath, 'utf-8'));
+    raw.slides[0].image.generating = true;
+    raw.slides[1].image.generating = false;
+    await writeFile(carousel.filePath, JSON.stringify(raw, null, 2), 'utf-8');
+
+    // A leftover/incomplete project directory (no project.json) — used to
+    // throw inside the reconcile loop and silently abort reconciliation for
+    // every project after it.
+    await mkdir(join(dir, '_opensquad', 'content-central', 'projects', 'projeto-quebrado'), { recursive: true });
+
+    const fixed = await reconcileInterruptedGenerations(dir);
+    const carouselFix = fixed.find((entry) => entry.carouselId === carousel.carouselId);
+    assert.ok(carouselFix, 'the stuck carousel must still be reconciled despite the broken project directory');
+
+    const reloaded = JSON.parse(await readFile(carousel.filePath, 'utf-8'));
+    assert.equal(reloaded.slides[0].image.generating, false);
+    assert.match(reloaded.slides[0].imageGenerationError, /servidor foi reiniciado/);
+    assert.equal(reloaded.slides[1].image.generating, false, 'the already-finished slide must be left as-is');
+    assert.equal(reloaded.slides[1].imageGenerationError, null, 'and must not get an error it never had');
+  });
+});
+
 test('listCentralProjects returns safe project summaries without secrets', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
