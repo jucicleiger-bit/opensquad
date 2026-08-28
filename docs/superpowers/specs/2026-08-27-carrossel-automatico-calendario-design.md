@@ -22,12 +22,14 @@
 
 ## 1. Config surface
 
-Two new fields on `project.contentSettings`, next to `defaultDaysToGenerate`/`catalogStoriesPerDay` (same tab: "Agenda e Geração" — not Raio-X, which holds brand facts/voice, not posting cadence):
+**Correction from the first draft of this spec:** there is no persisted "Agenda e Geração" settings tab to add fields to — `days`/`formats` (the channel/cadence matrix) are never saved to `project.contentSettings` at all; they're plain inputs on `GenerateContent.tsx`'s form, typed fresh on every generation and sent as `GenerateContentInput` (`content-central-app/src/api/client.ts:545`) to `POST /api/projects/:id/generate` → `generateContentSchedulePlan(projectId, options)`. `contentSettings.defaultDaysToGenerate` exists as a read-side fallback (`content-central.js:2849`) but nothing in this codebase currently writes it for a marketing-mode project — it's a dead default, not a real settings screen. Inventing a persistence layer that doesn't otherwise exist here would be scope the rest of the schedule config doesn't have either.
 
-- `carouselsPerWeek` (integer, default `0` = feature off, clamp `0..7`)
-- `maxCarouselSlides` (integer, default `3`, clamp `2..10` — same hard limit `CAROUSEL_SLIDE_COUNT_MIN/MAX` the standalone carousel already enforces, kept lower by default since an automatic weekly carousel is meant to be a light, frequent format, not the avulso's up-to-10-slide deep dive)
+Two new fields go where `days` already lives instead — a per-generation input, not a saved setting:
 
-Validated/defaulted wherever the rest of `contentSettings` is currently read and normalized (see the pattern at `content-central.js:1591` — `updateCatalogSettings` — for the catalog-mode equivalent; the marketing-mode settings path is pinned exactly during planning).
+- `carouselsPerWeek` (integer, default `0` = feature off, clamp `0..7`) — new field on `GenerateFormatInput`'s sibling `GenerateContentInput` (`content-central-app/src/api/client.ts:545`) and on `generateContentSchedulePlan`'s `options` (`content-central.js:2844`), read the same way `options.days` already is.
+- `maxCarouselSlides` (integer, default `3`, clamp `2..10` — same hard limit `CAROUSEL_SLIDE_COUNT_MIN/MAX` the standalone carousel already enforces, kept lower by default since an automatic weekly carousel is meant to be a light, frequent format, not the avulso's up-to-10-slide deep dive) — same treatment, new field alongside `carouselsPerWeek`.
+
+`GenerateContent.tsx` gets two new form fields (number inputs, same styling as the existing `days` field) next to the days/format matrix.
 
 ## 2. Data model — carousel as a batch item
 
@@ -90,6 +92,4 @@ Same layers this codebase already tests at:
 - `content-central-server.js`: HTTP-level test that a generated batch's carousel day produces a `format: 'carousel'` item with real (mocked) slide images, and that `publishContentToInstagram` on a `format: 'carousel'` item calls `meta-publish-multi.js` with `image_urls` (plural).
 - `meta-publish-multi.js` (check whichever test file already covers `publishInstagramFeed`/`publishInstagramStory` for the existing pattern): `publishInstagramCarousel` creates N child containers then 1 parent, asserts the exact Graph API call sequence against a mocked `graphRequest`.
 
-## Open question for the implementation plan
-
-- Exact function/route that currently persists marketing-mode `contentSettings` (the catalog-mode equivalent is `updateCatalogSettings`, `content-central.js:1591`) — pin the real call site before writing tasks. Everything else in this design (data model, distribution algorithm, approval rendering, publish flow) is fully specified above.
+No open questions remain — the config-surface correction above was the only one, and it's now resolved with the real integration point.
