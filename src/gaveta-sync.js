@@ -1,9 +1,28 @@
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+
+// OPENSQUAD_GAVETA_DIR reaching here already mangled (relative, or just
+// plain wrong) is exactly how a real incident happened: `join()`/`mkdir`
+// don't care whether a path "makes sense", so a bad value silently created
+// a nonsense `queue/` folder *inside the main app repo* instead of the
+// actual gaveta clone — and the GitHub Actions publisher, which only
+// watches the real gaveta repo, never saw the approved post. Failing loud
+// here turns that into an immediate, obvious error instead of a silent
+// miss discovered only when a client asks why a post never went out.
+async function assertValidGaveteDir(gaveteDir) {
+  if (!isAbsolute(gaveteDir)) {
+    throw new Error(`OPENSQUAD_GAVETA_DIR must be an absolute path, got: ${JSON.stringify(gaveteDir)}`);
+  }
+  try {
+    if (!(await stat(join(gaveteDir, '.git'))).isDirectory()) throw new Error('not a directory');
+  } catch {
+    throw new Error(`OPENSQUAD_GAVETA_DIR does not point at a git checkout (no .git found): ${gaveteDir}`);
+  }
+}
 
 function queueItemPath(gaveteDir, projectId, contentId) {
   return join(gaveteDir, 'queue', projectId, `${contentId}.json`);
@@ -43,6 +62,7 @@ async function commitAndPush(gaveteDir, message) {
 }
 
 export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
+  await assertValidGaveteDir(gaveteDir);
   const path = queueItemPath(gaveteDir, projectId, contentId);
   const payload = {
     projectId,
@@ -61,6 +81,7 @@ export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
 }
 
 export async function removeQueueItem(gaveteDir, projectId, contentId) {
+  await assertValidGaveteDir(gaveteDir);
   const path = queueItemPath(gaveteDir, projectId, contentId);
   try {
     await readFile(path, 'utf-8');
@@ -74,6 +95,7 @@ export async function removeQueueItem(gaveteDir, projectId, contentId) {
 }
 
 export async function pullQueue(gaveteDir) {
+  await assertValidGaveteDir(gaveteDir);
   await git(gaveteDir, ['pull']);
 }
 
@@ -81,6 +103,7 @@ export async function pullQueue(gaveteDir) {
 // whether GitHub Actions' hourly sweep already published this item before
 // the PC's own manual "Publicar agora" gets a chance to publish it again.
 export async function readQueueItem(gaveteDir, projectId, contentId) {
+  await assertValidGaveteDir(gaveteDir);
   try {
     return JSON.parse(await readFile(queueItemPath(gaveteDir, projectId, contentId), 'utf-8'));
   } catch (err) {

@@ -166,6 +166,28 @@ test('readQueueItem returns the parsed item, or null when it does not exist', as
   });
 });
 
+// Regression: a mangled/relative OPENSQUAD_GAVETA_DIR (e.g. backslashes
+// eaten by a shell somewhere upstream) must fail loudly, not silently write
+// the queue file into whatever `process.cwd()` happens to be — that silent
+// version of this bug is exactly how an approved post's queue entry once
+// landed inside the main app repo instead of the real gaveta clone, where
+// the GitHub Actions publisher never saw it.
+test('upsertQueueItem rejects a relative gaveteDir instead of writing into process.cwd()', async () => {
+  await assert.rejects(
+    upsertQueueItem('relative/not-a-real-path', 'boss-pizzaria', 'content-1', { channel: 'instagram_feed', caption: 'x', mediaUrl: null, scheduledDate: '2026-08-10', scheduledTime: '18:00' }),
+    /absolute path/
+  );
+});
+
+test('upsertQueueItem rejects an absolute path that is not a git checkout', async () => {
+  await withGaveta(async ({ workDir }) => {
+    await assert.rejects(
+      upsertQueueItem(join(workDir, 'queue'), 'boss-pizzaria', 'content-1', { channel: 'instagram_feed', caption: 'x', mediaUrl: null, scheduledDate: '2026-08-10', scheduledTime: '18:00' }),
+      /no \.git found/
+    );
+  });
+});
+
 test('pullQueue brings in changes pushed from another clone', async () => {
   await withGaveta(async ({ workDir, bareDir }) => {
     const otherClone = `${workDir}-other`;
