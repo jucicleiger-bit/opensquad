@@ -1018,7 +1018,14 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (parts.length === 4 && parts[3] === 'generate') {
     const body = await readBody(req);
-    const imageOptions = { imageGenerator: context.imageGenerator, imageReviewer: context.imageReviewer, captionGenerator: context.captionGenerator, videoAnimator: context.videoAnimator, carouselOutlineGenerator: context.carouselOutlineGenerator };
+    const imageOptions = {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      captionGenerator: context.captionGenerator,
+      videoAnimator: context.videoAnimator,
+      carouselOutlineGenerator: context.carouselOutlineGenerator,
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+    };
     if (Array.isArray(body.formats) && body.formats.length) {
       const formats = body.formats.map((format) => ({
         ...format,
