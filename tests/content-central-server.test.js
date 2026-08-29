@@ -4410,6 +4410,76 @@ test('carousels-delete removes it from the listing, and carousels-regenerate-sli
   );
 });
 
+test('carousel-regenerate-slide on a batch-item carousel regenerates only the target slide', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'carrossel-item-regen', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+
+      await request(server, '/api/projects/carrossel-item-regen/generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          days: 1,
+          startDate: '2026-08-24',
+          formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+          carouselsPerWeek: 7,
+          maxCarouselSlides: 2,
+        }),
+      });
+
+      let item;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-item-regen/content');
+        item = body.content.find((entry) => entry.format === 'carousel');
+        if (item?.slides?.length === 2 && item.slides.every((slide) => !slide.image.generating)) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      const contentId = item.contentId;
+      const targetSlideId = item.slides[0].slideId;
+      const otherSlideId = item.slides[1].slideId;
+
+      const regenerated = await request(server, `/api/projects/carrossel-item-regen/content/${contentId}/carousel-regenerate-slide/${targetSlideId}`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      assert.equal(regenerated.response.status, 200);
+
+      let final;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-item-regen/content');
+        final = body.content.find((entry) => entry.contentId === contentId);
+        const slide = final.slides.find((s) => s.slideId === targetSlideId);
+        if (slide?.image.url === 'https://cdn.example.com/regen.png' && !slide.image.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      assert.equal(final.slides.find((s) => s.slideId === targetSlideId).image.url, 'https://cdn.example.com/regen.png');
+      assert.equal(final.slides.find((s) => s.slideId === otherSlideId).image.url, 'https://cdn.example.com/original.png');
+    },
+    {
+      // Same call-order trick as the standalone-carousel version of this
+      // test above: the 2 slides from the initial /generate are calls 1-2,
+      // the later carousel-regenerate-slide call is always call 3.
+      imageGenerator: (() => {
+        let call = 0;
+        return async () => {
+          call += 1;
+          return {
+            url: call <= 2 ? 'https://cdn.example.com/original.png' : 'https://cdn.example.com/regen.png',
+            mimeType: 'image/png',
+          };
+        };
+      })(),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, index) => ({ role: 'content', slideText: `Slide ${index + 1}` })),
+      }),
+    },
+  );
+});
+
 test('POST ad-creatives with format "ambos" generates one Story and one Feed ad creative in a single call', async () => {
   await withServer(
     async (_dir, server) => {

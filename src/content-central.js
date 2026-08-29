@@ -2945,6 +2945,48 @@ export function enqueueCarouselSlideRegeneration(projectId, carouselId, slideId,
     });
 }
 
+// Same idea as regenerateCarouselSlide/enqueueCarouselSlideRegeneration,
+// operating on a batch item's slides array instead of a standalone
+// Carousel file — reuses findContentPath (already used by
+// deleteProjectContent) to locate the item on disk from its contentId.
+export async function regenerateContentCarouselSlide(projectId, contentId, slideId, targetDir = process.cwd(), batchId) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const contentPath = await findContentPath(paths.draftsDir, contentId, batchId);
+    const item = await readJson(contentPath);
+    const slide = item.slides?.find((entry) => entry.slideId === slideId);
+    if (!slide) throw new Error('Slide não encontrado.');
+    if (slide.contentTopic) {
+      slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
+    }
+    await writeJson(contentPath, item);
+    return item;
+  });
+}
+
+export function enqueueContentCarouselSlideRegeneration(projectId, contentId, slideId, options = {}, targetDir = process.cwd(), batchId) {
+  const paths = getCentralPaths(targetDir, projectId);
+  loadProject(paths)
+    .then(async (project) => {
+      const contentPath = await findContentPath(paths.draftsDir, contentId, batchId);
+      const item = await readJson(contentPath);
+      const slide = item.slides?.find((entry) => entry.slideId === slideId);
+      if (!slide) throw new Error('Slide não encontrado.');
+      slide.image.generating = true;
+      await writeJson(contentPath, item);
+      const firstSlide = item.slides[0];
+      const styleReferencePath = firstSlide && firstSlide.slideId !== slide.slideId
+        && typeof options.resolveCarouselStyleReference === 'function'
+        ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+        : null;
+      await enrichCarouselSlideWithRealImage(item, slide, project, projectId, paths, options, styleReferencePath);
+    })
+    .catch((err) => {
+      console.error(`[content-central] background content carousel slide regeneration failed for ${projectId}/${contentId}/${slideId}:`, err.message);
+    });
+}
+
 // How many items get a real AI image generated at once when a batch is
 // scheduled. Each generation is a slow (30s-3min) external call, so a large
 // batch run fully sequential could take tens of minutes; a small concurrency

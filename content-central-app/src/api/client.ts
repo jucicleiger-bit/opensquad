@@ -384,6 +384,9 @@ export interface ContentItem {
   usedSegmentProductReference?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  format?: "single" | "carousel";
+  slides?: CarouselSlide[];
+  briefing?: string;
 }
 
 class ApiError extends Error {}
@@ -810,6 +813,18 @@ export function regenerateCarouselSlide(
   note?: string,
 ): Promise<{ carousel: Carousel }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-regenerate-slide/${encodeURIComponent(carouselId)}/${encodeURIComponent(slideId)}`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function regenerateCarouselItemSlide(
+  projectId: string,
+  contentId: string,
+  slideId: string,
+  note?: string,
+): Promise<{ item: ContentItem }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/content/${encodeURIComponent(contentId)}/carousel-regenerate-slide/${encodeURIComponent(slideId)}`, {
     method: "POST",
     body: JSON.stringify({ note }),
   });

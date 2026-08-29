@@ -72,6 +72,42 @@ describe("PendingApproval", () => {
     );
   });
 
+  it("renders every slide of a carousel-format pending item, with its own regenerate action per slide", async () => {
+    const carouselItem = baseItem({
+      contentId: "boss-pizzaria-day-1-instagram_feed-carrossel",
+      channel: "instagram_feed",
+      formatLabel: "Carrossel",
+      format: "carousel",
+      image: undefined,
+      slides: [
+        {
+          slideId: "slide-1",
+          order: 1,
+          role: "cover",
+          slideText: "5 dicas de pizza",
+          image: { url: "https://cdn.example.com/slide-1.png", generating: false },
+          imageGenerationError: null,
+        },
+        {
+          slideId: "slide-2",
+          order: 2,
+          role: "cta",
+          slideText: "Peça já",
+          image: { generating: true },
+          imageGenerationError: null,
+        },
+      ],
+    });
+    stubFetchSequence([{ body: PROJECT_STATE }, { body: { content: [carouselItem] } }]);
+
+    renderPendingApproval();
+
+    expect(await screen.findByRole("img", { name: "5 dicas de pizza" })).toHaveAttribute("src", "https://cdn.example.com/slide-1.png");
+    expect(screen.getByText("Gerando imagem...")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Regenerar esse slide" })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Aprovar" })).toBeInTheDocument();
+  });
+
   it("shows the resolved pillar as a colored pill when the topic has one", async () => {
     stubFetchSequence([
       { body: PROJECT_STATE },

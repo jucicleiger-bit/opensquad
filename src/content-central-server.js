@@ -67,9 +67,11 @@ import {
   deleteCarousel,
   enqueueCarouselGeneration,
   enqueueCarouselSlideRegeneration,
+  enqueueContentCarouselSlideRegeneration,
   generateCarousel,
   listCarousels,
   regenerateCarouselSlide,
+  regenerateContentCarouselSlide,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -1016,7 +1018,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (parts.length === 4 && parts[3] === 'generate') {
     const body = await readBody(req);
-    const imageOptions = { imageGenerator: context.imageGenerator, imageReviewer: context.imageReviewer, captionGenerator: context.captionGenerator, videoAnimator: context.videoAnimator };
+    const imageOptions = { imageGenerator: context.imageGenerator, imageReviewer: context.imageReviewer, captionGenerator: context.captionGenerator, videoAnimator: context.videoAnimator, carouselOutlineGenerator: context.carouselOutlineGenerator };
     if (Array.isArray(body.formats) && body.formats.length) {
       const formats = body.formats.map((format) => ({
         ...format,
@@ -1321,6 +1323,20 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const result = await deleteProjectContent(projectId, parts[4], targetDir, body.batchId, body.reason, resolveGaveteSync(targetDir, projectId));
     return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 7 && parts[3] === 'content' && parts[5] === 'carousel-regenerate-slide') {
+    const body = await readBody(req).catch(() => ({}));
+    const contentId = parts[4];
+    const slideId = parts[6];
+    const item = await regenerateContentCarouselSlide(projectId, contentId, slideId, targetDir, body.batchId);
+    enqueueContentCarouselSlideRegeneration(projectId, contentId, slideId, {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+      note: String(body.note || '').trim() || undefined,
+    }, targetDir, body.batchId);
+    return sendJson(res, 200, { item });
   }
 
   return sendJson(res, 404, { error: 'Not found' });

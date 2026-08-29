@@ -6,6 +6,7 @@ import {
   approveContent,
   deleteContent,
   getProjectContent,
+  regenerateCarouselItemSlide,
   regenerateContent,
   regenerateContentGroup,
   updateCaption,
@@ -46,6 +47,8 @@ export function PendingApproval() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [previewItem, setPreviewItem] = useState<ContentItem | null>(null);
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
+  const [slideState, setSlideState] = useState<Record<string, ActionState>>({});
+  const [slideNotes, setSlideNotes] = useState<Record<string, string>>({});
 
   const refresh = useCallback(async () => {
     try {
@@ -82,6 +85,18 @@ export function PendingApproval() {
       await refresh();
     } catch (err) {
       setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: (err as Error).message, message: null } }));
+    }
+  }
+
+  async function handleRegenerateSlide(item: ContentItem, slideId: string, note?: string) {
+    setSlideState((s) => ({ ...s, [slideId]: { busy: true, busyAction: "creative", error: null, message: null } }));
+    try {
+      await regenerateCarouselItemSlide(project.projectId, item.contentId, slideId, note);
+      setSlideNotes((n) => ({ ...n, [slideId]: "" }));
+      setSlideState((s) => ({ ...s, [slideId]: IDLE_ACTION_STATE }));
+      await refresh();
+    } catch (err) {
+      setSlideState((s) => ({ ...s, [slideId]: { busy: false, error: (err as Error).message, message: null } }));
     }
   }
 
@@ -543,6 +558,83 @@ export function PendingApproval() {
     );
   }
 
+  // A carousel-format item has no single image — every slide gets its own
+  // preview + independent "Regenerar esse slide" action instead of the
+  // single-image .phone block renderSoloCard uses.
+  function renderCarouselCard(item: ContentItem) {
+    const state = stateFor(item.contentId);
+    const draft = captionFor(item.contentId, item);
+    return (
+      <Card key={item.contentId} className={styles.card}>
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0 }}>
+              {item.scheduledDate} · {item.scheduledTime || ""} · Carrossel
+            </h3>
+            <span className="pill">{(item.slides || []).length} folhas</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 12, marginTop: 12 }}>
+            {(item.slides || []).map((slide) => {
+              const src = slide.image.url || slide.image.previewUrl;
+              const slideBusy = slideState[slide.slideId] || IDLE_ACTION_STATE;
+              return (
+                <div key={slide.slideId}>
+                  <div className={`${styles.phone} ${styles.phoneFeed}`}>
+                    {src ? (
+                      <img src={src} alt={slide.slideText || `Slide ${slide.order}`} loading="lazy" />
+                    ) : slide.image.generating ? (
+                      <span>Gerando imagem...</span>
+                    ) : (
+                      <span>Sem imagem ainda</span>
+                    )}
+                  </div>
+                  {slide.imageGenerationError ? (
+                    <div className={`${styles.feedback} ${styles.feedbackError}`}>⚠ {slide.imageGenerationError}</div>
+                  ) : null}
+                  <textarea
+                    placeholder="Pedido de correção (opcional)"
+                    value={slideNotes[slide.slideId] || ""}
+                    onChange={(e) => setSlideNotes((n) => ({ ...n, [slide.slideId]: e.target.value }))}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={slideBusy.busy || slide.image.generating}
+                    onClick={() => handleRegenerateSlide(item, slide.slideId, slideNotes[slide.slideId]?.trim() || undefined)}
+                  >
+                    {slideBusy.busy ? "Regenerando..." : "Regenerar esse slide"}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+          <label htmlFor={`caption-${item.contentId}`} style={{ marginTop: 12 }}>Legenda</label>
+          <textarea
+            id={`caption-${item.contentId}`}
+            className={styles.caption}
+            value={draft}
+            onChange={(e) => setCaptionDrafts((d) => ({ ...d, [item.contentId]: e.target.value }))}
+          />
+          {draft.trim() && draft.trim() !== (item.caption?.text || "") ? (
+            <Button variant="secondary" disabled={state.busy} onClick={() => handleSaveCaption(item)} style={{ marginTop: 8 }}>
+              {state.busy && state.busyAction === "caption" ? "Salvando..." : "Salvar legenda"}
+            </Button>
+          ) : null}
+          <div className={styles.actions} style={{ marginTop: 12 }}>
+            <Button disabled={state.busy} onClick={() => handleApprove(item)}>
+              {state.busy && state.busyAction === "approve" ? "Aprovando..." : "Aprovar"}
+            </Button>
+            <Button variant="ghost" disabled={state.busy} onClick={() => handleDelete(item)}>
+              Apagar
+            </Button>
+          </div>
+          {state.error ? <div className={`${styles.feedback} ${styles.feedbackError}`}>{state.error}</div> : null}
+          {state.message ? <div className={`${styles.feedback} ${styles.feedbackOk}`}>{state.message}</div> : null}
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <div>
       <h2 style={{ margin: "0 0 var(--space-lg)" }}>Aguardando aprovação</h2>
@@ -570,7 +662,13 @@ export function PendingApproval() {
         />
       ) : (
         <div className={styles.list}>
-          {groups.map((group) => (group.members.length > 1 ? renderGroupCard(group) : renderSoloCard(group.leader)))}
+          {groups.map((group) =>
+            group.members.length > 1
+              ? renderGroupCard(group)
+              : group.leader.format === "carousel"
+                ? renderCarouselCard(group.leader)
+                : renderSoloCard(group.leader),
+          )}
         </div>
       )}
 
