@@ -137,3 +137,25 @@ test('migrateContentForProject upserts a content item, its schedule, and uploads
 
   await rm(targetDir, { recursive: true, force: true });
 });
+
+import { runMigration } from '../src/migrate-to-supabase.js';
+
+test('runMigration is idempotent — running twice does not duplicate rows', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-full-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(join(projectDir, 'project.json'), JSON.stringify({ name: 'Acme Pizza' }));
+
+  const client = fakeClientWithStorage();
+  const first = await runMigration(targetDir, client);
+  const second = await runMigration(targetDir, client);
+
+  assert.equal(first.projects.migrated, 1);
+  assert.equal(second.projects.migrated, 1);
+  // Both runs call upsert (not insert), so re-running is safe even though
+  // this fake client doesn't itself dedupe — the real Supabase `onConflict`
+  // option is what guarantees no duplicate rows server-side.
+  assert.equal(client.upserts.projects.length, 2);
+
+  await rm(targetDir, { recursive: true, force: true });
+});

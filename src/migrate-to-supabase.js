@@ -1,8 +1,10 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import sharp from 'sharp';
 import { getCentralPaths } from './content-central.js';
+import { createSupabaseAdminClient } from './supabase-client.js';
 
 async function readJsonIfExists(path) {
   try {
@@ -173,4 +175,44 @@ export async function migrateContentForProject(targetDir, slug, client) {
   }
 
   return result;
+}
+
+export async function runMigration(targetDir, client) {
+  const projects = await migrateProjects(targetDir, client);
+  const { projectsDir } = getCentralPaths(targetDir);
+  let slugs = [];
+  try {
+    slugs = (await readdir(projectsDir, { withFileTypes: true }))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name);
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+  }
+
+  const content = { migrated: 0, errors: [] };
+  for (const slug of slugs) {
+    const perProject = await migrateContentForProject(targetDir, slug, client);
+    content.migrated += perProject.migrated;
+    content.errors.push(...perProject.errors);
+  }
+
+  return { projects, content };
+}
+
+async function main() {
+  const client = createSupabaseAdminClient();
+  const result = await runMigration(process.cwd(), client);
+  console.log(`Projects migrated: ${result.projects.migrated} (${result.projects.errors.length} errors)`);
+  console.log(`Content items migrated: ${result.content.migrated} (${result.content.errors.length} errors)`);
+  if (result.projects.errors.length || result.content.errors.length) {
+    console.error('Errors:', JSON.stringify([...result.projects.errors, ...result.content.errors], null, 2));
+    process.exitCode = 1;
+  }
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((err) => {
+    console.error(err);
+    process.exitCode = 1;
+  });
 }
