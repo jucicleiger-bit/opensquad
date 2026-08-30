@@ -19,6 +19,12 @@ export async function migrateProjects(targetDir, client) {
   const { projectsDir } = getCentralPaths(targetDir);
   const result = { migrated: 0, errors: [] };
 
+  // Fetch the single owner user from auth
+  const { data: usersData, error: usersError } = await client.auth.admin.listUsers();
+  if (usersError) throw new Error(`failed to look up the owner user: ${usersError.message}`);
+  if (!usersData.users.length) throw new Error('no Supabase Auth user exists yet — create the single owner user before migrating');
+  const ownerId = usersData.users[0].id;
+
   let entries;
   try {
     entries = await readdir(projectsDir, { withFileTypes: true });
@@ -38,6 +44,7 @@ export async function migrateProjects(targetDir, client) {
           slug,
           name: project.name || slug,
           brand_profile: project.brand || {},
+          owner_id: ownerId,
         }],
         { onConflict: 'slug' },
       );

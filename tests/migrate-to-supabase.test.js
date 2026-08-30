@@ -9,6 +9,11 @@ function fakeClient() {
   const upserts = { projects: [] };
   return {
     upserts,
+    auth: {
+      admin: {
+        listUsers: async () => ({ data: { users: [{ id: 'owner-uuid-1' }] }, error: null }),
+      },
+    },
     from(table) {
       return {
         upsert: async (rows) => {
@@ -38,6 +43,7 @@ test('migrateProjects upserts one row per local project.json', async () => {
   assert.equal(client.upserts.projects[0].slug, 'acme-pizza');
   assert.equal(client.upserts.projects[0].name, 'Acme Pizza');
   assert.deepEqual(client.upserts.projects[0].brand_profile, { visualStyle: 'bold' });
+  assert.equal(client.upserts.projects[0].owner_id, 'owner-uuid-1');
 
   await rm(targetDir, { recursive: true, force: true });
 });
@@ -51,12 +57,35 @@ test('migrateProjects returns empty result when no projects dir exists', async (
   await rm(targetDir, { recursive: true, force: true });
 });
 
+test('migrateProjects throws when no Supabase Auth user exists', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-no-user-'));
+  const client = {
+    auth: {
+      admin: {
+        listUsers: async () => ({ data: { users: [] }, error: null }),
+      },
+    },
+  };
+  try {
+    await migrateProjects(targetDir, client);
+    assert.fail('should have thrown');
+  } catch (err) {
+    assert.match(err.message, /no Supabase Auth user exists/);
+  }
+  await rm(targetDir, { recursive: true, force: true });
+});
+
 function fakeClientWithStorage() {
   const upserts = { projects: [], content_items: [], schedules: [] };
   const uploads = [];
   return {
     upserts,
     uploads,
+    auth: {
+      admin: {
+        listUsers: async () => ({ data: { users: [{ id: 'owner-uuid-1' }] }, error: null }),
+      },
+    },
     from(table) {
       if (table === 'projects') {
         return {
