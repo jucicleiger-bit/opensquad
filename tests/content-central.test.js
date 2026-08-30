@@ -8691,23 +8691,26 @@ test('runCarouselGeneration/enqueueCarouselGeneration accept a briefing/slideCou
     await writeFile(filePath, JSON.stringify(fakeItem, null, 2), 'utf-8');
 
     let receivedBriefing;
-    await new Promise((resolveDone) => {
-      enqueueCarouselGeneration('carrossel-override', fakeItem, {
-        outlineGenerator: async ({ briefing, slideCount }) => {
-          receivedBriefing = briefing;
-          return { format: 'listicle', slides: Array.from({ length: slideCount }, (_, i) => ({ role: 'content', slideText: `Slide ${i + 1}` })) };
-        },
-        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
-      }, dir, {
-        briefing: 'briefing sintetizado do contentTopic',
-        slideCount: 2,
-        markReady: () => {}, // no-op — a batch item's own .status must be left alone
-      });
-      setTimeout(resolveDone, 300);
+    enqueueCarouselGeneration('carrossel-override', fakeItem, {
+      outlineGenerator: async ({ briefing, slideCount }) => {
+        receivedBriefing = briefing;
+        return { format: 'listicle', slides: Array.from({ length: slideCount }, (_, i) => ({ role: 'content', slideText: `Slide ${i + 1}` })) };
+      },
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, {
+      briefing: 'briefing sintetizado do contentTopic',
+      slideCount: 2,
+      markReady: () => {}, // no-op — a batch item's own .status must be left alone
     });
 
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = JSON.parse(await readFile(filePath, 'utf-8'));
+      if (reloaded.slides[0]?.image?.url) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
     assert.equal(receivedBriefing, 'briefing sintetizado do contentTopic');
-    const reloaded = JSON.parse(await readFile(filePath, 'utf-8'));
     assert.equal(reloaded.status, 'draft_generated', 'markReady override must prevent the engine from touching .status');
     assert.equal(reloaded.slides[0].image.url, 'https://cdn.example.com/x.png');
   });
