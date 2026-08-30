@@ -451,6 +451,27 @@ test('caption prompts adapt tone to the project\'s B2B/B2C audience focus, and s
   assert.match(b2bOptimizerPrompt, /B2B/);
 });
 
+test('caption prompts force a short 1-2 sentence caption with no hashtags for whatsapp_status, unlike the normal Instagram-length rules', () => {
+  const project = { name: 'Boss Pizzaria', brandInput: {} };
+  const statusContent = { formatLabel: 'WhatsApp Status', channel: 'whatsapp_status', contentTopic: { offerName: 'Combo 20 Esfihas', price: '97,00' } };
+  const feedContent = { formatLabel: 'Instagram Feed', channel: 'instagram_feed', contentTopic: { offerName: 'Combo 20 Esfihas', price: '97,00' } };
+
+  const statusPrompt = buildSofiaSocialCaptionPrompt({ content: statusContent, project });
+  assert.match(statusPrompt, /1-2 frases/);
+  assert.match(statusPrompt, /Sem hashtag/);
+  assert.doesNotMatch(statusPrompt, /2 a 5 hashtags/);
+
+  const feedPrompt = buildSofiaSocialCaptionPrompt({ content: feedContent, project });
+  assert.match(feedPrompt, /2 a 5 hashtags/);
+  assert.doesNotMatch(feedPrompt, /1-2 frases/);
+
+  const statusOptimizerPrompt = buildDanteOptimizerPrompt({ content: statusContent, project, draft: 'Rascunho de teste.' });
+  assert.match(statusOptimizerPrompt, /MANTENDO-A CURTA/);
+
+  const feedOptimizerPrompt = buildDanteOptimizerPrompt({ content: feedContent, project, draft: 'Rascunho de teste.' });
+  assert.doesNotMatch(feedOptimizerPrompt, /MANTENDO-A CURTA/);
+});
+
 test('ad copy prompt asks for headline/primaryText/description within Meta\'s real character limits, and its guidance changes with the ad objective', () => {
   const adCreative = { objective: 'sales', objectiveLabel: 'Vendas/Conversão', contentTopic: { offerName: 'Combo 20 Esfihas', price: '97,00' } };
   const salesPrompt = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' } });

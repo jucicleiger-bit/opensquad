@@ -4291,6 +4291,7 @@ function audienceTypeToneLine(project) {
 export function buildSofiaSocialCaptionPrompt({ content, project, note }) {
   const topic = content.contentTopic || {};
   const subject = topic.offerName || topic.objective || topic.label || 'este post';
+  const isWhatsAppStatus = content.channel === 'whatsapp_status';
   return [
     contentCentralPersonaLine('sofia'),
     contentCentralPersonaResponsibilityLine('sofia'),
@@ -4317,17 +4318,22 @@ export function buildSofiaSocialCaptionPrompt({ content, project, note }) {
     '- Gancho forte na primeira linha — prende atenção sem ser clickbait vazio.',
     '- Corpo curto, direto, linguagem natural brasileira, sem parecer texto de robô ou anúncio genérico.',
     '- Terminar com o CTA de forma natural, não robótica.',
-    '- Pode incluir de 2 a 5 hashtags relevantes no final, só se fizer sentido para o post.',
+    isWhatsAppStatus
+      ? '- WhatsApp Status: no MÁXIMO 1-2 frases curtas (até ~15 palavras no total). Quem vê Status passa rápido — nada de texto longo estilo Instagram. Sem hashtag.'
+      : '- Pode incluir de 2 a 5 hashtags relevantes no final, só se fizer sentido para o post.',
     '- Responda APENAS com o texto final da legenda — sem aspas, sem markdown, sem explicação antes ou depois.',
   ].filter(Boolean).join('\n');
 }
 
 export function buildDanteOptimizerPrompt({ content, project, draft }) {
   const topic = content.contentTopic || {};
+  const isWhatsAppStatus = content.channel === 'whatsapp_status';
   return [
     contentCentralPersonaLine('dante'),
     contentCentralPersonaResponsibilityLine('dante'),
-    'Sua tarefa: auditar a legenda abaixo e devolver a versão otimizada, garantindo que ela tenha gancho forte, promessa clara, uma dor ou desejo real, conexão com a oferta e um CTA simples.',
+    isWhatsAppStatus
+      ? 'Sua tarefa: auditar a legenda abaixo e devolver a versão otimizada, MANTENDO-A CURTA (1-2 frases, ~15 palavras) — é WhatsApp Status, nunca alongue para o estilo Instagram.'
+      : 'Sua tarefa: auditar a legenda abaixo e devolver a versão otimizada, garantindo que ela tenha gancho forte, promessa clara, uma dor ou desejo real, conexão com a oferta e um CTA simples.',
     '',
     'MÉTODO DE ANÁLISE (aplicar mentalmente, não escrever a análise)',
     '1. Gancho: a primeira frase faz parar?',
