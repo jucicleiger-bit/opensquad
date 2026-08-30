@@ -85,7 +85,7 @@ async function findBatchFiles(dir) {
 function scheduledRunAt(item) {
   if (!item.scheduledDate) return null;
   const time = item.scheduledTime || '00:00';
-  const iso = new Date(`${item.scheduledDate}T${time}:00Z`);
+  const iso = new Date(`${item.scheduledDate}T${time}:00`);
   return Number.isNaN(iso.getTime()) ? null : iso.toISOString();
 }
 
@@ -147,17 +147,22 @@ export async function migrateContentForProject(targetDir, slug, client) {
 
       for (const item of batch.items) {
         try {
+          if (!item.contentId) {
+            result.errors.push({ contentId: null, error: `missing contentId in batch ${batchFile}` });
+            continue;
+          }
           const mediaUrl = await uploadItemMedia(client, projectDir, slug, item);
           const { data: insertedItem, error: itemError } = await client
             .from('content_items')
             .upsert([{
               project_id: projectRow.id,
+              content_id: item.contentId,
               channel: item.channel,
               status,
               copy: item.caption?.text || null,
               media_url: mediaUrl,
               metadata: item,
-            }])
+            }], { onConflict: 'project_id,content_id' })
             .select()
             .single();
           if (itemError) throw new Error(itemError.message || String(itemError));
@@ -169,7 +174,7 @@ export async function migrateContentForProject(targetDir, slug, client) {
               content_item_id: insertedItem.id,
               run_at: runAt,
               status: scheduleStatus,
-            }]);
+            }], { onConflict: 'content_item_id' });
             if (scheduleError) throw new Error(scheduleError.message || String(scheduleError));
           }
 

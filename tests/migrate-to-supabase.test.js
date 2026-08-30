@@ -154,15 +154,51 @@ test('migrateContentForProject upserts a content item, its schedule, and uploads
   assert.equal(result.errors.length, 0);
   assert.equal(client.upserts.content_items.length, 1);
   assert.equal(client.upserts.content_items[0].project_id, 'project-uuid-for-acme-pizza');
+  assert.equal(client.upserts.content_items[0].content_id, 'acme-pizza-2026-08-04-01d-01');
   assert.equal(client.upserts.content_items[0].channel, 'instagram_feed');
   assert.equal(client.upserts.content_items[0].status, 'draft');
   assert.equal(client.upserts.content_items[0].copy, 'Pizza hoje!');
   assert.match(client.upserts.content_items[0].media_url, /^acme-pizza\/acme-pizza-2026-08-04-01d-01\./);
   assert.equal(client.upserts.schedules.length, 1);
   assert.equal(client.upserts.schedules[0].content_item_id, 'content-item-uuid-1');
-  assert.equal(client.upserts.schedules[0].run_at, '2026-08-04T12:00:00.000Z');
+  const expectedRunAt = new Date('2026-08-04T12:00:00').toISOString();
+  assert.equal(client.upserts.schedules[0].run_at, expectedRunAt);
   assert.equal(client.uploads.length, 1);
   assert.equal(client.uploads[0].bucket, 'content-media');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateContentForProject skips items with missing contentId and records error', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-missing-id-'));
+  const batchDir = join(
+    targetDir, '_opensquad', 'content-central', 'projects', 'test-shop',
+    'content', 'drafts', '2026-08-05-01d',
+  );
+  await mkdir(join(batchDir, 'images'), { recursive: true });
+  await writeFile(join(batchDir, 'images', 'day-01.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  await writeFile(
+    join(batchDir, 'batch.json'),
+    JSON.stringify({
+      items: [{
+        // contentId is deliberately omitted
+        channel: 'instagram_feed',
+        status: 'draft_generated',
+        scheduledDate: '2026-08-05',
+        scheduledTime: '10:00',
+        caption: { text: 'Test post' },
+        image: { localPath: 'content/drafts/2026-08-05-01d/images/day-01.png', mimeType: 'image/png' },
+      }],
+    }),
+  );
+
+  const client = fakeClientWithStorage();
+  const result = await migrateContentForProject(targetDir, 'test-shop', client);
+
+  assert.equal(result.migrated, 0);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0].error, /missing contentId/);
+  assert.equal(client.upserts.content_items.length, 0);
 
   await rm(targetDir, { recursive: true, force: true });
 });

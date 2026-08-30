@@ -85,6 +85,11 @@ create policy "owner full access" on schedules
 create policy "authenticated full access" on jobs
   for all using (auth.uid() is not null) with check (auth.uid() is not null);
 
+-- Idempotent migration support: unique constraints for content deduplication
+alter table content_items add column content_id text;
+create unique index content_items_project_content_idx on content_items(project_id, content_id);
+create unique index schedules_content_item_idx on schedules(content_item_id);
+
 insert into storage.buckets (id, name, public)
 values ('content-media', 'content-media', false)
 on conflict (id) do nothing;
