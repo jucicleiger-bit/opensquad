@@ -47,6 +47,7 @@
     "@inquirer/select": "^5.1.0",
     "@jimp/core": "^1.6.1",
     "@jimp/plugin-print": "^1.6.1",
+    "@supabase/supabase-js": "2.106.0",
     "jimp": "^1.6.1",
     "playwright": "^1.62.1",
     "sharp": "^0.35.3"
