@@ -2,7 +2,9 @@
 
 import { setTimeout as sleep } from 'node:timers/promises';
 
-const GRAPH_BASE = 'https://graph.facebook.com/v25.0';
+// Overridable only so tests can point the real call sequence at a local
+// stub server (see tests/meta-publish-multi.test.js) — unset in production.
+const GRAPH_BASE = process.env.META_GRAPH_BASE || 'https://graph.facebook.com/v25.0';
 const IG_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels']);
 const FB_CHANNELS = new Set(['facebook_feed', 'facebook_story']);
 const VIDEO_CHANNELS = new Set(['instagram_reels']);

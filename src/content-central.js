@@ -2817,6 +2817,14 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
   const briefing = overrides.briefing ?? carousel.briefing;
   const slideCount = overrides.slideCount ?? carousel.slideCount;
   const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
+  // A standalone Carousel's own .format field IS the roteiro's visual style.
+  // A batch item overloads that same field name as its 'carousel' vs
+  // 'single' discriminator (reconcile, approval rendering and publish all
+  // branch on it), so the batch caller passes an override that parks the
+  // style in carouselFormat and never touches .format — otherwise the item
+  // would sit on disk as format:"listicle" for the whole multi-minute
+  // generation window and a crash mid-run would leave it stuck forever.
+  const setFormat = overrides.setFormat || ((c, style) => { c.format = style; });
   let outline = null;
   if (typeof options.outlineGenerator === 'function') {
     try {
@@ -2840,7 +2848,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
     return;
   }
 
-  carousel.format = outline.format || '';
+  setFormat(carousel, outline.format || '');
   carousel.slides.forEach((slide, index) => {
     const outlineSlide = outline.slides[index];
     slide.role = outlineSlide.role || 'content';
@@ -3033,7 +3041,23 @@ function creativeGroupsFromItems(items) {
 // real generation, and its result is copied onto the other members so they
 // all publish with the exact same creative instead of each rolling its own.
 export async function enrichBatchItemsWithRealImages(batch, project, projectId, options, paths) {
-  if (typeof options.imageGenerator !== 'function') return;
+  if (typeof options.imageGenerator !== 'function') {
+    // A carousel item's slides are born generating:true (see
+    // buildCarouselSlideSkeleton) because the placeholder is written before
+    // this runs. Without an image generator nothing will ever flip them, so
+    // clear them here — otherwise reconcileInterruptedGenerations reports
+    // "o servidor foi reiniciado" for a generation that never started.
+    for (const item of batch.items) {
+      if (item.format !== 'carousel' || !Array.isArray(item.slides)) continue;
+      for (const slide of item.slides) {
+        slide.image.generating = false;
+        slide.imageGenerationError = 'Geração de imagens por IA não está ativada neste servidor, então os slides deste carrossel ficaram sem imagem.';
+      }
+      item.updatedAt = new Date().toISOString();
+      await writeJson(item.filePath, item);
+    }
+    return;
+  }
   const groups = creativeGroupsFromItems(batch.items);
   await mapWithConcurrency(groups, BATCH_IMAGE_CONCURRENCY, async (group) => {
     const [leader, ...followers] = group;
@@ -3058,16 +3082,13 @@ export async function enrichBatchItemsWithRealImages(batch, project, projectId, 
         briefing: leader.briefing,
         slideCount: leader.slideCount,
         markReady: () => {},
+        // Keep the roteiro's visual style (e.g. 'listicle') in
+        // carouselFormat and leave item.format alone: it must stay
+        // 'carousel' on disk for the whole generation window, or a crash
+        // mid-run hides the item from reconcileInterruptedGenerations.
+        setFormat: (item, style) => { item.carouselFormat = style; },
       });
       await Promise.all([carouselWork, captionWork]);
-      // runCarouselGeneration writes the outline's visual style (e.g.
-      // 'listicle') into carousel.format — the field a standalone carousel
-      // uses for its style. A batch item overloads that same field name as
-      // its 'carousel' vs single-image discriminator, so restore it and
-      // keep the generated style in carouselFormat instead (the field this
-      // item's schema already reserves for it — see Task 4).
-      leader.carouselFormat = leader.format || '';
-      leader.format = 'carousel';
       leader.updatedAt = new Date().toISOString();
       await writeJson(leader.filePath, leader);
       return;
@@ -4208,8 +4229,11 @@ export async function buildApprovalPayload(projectId, contentId, targetDir = pro
       scheduledTime: content.scheduledTime,
     },
     creative: {
-      imageLocalPath: content.image.localPath,
-      imagePrompt: content.image.prompt,
+      // Optional-chained: a carousel-format item has no top-level image, its
+      // pixels live in slides[].image (nothing downstream reads these two
+      // fields, so null/'' is the safe absent value).
+      imageLocalPath: content.image?.localPath ?? null,
+      imagePrompt: content.image?.prompt ?? '',
       caption: content.caption.text,
     },
     approval: {
@@ -4279,6 +4303,9 @@ export async function approveContent(projectId, contentId, targetDir = process.c
       contentId: content.contentId,
       data: {
         channel: content.channel,
+        // Carried so the gaveta sync can skip carousel items — that queue
+        // only knows single-image Meta publishing (see resolveGaveteSync).
+        format: content.format || null,
         caption: content.caption.text,
         mediaUrl: content.publish?.mediaUrl || null,
         scheduledDate: content.scheduledDate,

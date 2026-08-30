@@ -8750,6 +8750,135 @@ test('enrichBatchItemsWithRealImages fills in the roteiro and real per-slide ima
   });
 });
 
+test('a batch-item carousel keeps format:"carousel" on disk DURING generation, parking the roteiro style in carouselFormat', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-format-vivo', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-format-vivo', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-format-vivo');
+    const project = await loadProjectForTest('carrossel-format-vivo', dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    // Blocks every image call until we release it, so the assertion below
+    // runs strictly after the roteiro step and before any slide finishes —
+    // exactly the multi-minute window a crash could land in.
+    let releaseImages;
+    const imagesHeld = new Promise((resolveHold) => { releaseImages = resolveHold; });
+    let firstImageCallSeen;
+    const firstImageCall = new Promise((resolveSeen) => { firstImageCallSeen = resolveSeen; });
+
+    const work = enrichBatchItemsWithRealImages(batch, project, 'carrossel-format-vivo', {
+      imageGenerator: async () => {
+        firstImageCallSeen();
+        await imagesHeld;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, i) => ({ role: i === 0 ? 'cover' : 'cta', slideText: `Slide ${i + 1}` })),
+      }),
+    }, paths);
+
+    await firstImageCall;
+    const midFlight = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(midFlight.format, 'carousel', 'format must never be clobbered to the roteiro style, or reconcileInterruptedGenerations cannot see this item after a crash');
+    assert.equal(midFlight.carouselFormat, 'listicle', 'the roteiro style belongs in carouselFormat, and it must already be there mid-flight');
+    assert.ok(midFlight.slides.some((slide) => slide.image.generating), 'sanity: generation really is still in flight at this point');
+
+    releaseImages();
+    await work;
+
+    const done = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(done.format, 'carousel');
+    assert.equal(done.carouselFormat, 'listicle');
+  });
+});
+
+test('a standalone carousel still stores the roteiro style in its own .format field, unchanged by the batch-item setFormat override', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-format-avulso', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-format-avulso', { briefing: 'teste', slideCount: 2 }, dir);
+    await new Promise((resolveDone) => {
+      enqueueCarouselGeneration('carrossel-format-avulso', carousel, {
+        outlineGenerator: async () => ({
+          format: 'listicle',
+          slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
+        }),
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      }, dir);
+      setTimeout(resolveDone, 300);
+    });
+
+    const reloaded = (await listCarousels('carrossel-format-avulso', dir))[0];
+    assert.equal(reloaded.format, 'listicle', 'a real Carousel object\'s .format IS the roteiro style — the default setFormat must keep behaving exactly as before');
+    assert.equal(reloaded.status, 'ready');
+  });
+});
+
+test('enrichBatchItemsWithRealImages does not leave a carousel\'s slides stuck generating when no AI image generator is configured', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-sem-ia', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-sem-ia', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-sem-ia');
+    const project = await loadProjectForTest('carrossel-sem-ia', dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    // enableAiImages:false — the server's default. Nothing else will ever
+    // flip the slides' generating flag, so this call has to.
+    await enrichBatchItemsWithRealImages(batch, project, 'carrossel-sem-ia', {}, paths);
+
+    const reloaded = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(reloaded.format, 'carousel');
+    reloaded.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false, 'a generation that never started must not look interrupted');
+      assert.match(slide.imageGenerationError, /IA/);
+    });
+
+    // And reconcile must therefore have nothing to fix — no misleading
+    // "o servidor foi reiniciado" for a run that never started.
+    const fixed = await reconcileInterruptedGenerations(dir);
+    assert.equal(fixed.length, 0);
+  });
+});
+
+test('buildApprovalPayload does not throw on a carousel-format item (no top-level image)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'carrossel-aprovacao',
+      name: 'Boss Pizzaria',
+      handle: '@bosspizzaria',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-aprovacao', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    const payload = await buildApprovalPayload('carrossel-aprovacao', carouselItem.contentId, dir, batch.batchId);
+
+    assert.equal(payload.contentId, carouselItem.contentId);
+    assert.equal(payload.creative.imageLocalPath, null);
+    assert.equal(payload.creative.imagePrompt, '');
+    assert.ok(payload.creative.caption);
+    await stat(payload.files.json);
+  });
+});
+
 test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only the target slide\'s image', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-regen', name: 'Boss Pizzaria' }, dir);

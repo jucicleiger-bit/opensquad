@@ -2094,6 +2094,83 @@ test('POST .../approve upserts the queue item into the configured gaveta', async
   });
 });
 
+test('GET .../briefing renders a carousel item as every slide stacked with its role label, not a blank card', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'briefing-carrossel', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('briefing-carrossel', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 3,
+    }, dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+    assert.ok(carouselItem);
+
+    // Give each slide a distinguishable image + role, the shape
+    // runCarouselGeneration produces once the roteiro lands.
+    const roles = ['cover', 'content', 'cta'];
+    carouselItem.slides.forEach((slide, index) => {
+      slide.role = roles[index];
+      slide.image.generating = false;
+      slide.image.url = `https://cdn.example.com/slide-${index + 1}.png`;
+    });
+    await writeFile(carouselItem.filePath, JSON.stringify(carouselItem, null, 2), 'utf-8');
+
+    const res = await realFetch(`${server.url}/api/projects/briefing-carrossel/briefing`);
+    const html = await res.text();
+    assert.equal(res.status, 200);
+
+    for (const index of [1, 2, 3]) {
+      assert.ok(html.includes(`https://cdn.example.com/slide-${index}.png`), `slide ${index} must be embedded in the presentation page`);
+    }
+    assert.match(html, /1\. Capa/);
+    assert.match(html, /2\. Conteúdo/);
+    assert.match(html, /3\. CTA/);
+    // Slides render in order.
+    assert.ok(html.indexOf('slide-1.png') < html.indexOf('slide-2.png'));
+    assert.ok(html.indexOf('slide-2.png') < html.indexOf('slide-3.png'));
+  });
+});
+
+test('POST .../approve does NOT upsert a carousel item into the gaveta (that queue only understands single-image Meta publishing)', async () => {
+  await withGaveta(async ({ workDir, bareDir }) => {
+    process.env.OPENSQUAD_GAVETA_DIR = workDir;
+    try {
+      await withServer(async (dir, server) => {
+        await createCentralProject({ projectId: 'gaveta-carrossel', name: 'Gaveta Carrossel' }, dir);
+        // One carousel day plus a normal single-image day — the second is
+        // the control that proves the skip is targeted and did not just
+        // break queueing for everything.
+        const batch = await generateContentSchedulePlan('gaveta-carrossel', {
+          days: 2,
+          startDate: '2026-08-10',
+          formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+          carouselsPerWeek: 1,
+          maxCarouselSlides: 2,
+        }, dir);
+        const carouselItem = batch.items.find((item) => item.format === 'carousel');
+        const singleItem = batch.items.find((item) => item.format !== 'carousel');
+        assert.ok(carouselItem && singleItem, 'fixture must contain one of each');
+
+        for (const item of [carouselItem, singleItem]) {
+          const approved = await request(server, `/api/projects/gaveta-carrossel/content/${item.contentId}/approve`, { method: 'POST' });
+          assert.equal(approved.response.status, 200);
+        }
+
+        const checkDir = `${workDir}-check`;
+        await execFileAsync('git', ['clone', bareDir, checkDir]);
+        const queueDir = join(checkDir, 'queue', 'gaveta-carrossel');
+        assert.equal(existsSync(join(queueDir, `${carouselItem.contentId}.json`)), false, 'a carousel has no top-level image — queued it would retry a broken mediaUrl:null upload forever');
+        assert.equal(existsSync(join(queueDir, `${singleItem.contentId}.json`)), true, 'a normal single-image item must still be queued exactly as before');
+        await rm(checkDir, { recursive: true, force: true });
+      });
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_DIR;
+    }
+  });
+});
+
 test('publishWithGaveteSync pulls the gaveta first and pushes the published result after', async () => {
   await withGaveta(async ({ workDir, bareDir }) => {
     const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));

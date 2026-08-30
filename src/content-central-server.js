@@ -144,6 +144,10 @@ function resolveGaveteSync(targetDir, projectId) {
       // have been queued before this guard existed, so those still go through.
       if (action === 'upsert') {
         if (WHATSAPP_CHANNELS.has(payload.data?.channel)) return null;
+        // Same reason for a carousel item: the sweep only understands a
+        // single-image post, and a carousel has no top-level image at all —
+        // queued it would sit with mediaUrl:null and be retried forever.
+        if (payload.data?.format === 'carousel') return null;
         return upsertQueueItem(gaveteDir, payload.projectId, payload.contentId, payload.data);
       }
       if (action === 'remove') return removeQueueItem(gaveteDir, payload.projectId, payload.contentId);
@@ -5097,6 +5101,25 @@ function briefingAvatarInitial(project) {
   return (String(project?.name || '?').trim()[0] || '?').toUpperCase();
 }
 
+const CAROUSEL_ROLE_LABELS = { cover: 'Capa', content: 'Conteúdo', cta: 'CTA' };
+
+// A carousel item has no top-level image — its pixels live in slides[]. The
+// mockup shows every slide stacked in order, each labelled with its role,
+// the same way the approval screen (PendingApproval.tsx) already does.
+function renderBriefingCarouselSlides(item, project) {
+  return (item.slides || []).map((slide) => {
+    const src = briefingPreviewImageSource(slide, project.projectId);
+    const label = CAROUSEL_ROLE_LABELS[slide.role] || 'Conteúdo';
+    const image = src
+      ? `<img src="${escapeHtml(src)}" alt="Slide ${escapeHtml(slide.order)}">`
+      : '<div class="ig-empty">Sem imagem de prévia</div>';
+    return `<div class="ig-carousel-slide">
+      <div class="ig-carousel-label">${escapeHtml(slide.order)}. ${escapeHtml(label)}</div>
+      <div class="ig-image ig-image-feed">${image}</div>
+    </div>`;
+  }).join('');
+}
+
 // A phone-screenshot mockup — real Instagram chrome (top bar, avatar,
 // action icons), not just a bare rounded-corner image frame — so the client
 // sees the post the same way it'll actually look once it's live, the same
@@ -5134,7 +5157,7 @@ function renderIgMockup(item, project, variant) {
       <span class="ig-avatar">${initial}</span>
       <span class="ig-username">${username}</span>
     </div>
-    <div class="ig-image ig-image-feed">${image}</div>
+    ${item.format === 'carousel' ? renderBriefingCarouselSlides(item, project) : `<div class="ig-image ig-image-feed">${image}</div>`}
     <div class="ig-actionbar">
       ${IG_ICON_HEART}${IG_ICON_COMMENT}${IG_ICON_SHARE}
       <span class="ig-spacer"></span>
@@ -5244,6 +5267,8 @@ header p{margin:0;color:var(--muted)}
 .ig-image-feed{aspect-ratio:4/5}
 .ig-image-story{aspect-ratio:9/16}
 .ig-empty{padding:16px;text-align:center}
+.ig-carousel-label{padding:6px 10px;font-size:11px;font-weight:600;color:#666;background:#fafafa;border-top:1px solid #eee}
+.ig-carousel-slide:first-child .ig-carousel-label{border-top:0}
 .ig-topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
 .ig-wordmark{font-family:'Segoe Script','Brush Script MT',cursive;font-style:italic;font-size:22px;font-weight:700}
 .ig-topicons{display:flex;gap:14px;color:#111}
