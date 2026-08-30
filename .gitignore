@@ -21,6 +21,7 @@ temp/squads/
 dashboards/test-results/
 
 # Stray local junk -- never publish to the public repo
+_tmp/
 .playwright-mcp/
 graphify-out/
 scripts/
