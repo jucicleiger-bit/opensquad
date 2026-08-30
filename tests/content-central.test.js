@@ -8803,18 +8803,24 @@ test('a standalone carousel still stores the roteiro style in its own .format fi
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-format-avulso', name: 'Boss Pizzaria' }, dir);
     const carousel = await generateCarousel('carrossel-format-avulso', { briefing: 'teste', slideCount: 2 }, dir);
-    await new Promise((resolveDone) => {
-      enqueueCarouselGeneration('carrossel-format-avulso', carousel, {
-        outlineGenerator: async () => ({
-          format: 'listicle',
-          slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
-        }),
-        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
-      }, dir);
-      setTimeout(resolveDone, 300);
-    });
+    enqueueCarouselGeneration('carrossel-format-avulso', carousel, {
+      outlineGenerator: async () => ({
+        format: 'listicle',
+        slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
+      }),
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir);
 
-    const reloaded = (await listCarousels('carrossel-format-avulso', dir))[0];
+    // Fire-and-forget — poll disk for the background pipeline to finish
+    // instead of a fixed wait, same pattern the rest of this file already
+    // uses (a fixed setTimeout here was flaky under a loaded machine).
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-format-avulso', dir))[0];
+      if (reloaded?.status === 'ready') break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
     assert.equal(reloaded.format, 'listicle', 'a real Carousel object\'s .format IS the roteiro style — the default setFormat must keep behaving exactly as before');
     assert.equal(reloaded.status, 'ready');
   });
