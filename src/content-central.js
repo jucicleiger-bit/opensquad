@@ -428,6 +428,10 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     // operator runs the actual campaign themselves in Ads Manager; this is
     // just where generated creative+copy variations live until downloaded.
     adCreativesDir: join(projectDir, 'content', 'ad-creatives'),
+    // Carousel (avulso) — same "separate from organic content" shape as
+    // ad creatives: no scheduledDate, no approval, no calendar. Each JSON
+    // holds N independently-regenerable slides instead of 1 image.
+    carouselsDir: join(projectDir, 'content', 'carousels'),
     tokenSecretPath: join(secretsDir, `${normalized}.token`),
   };
 }
@@ -2620,6 +2624,377 @@ export async function deleteAdCreative(projectId, adCreativeId, targetDir = proc
   });
 }
 
+const CAROUSEL_SLIDE_COUNT_MIN = 2;
+const CAROUSEL_SLIDE_COUNT_MAX = 10;
+
+function clampCarouselSlideCount(value) {
+  const numeric = Math.trunc(Number(value));
+  if (!Number.isFinite(numeric)) return CAROUSEL_SLIDE_COUNT_MIN;
+  return Math.min(CAROUSEL_SLIDE_COUNT_MAX, Math.max(CAROUSEL_SLIDE_COUNT_MIN, numeric));
+}
+
+function buildCarouselSlideSkeleton(carouselId, order) {
+  return {
+    slideId: `${carouselId}-slide-${order}`,
+    order,
+    role: 'content',
+    slideText: '',
+    contentTopic: null,
+    contentId: `${carouselId}-slide-${order}`,
+    channel: 'instagram_feed',
+    formatLabel: CHANNEL_LABELS.instagram_feed,
+    image: {
+      generating: true,
+      prompt: '',
+      references: [],
+      aspectRatio: imageAspectRatioForChannel(),
+      dimensions: imageDimensionsForChannel('instagram_feed'),
+      mimeType: 'image/png',
+      version: 1,
+    },
+    imageGenerationError: null,
+  };
+}
+
+// Carrossel avulso — same "separate from organic content" shape as ad
+// creatives (no scheduledDate, no approval, no calendar), but 1 JSON holds
+// N independently-regenerable slides instead of 1 image. This only builds
+// the placeholder skeleton synchronously (fast HTTP response); the actual
+// roteiro + per-slide images are filled in by enqueueCarouselGeneration in
+// the background — see that function below.
+export async function generateCarousel(projectId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const briefing = String(options.briefing || '').trim();
+    if (!briefing) throw new Error('Informe o briefing do carrossel.');
+    const slideCount = clampCarouselSlideCount(options.slideCount);
+    const carouselId = `${project.projectId}-carrossel-${Date.now()}`;
+    await mkdir(paths.carouselsDir, { recursive: true });
+    const filePath = join(paths.carouselsDir, `${carouselId}.json`);
+    const createdAt = new Date().toISOString();
+    const carousel = {
+      schemaVersion: 1,
+      carouselId,
+      projectId: project.projectId,
+      briefing,
+      format: '',
+      slideCount,
+      slides: Array.from({ length: slideCount }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1)),
+      outlineGenerationError: null,
+      status: 'generating',
+      createdAt,
+      updatedAt: createdAt,
+      filePath,
+    };
+    await writeJson(filePath, carousel);
+    return carousel;
+  });
+}
+
+export async function listCarousels(projectId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  let files;
+  try {
+    files = await readdir(paths.carouselsDir);
+  } catch (err) {
+    if (err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const items = await Promise.all(
+    files.filter((name) => name.endsWith('.json')).map((name) => readJson(join(paths.carouselsDir, name)))
+  );
+  return items.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
+}
+
+export async function deleteCarousel(projectId, carouselId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+    if (!safeId) throw new Error('ID do carrossel inválido.');
+    await rm(join(paths.carouselsDir, `${safeId}.json`), { force: true });
+    return { deleted: true };
+  });
+}
+
+// Turns a regular contentTopic (the same shape every non-carousel post's
+// topic already has — offerName/label/objective/items) into the free-text
+// briefing the roteiro prompt (buildCarouselOutlinePrompt) expects. Used by
+// the automatic-calendar path, where nothing types a briefing by hand —
+// the topic pool already picked the subject the same way it does for
+// every other post that day.
+export function carouselBriefingFromContentTopic(topic) {
+  return [topic.offerName || topic.label, topic.objective, topic.items].filter(Boolean).join(' — ');
+}
+
+function buildCarouselSlideContentTopic({ project, order, slideCount, slideText }) {
+  return {
+    id: `carousel-slide-${order}`,
+    type: 'institutional',
+    label: `Carrossel — slide ${order}/${slideCount}`,
+    source: 'carousel',
+    price: '',
+    items: '',
+    cta: '',
+    autoGenerateCta: false,
+    notes: '',
+    // Explicit and repeated on purpose: without an instruction anchoring the
+    // model to slideText, it treats it as loose inspiration and paraphrases
+    // or drops it; without the visual-identity line each slide is generated
+    // as an independent one-off flyer instead of part of one sequence — see
+    // formatContentTopicLines for the matching "vary structure" opt-out.
+    // Feedback 27/08/2026: "escrever literalmente" produced correct-but-dense
+    // slides (a whole sentence crammed in, no bullets) — fidelity to the
+    // message matters, not fidelity to the exact sentence shape. And "mesmo
+    // template" read as "identical layout every slide", not just "same
+    // brand identity" — now split those two apart explicitly.
+    objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Manter fiel o sentido, a mensagem e qualquer preço/promessa/CTA mencionado — mas adaptar a FORMA para leitura visual: pode quebrar em frases curtas, virar bullets/lista, destacar uma frase principal e reduzir o resto. Nunca mudar o significado nem inventar informação que não estava no texto original. Manter a MESMA identidade visual (paleta, tipografia, moldura, grafismos, posição da logo) dos outros slides deste carrossel, mas a composição/disposição dos elementos pode variar de slide para slide dentro dessa identidade — não repetir sempre o exato mesmo layout.`,
+    // Read by buildChatGptFinalCardPrompt's carousel FORMATO branch to
+    // decide whether this slide gets the "swipe for more" arrow — every
+    // slide except the last one, which is where the sequence actually ends.
+    isLastCarouselSlide: order === slideCount,
+  };
+}
+
+// Fills in the real prompt/references for one slide and runs the actual AI
+// image generation, same shape as enrichAdCreativeWithRealImage — a failure
+// is recorded on the slide instead of thrown, so one bad slide never takes
+// down the rest of the carousel (see runCarouselGeneration's concurrency
+// loop below).
+async function enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath = null) {
+  if (typeof options.imageGenerator !== 'function') {
+    slide.image.generating = false;
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return;
+  }
+  try {
+    slide.image.prompt = buildImagePrompt(project, [], [], slide.order, {
+      channel: slide.channel,
+      contentTopic: slide.contentTopic,
+      logoReference: getProjectLogoReference(project, paths),
+      // Surface the same objective at the top OBJETIVO section too — left
+      // to the default it falls back to a generic "criativo do dia" line
+      // and the real slide instruction only shows up buried in ASSUNTO.
+      objective: slide.contentTopic?.objective,
+    });
+    slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
+    await generateAiImageWithReviewLoop(slide, project, projectId, {
+      imageGenerator: options.imageGenerator,
+      imageReviewer: options.imageReviewer,
+      channel: slide.channel,
+      maxAttempts: options.maxCreativeAttempts,
+      // A note turns this into a targeted edit of the slide's own current
+      // image (same mechanism enqueueAdCreativeImageGeneration already
+      // uses) instead of a fresh generation — "deixa o texto menor", "tira
+      // esse ícone" fixes the one thing asked without re-rolling everything
+      // else. No note (fresh "Regenerar esse slide" click) behaves exactly
+      // as before.
+      note: options.note,
+      targetedEdit: Boolean(options.note),
+      // Slide 1's own already-generated image, attached as an actual
+      // reference file (not just a text instruction) — see
+      // runCarouselGeneration for how this is resolved.
+      styleReferenceAbsolutePath: styleReferencePath,
+    });
+    slide.imageGenerationError = null;
+  } catch (err) {
+    slide.imageGenerationError = err.message;
+  }
+  slide.image.generating = false;
+  carousel.updatedAt = new Date().toISOString();
+  await writeJson(carousel.filePath, carousel);
+}
+
+// Full pipeline for a freshly created carousel: roteiro first (decides
+// slideText/role/format for every slide), then 1 real image per slide in
+// bounded parallel. All 3 workers below share the same in-memory `carousel`
+// object (mutating different slides[i]) — every writeJson call serializes
+// the current full object, so concurrent writes are safe (no partial file,
+// last write always reflects the freshest combined state; Node has no
+// thread-level race on the same in-memory object).
+async function runCarouselGeneration(carousel, project, projectId, options, paths, overrides = {}) {
+  const briefing = overrides.briefing ?? carousel.briefing;
+  const slideCount = overrides.slideCount ?? carousel.slideCount;
+  const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
+  // A standalone Carousel's own .format field IS the roteiro's visual style.
+  // A batch item overloads that same field name as its 'carousel' vs
+  // 'single' discriminator (reconcile, approval rendering and publish all
+  // branch on it), so the batch caller passes an override that parks the
+  // style in carouselFormat and never touches .format — otherwise the item
+  // would sit on disk as format:"listicle" for the whole multi-minute
+  // generation window and a crash mid-run would leave it stuck forever.
+  const setFormat = overrides.setFormat || ((c, style) => { c.format = style; });
+  let outline = null;
+  if (typeof options.outlineGenerator === 'function') {
+    try {
+      outline = await options.outlineGenerator({ project, briefing, slideCount });
+    } catch (err) {
+      carousel.outlineGenerationError = err.message;
+    }
+  }
+  const validOutline = outline && Array.isArray(outline.slides) && outline.slides.length === slideCount;
+  if (!validOutline) {
+    if (!carousel.outlineGenerationError) {
+      carousel.outlineGenerationError = 'O roteirista de IA não retornou um roteiro válido para este carrossel (resposta vazia ou incompleta). Apague e gere de novo para tentar outra vez.';
+    }
+    for (const slide of carousel.slides) {
+      slide.image.generating = false;
+      slide.imageGenerationError = carousel.outlineGenerationError;
+    }
+    markReady(carousel);
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return;
+  }
+
+  setFormat(carousel, outline.format || '');
+  carousel.slides.forEach((slide, index) => {
+    const outlineSlide = outline.slides[index];
+    slide.role = outlineSlide.role || 'content';
+    slide.slideText = outlineSlide.slideText || '';
+    slide.contentTopic = buildCarouselSlideContentTopic({
+      project,
+      order: slide.order,
+      slideCount,
+      slideText: slide.slideText,
+    });
+  });
+  carousel.updatedAt = new Date().toISOString();
+  await writeJson(carousel.filePath, carousel);
+
+  // Slide 1 goes first, alone — every other slide then gets its finished
+  // image as a real reference file (not just a prompt instruction), so the
+  // template/palette/typography actually repeats instead of each slide
+  // being its own independent roll of the dice. options.resolveCarouselStyleReference
+  // is optional and best-effort: no AI images configured, provider doesn't
+  // expose a local file, or slide 1 itself failed all resolve to null and
+  // the rest of the carousel still generates fine, just back to
+  // prompt-only consistency (see the "MESMO template" line in
+  // buildCarouselSlideContentTopic).
+  const [firstSlide, ...restSlides] = carousel.slides;
+  if (firstSlide) {
+    await enrichCarouselSlideWithRealImage(carousel, firstSlide, project, projectId, paths, options);
+  }
+  const styleReferencePath = typeof options.resolveCarouselStyleReference === 'function' && firstSlide
+    ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+    : null;
+
+  await mapWithConcurrency(restSlides, BATCH_IMAGE_CONCURRENCY, (slide) => (
+    enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath)
+  ));
+
+  markReady(carousel);
+  carousel.updatedAt = new Date().toISOString();
+  await writeJson(carousel.filePath, carousel);
+}
+
+// Fire-and-forget dispatch for the route handler — the request that created
+// the carousel has already responded with the placeholder by the time this
+// runs; the panel polls listCarousels for progress, same pattern as
+// enqueueAdCreativeImageGeneration.
+export function enqueueCarouselGeneration(projectId, carousel, options = {}, targetDir = process.cwd(), overrides = {}) {
+  const paths = getCentralPaths(targetDir, projectId);
+  loadProject(paths)
+    .then((project) => runCarouselGeneration(carousel, project, projectId, options, paths, overrides))
+    .catch((err) => {
+      console.error(`[content-central] background carousel generation failed for ${projectId}/${carousel.carouselId}:`, err.message);
+    });
+}
+
+// "Regenerar esse slide" — refreshes just that slide's image references
+// (references can change if the project's reference library changed since
+// the carousel was generated, same reasoning as regenerateAdCreative).
+// Roteiro and every other slide stay untouched. The actual re-generation is
+// kicked off separately by enqueueCarouselSlideRegeneration below, same
+// two-step shape as regenerateAdCreative + enqueueAdCreativeImageGeneration.
+export async function regenerateCarouselSlide(projectId, carouselId, slideId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+    if (!safeId) throw new Error('ID do carrossel inválido.');
+    const filePath = join(paths.carouselsDir, `${safeId}.json`);
+    const carousel = await readJson(filePath);
+    const slide = carousel.slides.find((entry) => entry.slideId === slideId);
+    if (!slide) throw new Error('Slide não encontrado.');
+    if (slide.contentTopic) {
+      slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
+    }
+    await writeJson(filePath, carousel);
+    return carousel;
+  });
+}
+
+export function enqueueCarouselSlideRegeneration(projectId, carouselId, slideId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+  loadProject(paths)
+    .then(async (project) => {
+      const filePath = join(paths.carouselsDir, `${safeId}.json`);
+      const carousel = await readJson(filePath);
+      const slide = carousel.slides.find((entry) => entry.slideId === slideId);
+      if (!slide) throw new Error('Slide não encontrado.');
+      slide.image.generating = true;
+      await writeJson(filePath, carousel);
+      // Manual "regenerar esse slide" should stay consistent with the rest
+      // of the carousel too — same style reference as the original
+      // generation, unless slide 1 itself is the one being regenerated (it
+      // defines the style, nothing to reference).
+      const firstSlide = carousel.slides[0];
+      const styleReferencePath = firstSlide && firstSlide.slideId !== slide.slideId
+        && typeof options.resolveCarouselStyleReference === 'function'
+        ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+        : null;
+      await enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath);
+    })
+    .catch((err) => {
+      console.error(`[content-central] background carousel slide regeneration failed for ${projectId}/${carouselId}/${slideId}:`, err.message);
+    });
+}
+
+// Same idea as regenerateCarouselSlide/enqueueCarouselSlideRegeneration,
+// operating on a batch item's slides array instead of a standalone
+// Carousel file — reuses findContentPath (already used by
+// deleteProjectContent) to locate the item on disk from its contentId.
+export async function regenerateContentCarouselSlide(projectId, contentId, slideId, targetDir = process.cwd(), batchId) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const contentPath = await findContentPath(paths.draftsDir, contentId, batchId);
+    const item = await readJson(contentPath);
+    const slide = item.slides?.find((entry) => entry.slideId === slideId);
+    if (!slide) throw new Error('Slide não encontrado.');
+    if (slide.contentTopic) {
+      slide.image.references = await buildImageReferencePayload(project, paths, { channel: slide.channel, topic: slide.contentTopic });
+    }
+    await writeJson(contentPath, item);
+    return item;
+  });
+}
+
+export function enqueueContentCarouselSlideRegeneration(projectId, contentId, slideId, options = {}, targetDir = process.cwd(), batchId) {
+  const paths = getCentralPaths(targetDir, projectId);
+  loadProject(paths)
+    .then(async (project) => {
+      const contentPath = await findContentPath(paths.draftsDir, contentId, batchId);
+      const item = await readJson(contentPath);
+      const slide = item.slides?.find((entry) => entry.slideId === slideId);
+      if (!slide) throw new Error('Slide não encontrado.');
+      slide.image.generating = true;
+      await writeJson(contentPath, item);
+      const firstSlide = item.slides[0];
+      const styleReferencePath = firstSlide && firstSlide.slideId !== slide.slideId
+        && typeof options.resolveCarouselStyleReference === 'function'
+        ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+        : null;
+      await enrichCarouselSlideWithRealImage(item, slide, project, projectId, paths, options, styleReferencePath);
+    })
+    .catch((err) => {
+      console.error(`[content-central] background content carousel slide regeneration failed for ${projectId}/${contentId}/${slideId}:`, err.message);
+    });
+}
+
 // How many items get a real AI image generated at once when a batch is
 // scheduled. Each generation is a slow (30s-3min) external call, so a large
 // batch run fully sequential could take tens of minutes; a small concurrency
@@ -2665,11 +3040,59 @@ function creativeGroupsFromItems(items) {
 // generation per group — the "leader" (first item in the group) runs the
 // real generation, and its result is copied onto the other members so they
 // all publish with the exact same creative instead of each rolling its own.
-export async function enrichBatchItemsWithRealImages(batch, project, projectId, options) {
-  if (typeof options.imageGenerator !== 'function') return;
+export async function enrichBatchItemsWithRealImages(batch, project, projectId, options, paths) {
+  if (typeof options.imageGenerator !== 'function') {
+    // A carousel item's slides are born generating:true (see
+    // buildCarouselSlideSkeleton) because the placeholder is written before
+    // this runs. Without an image generator nothing will ever flip them, so
+    // clear them here — otherwise reconcileInterruptedGenerations reports
+    // "o servidor foi reiniciado" for a generation that never started.
+    for (const item of batch.items) {
+      if (item.format !== 'carousel' || !Array.isArray(item.slides)) continue;
+      for (const slide of item.slides) {
+        slide.image.generating = false;
+        slide.imageGenerationError = 'Geração de imagens por IA não está ativada neste servidor, então os slides deste carrossel ficaram sem imagem.';
+      }
+      item.updatedAt = new Date().toISOString();
+      await writeJson(item.filePath, item);
+    }
+    return;
+  }
   const groups = creativeGroupsFromItems(batch.items);
   await mapWithConcurrency(groups, BATCH_IMAGE_CONCURRENCY, async (group) => {
     const [leader, ...followers] = group;
+    // A carousel item's own creativeGroupKey is always null (Task 4), so
+    // it is always alone in its group — followers is always empty here.
+    // It needs the multi-slide roteiro pipeline instead of the
+    // single-image path below, and its own status field (draft_generated,
+    // aprovado, ...) must never be overwritten by the carousel engine's
+    // internal 'generating'/'ready' bookkeeping — hence markReady: () => {}.
+    if (leader.format === 'carousel') {
+      leader.slides.forEach((slide) => { slide.image.generating = true; });
+      leader.updatedAt = new Date().toISOString();
+      await writeJson(leader.filePath, leader);
+      const captionWork = writeAiCaptionForItem(leader, project, options);
+      const carouselWork = runCarouselGeneration(leader, project, projectId, {
+        imageGenerator: options.imageGenerator,
+        imageReviewer: options.imageReviewer,
+        outlineGenerator: options.carouselOutlineGenerator,
+        resolveCarouselStyleReference: options.resolveCarouselStyleReference,
+        maxCreativeAttempts: options.maxCreativeAttempts,
+      }, paths, {
+        briefing: leader.briefing,
+        slideCount: leader.slideCount,
+        markReady: () => {},
+        // Keep the roteiro's visual style (e.g. 'listicle') in
+        // carouselFormat and leave item.format alone: it must stay
+        // 'carousel' on disk for the whole generation window, or a crash
+        // mid-run hides the item from reconcileInterruptedGenerations.
+        setFormat: (item, style) => { item.carouselFormat = style; },
+      });
+      await Promise.all([carouselWork, captionWork]);
+      leader.updatedAt = new Date().toISOString();
+      await writeJson(leader.filePath, leader);
+      return;
+    }
     for (const item of group) {
       item.image.generating = true;
       item.updatedAt = new Date().toISOString();
@@ -2766,7 +3189,7 @@ export function enqueueBatchImageGeneration(projectId, batch, options = {}, targ
   if (typeof options.imageGenerator !== 'function') return;
   const paths = getCentralPaths(targetDir, projectId);
   loadProject(paths)
-    .then((project) => enrichBatchItemsWithRealImages(batch, project, projectId, options))
+    .then((project) => enrichBatchItemsWithRealImages(batch, project, projectId, options, paths))
     .catch((err) => {
       // Best-effort background job — surface nothing synchronously; a
       // project-load failure here would already have failed the request
@@ -2850,6 +3273,11 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   if (!Number.isInteger(days) || days < 1 || days > 60) {
     throw new Error('Days must be an integer between 1 and 60');
   }
+  // Per-generation, not a persisted setting — same non-persistence as `days`
+  // and `formats` above (GenerateContent.tsx sends these fresh every time,
+  // there is no "Agenda e Geração" settings screen in this codebase).
+  const carouselsPerWeek = Math.max(0, Math.min(7, Math.trunc(Number(options.carouselsPerWeek) || 0)));
+  const maxCarouselSlides = Math.max(2, Math.min(10, Math.trunc(Number(options.maxCarouselSlides) || 3)));
 
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
@@ -2876,6 +3304,8 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     days,
     startDate,
     formats,
+    carouselsPerWeek,
+    maxCarouselSlides,
     items: [],
   };
 
@@ -2937,6 +3367,8 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
     return topic;
   }
 
+  const carouselDayIndexes = carouselWeekdaysForRange(days, carouselsPerWeek);
+
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
     const dayNumber = dayIndex + 1;
     const scheduledDate = addDays(startDate, dayIndex);
@@ -2963,7 +3395,62 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const imageLocalPath = `content/drafts/${batchId}/images/${fileName}.svg`;
         const ruleLabel = `${format.label}: ${format.postsPerDay}x por dia, a cada ${format.everyDays} dia(s), intervalo ${format.intervalMinutes} min.`;
         const itemContentRules = contentRulesWithApprovedPlan(contentRules, approvedPlanOverride);
-        const item = {
+        const isCarouselDay = format.channel === 'instagram_feed' && slotIndex === 0 && carouselDayIndexes.has(dayIndex);
+        const item = isCarouselDay
+          ? (() => {
+              const carouselId = `${contentId}-carrossel`;
+              const briefing = carouselBriefingFromContentTopic(contentTopic);
+              return {
+                schemaVersion: 1,
+                contentId,
+                projectId: project.projectId,
+                batchId,
+                dayNumber,
+                slotNumber,
+                scheduledDate,
+                scheduledTime,
+                channel: format.channel,
+                formatLabel: format.label,
+                contentTopic,
+                creativeGroupKey: null,
+                creativeSharedWith: null,
+                contentReview: buildContentReview({ channel: format.channel, aspectRatio, dimensions, contentTopic }),
+                status: 'draft_generated',
+                title: `Dia ${dayNumber} · Carrossel — ${project.name}`,
+                format: 'carousel',
+                briefing,
+                carouselFormat: '',
+                slideCount: maxCarouselSlides,
+                slides: Array.from({ length: maxCarouselSlides }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1)),
+                outlineGenerationError: null,
+                caption: {
+                  text: buildCaptionDraft(project, dayNumber, contentTopic),
+                  version: 1,
+                },
+                dayRules: [],
+                scheduleRule: { ...format },
+                generationContext: {
+                  globalRules: globalRules.rules.map((rule) => rule.text),
+                  projectRules: [...project.rules.project],
+                  contentRules: [...itemContentRules, ruleLabel],
+                },
+                approval: {
+                  required: project.mode !== 'automatic',
+                  emailSentAt: null,
+                  approvedAt: null,
+                  approvalSource: null,
+                },
+                publish: {
+                  publishedAt: null,
+                  metaMediaId: null,
+                  error: null,
+                },
+                filePath,
+                createdAt,
+                updatedAt: createdAt,
+              };
+            })()
+          : {
           schemaVersion: 1,
           contentId,
           projectId: project.projectId,
@@ -3016,7 +3503,9 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           createdAt,
           updatedAt: createdAt,
         };
-        item.image.previewDataUrl = await writeGeneratedImage(join(paths.projectDir, imageLocalPath), item, project);
+        if (!isCarouselDay) {
+          item.image.previewDataUrl = await writeGeneratedImage(join(paths.projectDir, imageLocalPath), item, project);
+        }
         await writeJson(filePath, item);
         batch.items.push(item);
       }
@@ -3740,8 +4229,11 @@ export async function buildApprovalPayload(projectId, contentId, targetDir = pro
       scheduledTime: content.scheduledTime,
     },
     creative: {
-      imageLocalPath: content.image.localPath,
-      imagePrompt: content.image.prompt,
+      // Optional-chained: a carousel-format item has no top-level image, its
+      // pixels live in slides[].image (nothing downstream reads these two
+      // fields, so null/'' is the safe absent value).
+      imageLocalPath: content.image?.localPath ?? null,
+      imagePrompt: content.image?.prompt ?? '',
       caption: content.caption.text,
     },
     approval: {
@@ -3811,6 +4303,9 @@ export async function approveContent(projectId, contentId, targetDir = process.c
       contentId: content.contentId,
       data: {
         channel: content.channel,
+        // Carried so the gaveta sync can skip carousel items — that queue
+        // only knows single-image Meta publishing (see resolveGaveteSync).
+        format: content.format || null,
         caption: content.caption.text,
         mediaUrl: content.publish?.mediaUrl || null,
         scheduledDate: content.scheduledDate,
@@ -4207,14 +4702,67 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
   const fixed = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const content = await listProjectContent(entry.name, targetDir);
-    for (const item of content) {
-      if (!item.image?.generating) continue;
-      item.image.generating = false;
-      item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
-      item.updatedAt = new Date().toISOString();
-      await writeJson(item.filePath, item);
-      fixed.push({ projectId: entry.name, contentId: item.contentId });
+    // One broken/incomplete project directory (missing project.json — a
+    // leftover test folder, an interrupted delete) used to throw out of
+    // listProjectContent and abort this whole function, silently skipping
+    // reconciliation for every OTHER project too, on every single startup.
+    // Isolate each project so a bad one only loses its own reconcile pass.
+    try {
+      const content = await listProjectContent(entry.name, targetDir);
+      for (const item of content) {
+        if (item.image?.generating) {
+          item.image.generating = false;
+          item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
+          item.updatedAt = new Date().toISOString();
+          await writeJson(item.filePath, item);
+          fixed.push({ projectId: entry.name, contentId: item.contentId });
+          continue;
+        }
+        // Same bug, batch-item carousel shape: no top-level `image`, N
+        // slides each with their own `image.generating`. This item's own
+        // `.status` field (draft_generated/aprovado/...) is unrelated
+        // bookkeeping from the rest of the pipeline — never touch it here,
+        // only the slide-level generation flags.
+        if (item.format === 'carousel' && Array.isArray(item.slides)) {
+          let touched = false;
+          for (const slide of item.slides) {
+            if (!slide.image?.generating) continue;
+            slide.image.generating = false;
+            slide.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar esse slide" para tentar de novo.';
+            touched = true;
+          }
+          if (!touched) continue;
+          item.updatedAt = new Date().toISOString();
+          await writeJson(item.filePath, item);
+          fixed.push({ projectId: entry.name, contentId: item.contentId });
+        }
+      }
+
+      // Same class of bug, carousel shape: a slide's own `image.generating`
+      // (or the whole carousel's `status: 'generating'`, e.g. the roteiro
+      // call itself was in flight) can get stranded true forever if the
+      // server dies mid-generation — nothing else ever flips it back, and
+      // "Regenerar esse slide" stays disabled thinking one is still running.
+      const carousels = await listCarousels(entry.name, targetDir);
+      for (const carousel of carousels) {
+        let touched = false;
+        for (const slide of carousel.slides) {
+          if (!slide.image?.generating) continue;
+          slide.image.generating = false;
+          slide.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar esse slide" para tentar de novo.';
+          touched = true;
+        }
+        if (carousel.status === 'generating') {
+          carousel.status = 'ready';
+          touched = true;
+        }
+        if (!touched) continue;
+        carousel.updatedAt = new Date().toISOString();
+        await writeJson(carousel.filePath, carousel);
+        fixed.push({ projectId: entry.name, carouselId: carousel.carouselId });
+      }
+    } catch (err) {
+      console.error(`[content-central] reconcile interrupted generations skipped project "${entry.name}":`, err.message);
     }
   }
   return fixed;
@@ -5922,7 +6470,12 @@ function formatContentTopicLines(topic) {
     topic.objective ? `Objetivo criativo: ${topic.objective}` : '',
     topic.learningEntries?.length ? `Aprendizados registrados para este tipo de publicação: ${topic.learningEntries.join(' | ')}` : '',
     'Não misturar oferta de delivery com rodízio/presencial se isso não estiver cadastrado no assunto.',
-    'Variar o tipo de publicação entre os cards; não fazer todos com a mesma estrutura de oferta.',
+    // A carrossel is one sequential piece — every slide should look like
+    // part of the same set. The "vary structure" rule below exists for the
+    // opposite case (a batch of separate ad-creative cards, each its own
+    // offer) and actively fights carousel cohesion if left on, so skip it
+    // for carousel-sourced topics.
+    topic.source !== 'carousel' ? 'Variar o tipo de publicação entre os cards; não fazer todos com a mesma estrutura de oferta.' : '',
   ];
 }
 
@@ -5993,6 +6546,22 @@ async function generateAiImageWithReviewLoop(content, project, projectId, option
       allOffers: project.contentStrategy?.offers || [],
     }
   );
+  // Attached AFTER buildPrimaryAiImageReferences on purpose, not fed into
+  // it — that function's role/kind gating (segment_structure match,
+  // rotation caps, etc.) is tuned for the project's own registered
+  // reference library and would happily drop or rotate away a one-off
+  // cross-slide reference like this one. A forced style reference always
+  // gets a slot; it only ever adds one extra reference image, never
+  // replaces the project's own logo/product/layout references above.
+  if (options.styleReferenceAbsolutePath) {
+    baseReferences.push({
+      id: 'carousel-style-reference',
+      role: 'visual_reference',
+      absolutePath: options.styleReferenceAbsolutePath,
+      relativePath: 'carousel-style-reference.png',
+      mimeType: 'image/png',
+    });
+  }
   content.creativeSpec = buildCreativeSpec(
     content,
     project,
@@ -6075,6 +6644,35 @@ function pickRotatingReferenceList(candidates, seed, count) {
   if (candidates.length <= count) return candidates.slice(0, count);
   const start = hashString(seed || '') % candidates.length;
   return Array.from({ length: count }, (_, index) => candidates[(start + index) % candidates.length]);
+}
+
+// Which day offsets (0-indexed, relative to a batch's startDate) become
+// carousel days instead of a normal single-image Feed post. Deterministic
+// on purpose (matches this codebase's existing preference — see
+// pickRotatingReferenceList's seeded-not-random comment): re-generating the
+// same range always picks the same days, instead of a fresh random roll
+// each time. Step size spreads the quota evenly across each 7-day window;
+// a partial trailing week gets its quota scaled down proportionally so it
+// never reaches past the range's actual last day.
+export function carouselWeekdaysForRange(days, carouselsPerWeek) {
+  const result = new Set();
+  if (carouselsPerWeek <= 0) return result;
+  for (let weekStart = 0; weekStart < days; weekStart += 7) {
+    const weekLength = Math.min(7, days - weekStart);
+    let weekQuota = weekLength === 7
+      ? carouselsPerWeek
+      : Math.round((carouselsPerWeek * weekLength) / 7);
+    // Ensure at least 1 carousel for partial weeks with carouselsPerWeek > 0
+    if (weekLength < 7 && carouselsPerWeek > 0 && weekQuota < 1) {
+      weekQuota = 1;
+    }
+    if (weekQuota <= 0) continue;
+    const step = Math.max(1, Math.floor(weekLength / weekQuota));
+    for (let picked = 0, offset = 0; picked < weekQuota && offset < weekLength; offset += step, picked += 1) {
+      result.add(weekStart + offset);
+    }
+  }
+  return result;
 }
 
 // A handful of visual-direction lines were written exclusively for a food
@@ -6298,8 +6896,36 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       isVerticalStory ? 'A composição deve ser nativa de Story vertical.' : '',
       isVerticalStory ? 'Não criar um flyer quadrado ou bloco central com aparência 1:1.' : '',
       isVerticalStory ? 'Distribuir os elementos ao longo da altura do canvas, aproveitando bem topo, centro e base.' : '',
-      'Preencher todo o canvas; manter título, preço, CTA e logo dentro da área segura.',
+      // "Preencher todo o canvas" (texto grande, tela cheia) é regra de
+      // anúncio avulso pra parar o scroll — num carrossel sequencial isso
+      // vira texto gigante em todo slide, sem respiro. Testado 27/08/2026:
+      // sem esta exceção o título tomava quase metade do slide.
+      // Height budget varies by slide role instead of one fixed number —
+      // a cover/CTA slide is meant to hit harder (bigger headline is fine),
+      // a middle/explanation slide needs more room for actual body text.
+      // Feedback 27/08/2026: a single flat "25-30% max" ceiling ignored
+      // that a slide's job changes what "too big" even means.
+      topic.source === 'carousel'
+        ? (content.role === 'cover' || content.role === 'cta'
+          ? 'Manter respiro/margem nas bordas do canvas; é um slide de capa/CTA — título pode ser maior e mais impactante, ocupando até ~35% da altura, sem preencher o canvas inteiro nem cortar a margem.'
+          : 'Manter respiro/margem nas bordas do canvas; título ocupando geralmente entre 20-30% da altura do slide, deixando espaço equilibrado pro corpo de texto/explicação — sem letras gigantes tomando o slide inteiro.')
+        : 'Preencher todo o canvas; manter título, preço, CTA e logo dentro da área segura.',
+      // Only slides that actually have a next page — the last slide (CTA)
+      // is where the sequence ends, an arrow there would point at nothing.
+      topic.source === 'carousel' && !topic.isLastCarouselSlide
+        ? 'Adicionar um pequeno indicador visual de "arraste para o lado" no canto inferior direito do slide (ex.: seta/chevron simples, discreto, na cor de acento da marca) — sinaliza que o carrossel continua no próximo slide.'
+        : '',
     ]),
+    // Only present when runCarouselGeneration/enqueueCarouselSlideRegeneration
+    // resolved slide 1's own generated file — see generateAiImageWithReviewLoop,
+    // where this exact reference gets force-attached (id 'carousel-style-reference').
+    selectedReferences.some((reference) => reference.id === 'carousel-style-reference')
+      ? section('CONSISTÊNCIA DO CARROSSEL', [
+        'Uma das imagens anexadas é o slide 1, já gerado, deste MESMO carrossel.',
+        'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — mesma identidade visual, não apenas inspiração livre.',
+        'A composição/disposição dos elementos deste slide pode ser diferente da do slide 1 (ex.: título maior de um lado, bloco de texto do outro, lista de bullets) — o que precisa ser idêntico é a identidade visual, não o layout exato.',
+      ])
+      : '',
     section('OBJETIVO DO CRIATIVO', [
       // Skip the generic filler line when the topic already carries its own
       // specific objective (e.g. an offer's real name/price) — repeating a
@@ -8629,6 +9255,8 @@ async function readJson(path, fallback) {
   }
 }
 
+let writeJsonTempCounter = 0;
+
 async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
   // Write to a temp file in the same directory, then rename over the real
@@ -8636,7 +9264,13 @@ async function writeJson(path, value) {
   // (this session's dev server has died mid-request more than once) can
   // never leave the real file truncated/corrupted; readers either see the
   // old complete file or the new complete file, never a partial one.
-  const tempPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+  // The counter matters: pid+Date.now() alone collides when two calls for
+  // the SAME path (e.g. two carousel slides finishing in the same
+  // millisecond, both writing carousel.filePath) land in the same
+  // millisecond — the second rename then throws ENOENT because its temp
+  // file was already consumed by the first call's rename (reproduced
+  // 100% of the time with concurrent carousel slide writes).
+  const tempPath = `${path}.${process.pid}.${Date.now()}.${writeJsonTempCounter++}.tmp`;
   await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
   // On Windows, rename-over-an-existing-file transiently fails with EPERM
   // if anything else (antivirus, a search indexer, another process's brief

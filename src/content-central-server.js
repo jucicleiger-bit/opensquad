@@ -64,6 +64,14 @@ import {
   enqueueAdCreativeImageGeneration,
   generateAdCreative,
   regenerateAdCreative,
+  deleteCarousel,
+  enqueueCarouselGeneration,
+  enqueueCarouselSlideRegeneration,
+  enqueueContentCarouselSlideRegeneration,
+  generateCarousel,
+  listCarousels,
+  regenerateCarouselSlide,
+  regenerateContentCarouselSlide,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -136,6 +144,10 @@ function resolveGaveteSync(targetDir, projectId) {
       // have been queued before this guard existed, so those still go through.
       if (action === 'upsert') {
         if (WHATSAPP_CHANNELS.has(payload.data?.channel)) return null;
+        // Same reason for a carousel item: the sweep only understands a
+        // single-image post, and a carousel has no top-level image at all —
+        // queued it would sit with mediaUrl:null and be retried forever.
+        if (payload.data?.format === 'carousel') return null;
         return upsertQueueItem(gaveteDir, payload.projectId, payload.contentId, payload.data);
       }
       if (action === 'remove') return removeQueueItem(gaveteDir, payload.projectId, payload.contentId);
@@ -347,6 +359,7 @@ export async function startContentCentralServer({
   imageReviewer = null,
   captionGenerator = null,
   adCopyGenerator = null,
+  carouselOutlineGenerator = null,
   brandAnalyzer = null,
   pillarSuggester = null,
   logoColorAnalyzer = null,
@@ -367,6 +380,7 @@ export async function startContentCentralServer({
     imageReviewer: imageReviewer || (enableAiImages ? reviewImageForActiveTextProvider : null),
     captionGenerator: captionGenerator || (enableAiImages ? writeAiCaptionWithHermes : null),
     adCopyGenerator: adCopyGenerator || (enableAiImages ? writeAdCopyVariationsWithHermes : null),
+    carouselOutlineGenerator: carouselOutlineGenerator || (enableAiImages ? (payload) => writeCarouselOutlineWithHermes({ ...payload, targetDir }) : null),
     brandAnalyzer: brandAnalyzer || (enableAiImages ? generateBrandXrayWithAi : null),
     pillarSuggester: pillarSuggester || (enableAiImages ? generatePillarSuggestionsWithAi : null),
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
@@ -715,6 +729,10 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { adCreatives: await listAdCreatives(projectId, targetDir) });
   }
 
+  if (method === 'GET' && parts.length === 4 && parts[3] === 'carousels') {
+    return sendJson(res, 200, { carousels: await listCarousels(projectId, targetDir) });
+  }
+
   if (method === 'GET' && parts.length === 4 && parts[3] === 'briefing') {
     const [projects, content] = await Promise.all([
       listCentralProjects(targetDir),
@@ -1004,7 +1022,14 @@ async function handleRequest(req, res, targetDir, context = {}) {
 
   if (parts.length === 4 && parts[3] === 'generate') {
     const body = await readBody(req);
-    const imageOptions = { imageGenerator: context.imageGenerator, imageReviewer: context.imageReviewer, captionGenerator: context.captionGenerator, videoAnimator: context.videoAnimator };
+    const imageOptions = {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      captionGenerator: context.captionGenerator,
+      videoAnimator: context.videoAnimator,
+      carouselOutlineGenerator: context.carouselOutlineGenerator,
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+    };
     if (Array.isArray(body.formats) && body.formats.length) {
       const formats = body.formats.map((format) => ({
         ...format,
@@ -1019,6 +1044,8 @@ async function handleRequest(req, res, targetDir, context = {}) {
         offersOnly: Boolean(body.offersOnly),
         approvedPlan: body.approvedPlan,
         topicIdeaGenerator: context.topicIdeaGenerator,
+        carouselsPerWeek: body.carouselsPerWeek,
+        maxCarouselSlides: body.maxCarouselSlides,
       }, targetDir);
       enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
       return sendJson(res, 201, { batch, batches: [batch] });
@@ -1154,6 +1181,50 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { adCreative });
   }
 
+  // Carrossel avulso — separate from every organic/ad-creative route above:
+  // no scheduledDate, no approval, no calendar, no publish. 1 briefing + N
+  // slide count in, N independently-regenerable slides out.
+  if (parts.length === 4 && parts[3] === 'carousels') {
+    const body = await readBody(req);
+    const briefing = String(body.briefing || '').trim();
+    if (!briefing) return sendJson(res, 400, { error: 'Informe o briefing do carrossel.' });
+    const carousel = await generateCarousel(projectId, { briefing, slideCount: body.slideCount }, targetDir);
+    enqueueCarouselGeneration(projectId, carousel, {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      outlineGenerator: context.carouselOutlineGenerator,
+      // Real cross-slide consistency: resolves slide 1's own generated file
+      // on disk (reusing the same URL->path resolution the targeted-edit
+      // "regenerate with a note" flow already relies on) so every other
+      // slide gets it as an actual attached reference image, not just a
+      // prompt instruction. Returns null (no-op) for anything not a real
+      // local file — a missing key, an unconfigured provider, slide 1
+      // itself failing.
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+    }, targetDir);
+    return sendJson(res, 201, { carousel });
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-delete') {
+    await deleteCarousel(projectId, parts[4], targetDir);
+    return sendJson(res, 200, { deleted: true });
+  }
+
+  if (parts.length === 6 && parts[3] === 'carousels-regenerate-slide') {
+    const body = await readBody(req).catch(() => ({}));
+    const carousel = await regenerateCarouselSlide(projectId, parts[4], parts[5], targetDir);
+    enqueueCarouselSlideRegeneration(projectId, parts[4], parts[5], {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+      // A note here turns the regenerate into a targeted edit of the
+      // slide's own current image instead of a fresh take — see
+      // enrichCarouselSlideWithRealImage.
+      note: String(body.note || '').trim() || undefined,
+    }, targetDir);
+    return sendJson(res, 200, { carousel });
+  }
+
   // Parallel endpoint for catalog (venda direta) projects: no formats/channels
   // matrix, no AI art — generateCatalogSchedulePlan round-robins active
   // products to Instagram Story, then enqueueCatalogImageGeneration composes
@@ -1263,6 +1334,20 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const result = await deleteProjectContent(projectId, parts[4], targetDir, body.batchId, body.reason, resolveGaveteSync(targetDir, projectId));
     return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 7 && parts[3] === 'content' && parts[5] === 'carousel-regenerate-slide') {
+    const body = await readBody(req).catch(() => ({}));
+    const contentId = parts[4];
+    const slideId = parts[6];
+    const item = await regenerateContentCarouselSlide(projectId, contentId, slideId, targetDir, body.batchId);
+    enqueueContentCarouselSlideRegeneration(projectId, contentId, slideId, {
+      imageGenerator: context.imageGenerator,
+      imageReviewer: context.imageReviewer,
+      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+      note: String(body.note || '').trim() || undefined,
+    }, targetDir, body.batchId);
+    return sendJson(res, 200, { item });
   }
 
   return sendJson(res, 404, { error: 'Not found' });
@@ -4131,6 +4216,67 @@ async function writeAdCopyVariationsWithHermes({ adCreative, project, note, note
     .filter((entry) => entry.headline && entry.primaryText);
 }
 
+// Reads the same carousel-format knowledge squads already use
+// (_opensquad/core/best-practices/instagram-feed.md) as prompt reference —
+// read from disk, never duplicated/hardcoded here. Missing file (e.g. a
+// stripped-down deployment) degrades gracefully: the AI still writes a
+// carousel, just without the format-specific slide-flow guidance.
+async function readCarouselFormatsReference(targetDir) {
+  try {
+    return await readFile(join(targetDir, '_opensquad', 'core', 'best-practices', 'instagram-feed.md'), 'utf-8');
+  } catch {
+    return '';
+  }
+}
+
+export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }) {
+  return [
+    contentCentralPersonaLine('sofia'),
+    contentCentralPersonaResponsibilityLine('sofia'),
+    'Você é a roteirista responsável por transformar um briefing em um carrossel de Instagram.',
+    '',
+    'REFERÊNCIA DE FORMATOS DE CARROSSEL (escolha o mais adequado ao briefing; use como guia de estrutura, não copie o texto de exemplo)',
+    formatsReference || '(referência não disponível — use seu próprio critério editorial)',
+    '',
+    'EMPRESA',
+    `- Nome: ${project.name}`,
+    `- Segmento: ${project.brandInput?.segment || project.companyProfile?.segment || 'não informado'}`,
+    '',
+    'BRIEFING DO OPERADOR',
+    briefing,
+    '',
+    `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
+    'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
+    '- Nunca inventar preço, promoção, prazo, estoque, depoimento ou dado que não foi passado no briefing.',
+    '',
+    'Responda APENAS com um JSON válido, sem markdown e sem texto fora do JSON, neste formato exato:',
+    `{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`,
+  ].filter(Boolean).join('\n');
+}
+
+async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir }) {
+  const formatsReference = await readCarouselFormatsReference(targetDir);
+  const raw = await callAiText(buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }), 'OPENSQUAD_COPY_TIMEOUT_MS');
+  if (!raw) return null;
+  const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
+  if (!jsonText) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+  if (!parsed || !Array.isArray(parsed.slides)) return null;
+  const slides = parsed.slides
+    .map((entry) => ({
+      role: ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content',
+      slideText: String(entry?.slideText || '').trim(),
+    }))
+    .filter((entry) => entry.slideText);
+  if (slides.length !== slideCount) return null;
+  return { format: String(parsed.format || '').trim(), slides };
+}
+
 function audienceTypeToneLine(project) {
   const audienceType = project.brandInput?.audienceType || project.companyProfile?.audienceType;
   if (audienceType === 'b2b') {
@@ -4464,6 +4610,56 @@ async function uploadWithRetry(uploadFn) {
   throw lastError;
 }
 
+// Same shape as publishContentToInstagram's single-image path (token/user-id
+// checks, retry loop) but uploads every slide and sends image_urls (plural)
+// instead of image_url — meta-publish-multi.js's publishTarget dispatches to
+// publishInstagramCarousel when it sees that field. Exported and DI'd
+// (options.uploader/options.execFileAsync) the same way publishWithGaveteSync
+// already is — see that function's own comment on why.
+export async function publishCarouselToInstagram({ content, project }, targetDir, options = {}) {
+  const uploader = options.uploader || uploadGeneratedImagePublicly;
+  const execFile = options.execFileAsync || execFileAsync;
+  const localImagePaths = content.slides.map((slide) => resolveGeneratedImageAbsolutePath({ image: slide.image }, project.projectId, targetDir));
+  if (localImagePaths.some((path) => !path)) throw new Error('Uma ou mais imagens do carrossel não foram encontradas para publicar.');
+
+  const token = await readProjectToken(project.projectId, targetDir);
+  if (!token) throw new Error('Nenhum token Meta cadastrado para este projeto.');
+  const instagramUserId = project.instagram?.instagramUserId;
+  if (!instagramUserId) throw new Error('Projeto sem Instagram User ID cadastrado — valide o token na aba "Conta e token".');
+
+  const maxAttempts = Math.max(1, Number(process.env.OPENSQUAD_PUBLISH_RETRY_ATTEMPTS || 3));
+  const retryDelayMs = Math.max(0, Number(process.env.OPENSQUAD_PUBLISH_RETRY_DELAY_MS || 4000));
+  const settleDelayMs = Math.max(0, Number(process.env.OPENSQUAD_PUBLISH_SETTLE_DELAY_MS || 2500));
+
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const imageUrls = await Promise.all(localImagePaths.map((path) => uploader(path)));
+      await delay(settleDelayMs);
+      const payload = {
+        publish_targets: [{
+          channel: content.channel,
+          image_urls: imageUrls,
+          caption: content.caption?.text || '',
+        }],
+      };
+      const { stdout } = await execFile('node', [META_PUBLISH_SCRIPT, '--payload-json', JSON.stringify(payload)], {
+        timeout: Number(process.env.OPENSQUAD_PUBLISH_TIMEOUT_MS || 300000),
+        maxBuffer: 1024 * 1024,
+        env: { ...process.env, INSTAGRAM_ACCESS_TOKEN: token, INSTAGRAM_USER_ID: instagramUserId },
+      });
+      const parsed = JSON.parse(stdout);
+      const result = parsed.results?.[0];
+      if (!result?.ok) throw new Error('Publicação do carrossel na Meta falhou sem detalhe.');
+      return { mediaId: result.media_id, permalink: result.permalink || null };
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts) await delay(retryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
 // The real "metaPublisher" injected into runDuePublishSweep — everything
 // that actually talks to the outside world (imgBB upload, the Meta Graph
 // API subprocess) lives here, kept out of content-central.js so the
@@ -4483,6 +4679,7 @@ async function publishContentToInstagram({ content, project }, targetDir) {
   if (!PUBLISHABLE_CHANNELS.has(content.channel)) {
     throw new Error(`Canal "${content.channel}" ainda não tem publicação real suportada (só Instagram/Facebook Feed, Story e Reels hoje).`);
   }
+  if (content.format === 'carousel') return publishCarouselToInstagram({ content, project }, targetDir);
   const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
   const localImagePath = isVideoChannel ? null : resolveGeneratedImageAbsolutePath(content, project.projectId, targetDir);
   if (!isVideoChannel && !localImagePath) throw new Error('Imagem gerada não encontrada para publicar.');
@@ -4904,6 +5101,25 @@ function briefingAvatarInitial(project) {
   return (String(project?.name || '?').trim()[0] || '?').toUpperCase();
 }
 
+const CAROUSEL_ROLE_LABELS = { cover: 'Capa', content: 'Conteúdo', cta: 'CTA' };
+
+// A carousel item has no top-level image — its pixels live in slides[]. The
+// mockup shows every slide stacked in order, each labelled with its role,
+// the same way the approval screen (PendingApproval.tsx) already does.
+function renderBriefingCarouselSlides(item, project) {
+  return (item.slides || []).map((slide) => {
+    const src = briefingPreviewImageSource(slide, project.projectId);
+    const label = CAROUSEL_ROLE_LABELS[slide.role] || 'Conteúdo';
+    const image = src
+      ? `<img src="${escapeHtml(src)}" alt="Slide ${escapeHtml(slide.order)}">`
+      : '<div class="ig-empty">Sem imagem de prévia</div>';
+    return `<div class="ig-carousel-slide">
+      <div class="ig-carousel-label">${escapeHtml(slide.order)}. ${escapeHtml(label)}</div>
+      <div class="ig-image ig-image-feed">${image}</div>
+    </div>`;
+  }).join('');
+}
+
 // A phone-screenshot mockup — real Instagram chrome (top bar, avatar,
 // action icons), not just a bare rounded-corner image frame — so the client
 // sees the post the same way it'll actually look once it's live, the same
@@ -4941,7 +5157,7 @@ function renderIgMockup(item, project, variant) {
       <span class="ig-avatar">${initial}</span>
       <span class="ig-username">${username}</span>
     </div>
-    <div class="ig-image ig-image-feed">${image}</div>
+    ${item.format === 'carousel' ? renderBriefingCarouselSlides(item, project) : `<div class="ig-image ig-image-feed">${image}</div>`}
     <div class="ig-actionbar">
       ${IG_ICON_HEART}${IG_ICON_COMMENT}${IG_ICON_SHARE}
       <span class="ig-spacer"></span>
@@ -5051,6 +5267,8 @@ header p{margin:0;color:var(--muted)}
 .ig-image-feed{aspect-ratio:4/5}
 .ig-image-story{aspect-ratio:9/16}
 .ig-empty{padding:16px;text-align:center}
+.ig-carousel-label{padding:6px 10px;font-size:11px;font-weight:600;color:#666;background:#fafafa;border-top:1px solid #eee}
+.ig-carousel-slide:first-child .ig-carousel-label{border-top:0}
 .ig-topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 12px}
 .ig-wordmark{font-family:'Segoe Script','Brush Script MT',cursive;font-style:italic;font-size:22px;font-weight:700}
 .ig-topicons{display:flex;gap:14px;color:#111}

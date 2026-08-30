@@ -145,6 +145,48 @@ describe("GenerateContent", () => {
     expect(body.formats.map((f: { channel: string }) => f.channel)).toEqual(["facebook_feed"]);
   });
 
+  it("sends carouselsPerWeek and maxCarouselSlides in the generate request, defaulting to 0 and 3", async () => {
+    stubFetchSequence([
+      { body: projectState([{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }]) },
+      EMPTY_COMMEMORATIVE_DATES,
+      { body: { batch: { items: [{ contentId: "a" }] } } },
+      { body: { content: [] } },
+    ]);
+    renderGenerate();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Instagram Feed" }));
+    await userEvent.click(screen.getByRole("button", { name: "Gerar conteúdos" }));
+
+    expect(await screen.findByRole("heading", { name: "Calendário" })).toBeInTheDocument();
+    const generateCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    const body = JSON.parse(generateCall[1].body as string);
+    expect(body.carouselsPerWeek).toBe("0");
+    expect(body.maxCarouselSlides).toBe("3");
+  });
+
+  it("sends a typed carouselsPerWeek/maxCarouselSlides value in the generate request", async () => {
+    stubFetchSequence([
+      { body: projectState([{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }]) },
+      EMPTY_COMMEMORATIVE_DATES,
+      { body: { batch: { items: [{ contentId: "a" }] } } },
+      { body: { content: [] } },
+    ]);
+    renderGenerate();
+
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Instagram Feed" }));
+    await userEvent.clear(screen.getByLabelText("Carrosséis por semana (0 = desligado)"));
+    await userEvent.type(screen.getByLabelText("Carrosséis por semana (0 = desligado)"), "2");
+    await userEvent.clear(screen.getByLabelText("Máximo de folhas por carrossel automático"));
+    await userEvent.type(screen.getByLabelText("Máximo de folhas por carrossel automático"), "4");
+    await userEvent.click(screen.getByRole("button", { name: "Gerar conteúdos" }));
+
+    expect(await screen.findByRole("heading", { name: "Calendário" })).toBeInTheDocument();
+    const generateCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    const body = JSON.parse(generateCall[1].body as string);
+    expect(body.carouselsPerWeek).toBe("2");
+    expect(body.maxCarouselSlides).toBe("4");
+  });
+
   it("offers WhatsApp Status as a disabled-by-default beta format", async () => {
     stubFetchSequence([{ body: projectState() }, EMPTY_COMMEMORATIVE_DATES]);
     renderGenerate();

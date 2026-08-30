@@ -45,7 +45,8 @@ export function Calendar() {
   }, [refresh]);
 
   useEffect(() => {
-    if (!items?.some((item) => item.image?.generating)) return;
+    // A carousel item has no top-level image — its pixels are in slides[].
+    if (!items?.some((item) => item.image?.generating || item.slides?.some((slide) => slide.image?.generating))) return;
     const timer = setInterval(refresh, 3000);
     return () => clearInterval(timer);
   }, [items, refresh]);

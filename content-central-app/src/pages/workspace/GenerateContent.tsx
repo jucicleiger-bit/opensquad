@@ -159,6 +159,8 @@ function GenerateMarketingContent() {
   const { project, refreshProject } = useOutletContext<WorkspaceContext>();
   const navigate = useNavigate();
   const [days, setDays] = useState("7");
+  const [carouselsPerWeek, setCarouselsPerWeek] = useState("0");
+  const [maxCarouselSlides, setMaxCarouselSlides] = useState("3");
   const [startDate, setStartDate] = useState("");
   const [formats, setFormats] = useState<FormatState[]>(DEFAULT_FORMATS);
   const [contentRules, setContentRules] = useState("");
@@ -323,6 +325,8 @@ function GenerateMarketingContent() {
       contentRules,
       groupIds: selectedGroupIds.size ? [...selectedGroupIds] : undefined,
       offersOnly: selectedGroupIds.size > 0 && offersOnly,
+      carouselsPerWeek,
+      maxCarouselSlides,
     };
   }
 
@@ -426,6 +430,14 @@ function GenerateMarketingContent() {
             <div>
               <label htmlFor="gen-start-date">Data inicial</label>
               <input id="gen-start-date" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="gen-carousels-per-week">Carrosséis por semana (0 = desligado)</label>
+              <input id="gen-carousels-per-week" type="number" min={0} max={7} value={carouselsPerWeek} onChange={(e) => setCarouselsPerWeek(e.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="gen-max-carousel-slides">Máximo de folhas por carrossel automático</label>
+              <input id="gen-max-carousel-slides" type="number" min={2} max={10} value={maxCarouselSlides} onChange={(e) => setMaxCarouselSlides(e.target.value)} />
             </div>
           </div>
 

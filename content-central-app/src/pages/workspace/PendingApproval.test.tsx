@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -71,6 +71,69 @@ describe("PendingApproval", () => {
       "/api/projects/boss-pizzaria/briefing",
     );
   });
+
+  it("renders every slide of a carousel-format pending item, with its own regenerate action per slide", async () => {
+    const carouselItem = baseItem({
+      contentId: "boss-pizzaria-day-1-instagram_feed-carrossel",
+      channel: "instagram_feed",
+      formatLabel: "Carrossel",
+      format: "carousel",
+      image: undefined,
+      slides: [
+        {
+          slideId: "slide-1",
+          order: 1,
+          role: "cover",
+          slideText: "5 dicas de pizza",
+          image: { url: "https://cdn.example.com/slide-1.png", generating: false },
+          imageGenerationError: null,
+        },
+        {
+          slideId: "slide-2",
+          order: 2,
+          role: "cta",
+          slideText: "Peça já",
+          image: { generating: true },
+          imageGenerationError: null,
+        },
+      ],
+    });
+    stubFetchSequence([{ body: PROJECT_STATE }, { body: { content: [carouselItem] } }]);
+
+    renderPendingApproval();
+
+    expect(await screen.findByRole("img", { name: "5 dicas de pizza" })).toHaveAttribute("src", "https://cdn.example.com/slide-1.png");
+    expect(screen.getByText("Gerando imagem...")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Regenerar esse slide" })).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "Aprovar" })).toBeInTheDocument();
+  });
+
+  it("keeps polling while only a carousel item is still generating (it has no top-level image to look at)", async () => {
+    const carouselItem = baseItem({
+      contentId: "boss-pizzaria-day-1-instagram_feed-carrossel",
+      channel: "instagram_feed",
+      formatLabel: "Carrossel",
+      format: "carousel",
+      image: undefined,
+      caption: { text: "Carrossel em geração" },
+      slides: [
+        { slideId: "slide-1", order: 1, role: "cover", slideText: "Capa", image: { generating: true }, imageGenerationError: null },
+      ],
+    });
+    stubFetchSequence([{ body: PROJECT_STATE }, { body: { content: [carouselItem] } }]);
+
+    renderPendingApproval();
+    await screen.findByText("Carrossel em geração");
+
+    // Real timers on purpose: swapping in fake ones here leaks into the rest
+    // of this file's tests. The poll interval is 3s, so one real tick is
+    // enough to prove the keepalive predicate saw the carousel's slides.
+    const callsAfterFirstLoad = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length;
+    await waitFor(
+      () => expect((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(callsAfterFirstLoad),
+      { timeout: 8000 },
+    );
+  }, 15000);
 
   it("shows the resolved pillar as a colored pill when the topic has one", async () => {
     stubFetchSequence([

@@ -15,6 +15,7 @@ import {
   buildAiImageReviewPrompt,
   buildCatalogOutpaintPrompt,
   buildAdCopyPrompt,
+  buildCarouselOutlinePrompt,
   CONTENT_CENTRAL_PERSONAS,
   buildDanteOptimizerPrompt,
   buildSofiaSocialCaptionPrompt,
@@ -27,6 +28,7 @@ import {
   nousFalAspectRatioForChannel,
   normalizeProspectExtraction,
   openAiImageSizeForChannel,
+  publishCarouselToInstagram,
   publishContentToWhatsAppStatus,
   publishWithGaveteSync,
   resolveContentImageAbsolutePath,
@@ -51,6 +53,7 @@ import {
   generateCatalogSchedulePlan,
   getCentralPaths,
   generateContentSchedulePlan,
+  loadProjectForTest,
   registerSegmentTemplate,
   saveLearningEntry,
   saveProjectAsset,
@@ -492,6 +495,22 @@ test('ad copy prompt folds in the project\'s approved/avoid learnings from past 
 
   const promptWithoutLearnings = buildAdCopyPrompt({ adCreative, project: { name: 'Boss Pizzaria' } });
   assert.doesNotMatch(promptWithoutLearnings, /APRENDIZADOS DE CONTEÚDOS ANTERIORES/i);
+});
+
+test('buildCarouselOutlinePrompt embeds the briefing, the requested slide count, and the instagram-feed.md formats reference verbatim', () => {
+  const prompt = buildCarouselOutlinePrompt({
+    project: { name: 'Boss Pizzaria', brandInput: { segment: 'Pizzaria' } },
+    briefing: '5 dicas de pizza',
+    slideCount: 5,
+    formatsReference: 'CONTEUDO-DE-REFERENCIA-UNICO-12345',
+  });
+
+  assert.match(prompt, /5 dicas de pizza/);
+  assert.match(prompt, /exatamente 5 slides/);
+  assert.match(prompt, /CONTEUDO-DE-REFERENCIA-UNICO-12345/);
+  assert.match(prompt, /Boss Pizzaria/);
+  assert.match(prompt, /"format"/);
+  assert.match(prompt, /"slideText"/);
 });
 
 test('content central loads OpenAI image settings from local env file without overriding process env', async () => {
@@ -1747,6 +1766,28 @@ test('content central API saves company raio-x profile and uses it in prompts', 
   });
 });
 
+test('POST generate forwards carouselsPerWeek and maxCarouselSlides through to the batch', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'carrossel-http-config', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+    });
+    const { body, response } = await request(server, '/api/projects/carrossel-http-config/generate', {
+      method: 'POST',
+      body: JSON.stringify({
+        days: 7,
+        startDate: '2026-08-24',
+        formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+        carouselsPerWeek: 2,
+        maxCarouselSlides: 4,
+      }),
+    });
+    assert.equal(response.status, 201);
+    assert.equal(body.batch.carouselsPerWeek, 2);
+    assert.equal(body.batch.maxCarouselSlides, 4);
+  });
+});
+
 test('content central API analyzes and approves brand briefing before it enters prompts', async () => {
   await withServer(async (_dir, server) => {
     await request(server, '/api/projects', {
@@ -2053,6 +2094,83 @@ test('POST .../approve upserts the queue item into the configured gaveta', async
   });
 });
 
+test('GET .../briefing renders a carousel item as every slide stacked with its role label, not a blank card', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'briefing-carrossel', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('briefing-carrossel', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 3,
+    }, dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+    assert.ok(carouselItem);
+
+    // Give each slide a distinguishable image + role, the shape
+    // runCarouselGeneration produces once the roteiro lands.
+    const roles = ['cover', 'content', 'cta'];
+    carouselItem.slides.forEach((slide, index) => {
+      slide.role = roles[index];
+      slide.image.generating = false;
+      slide.image.url = `https://cdn.example.com/slide-${index + 1}.png`;
+    });
+    await writeFile(carouselItem.filePath, JSON.stringify(carouselItem, null, 2), 'utf-8');
+
+    const res = await realFetch(`${server.url}/api/projects/briefing-carrossel/briefing`);
+    const html = await res.text();
+    assert.equal(res.status, 200);
+
+    for (const index of [1, 2, 3]) {
+      assert.ok(html.includes(`https://cdn.example.com/slide-${index}.png`), `slide ${index} must be embedded in the presentation page`);
+    }
+    assert.match(html, /1\. Capa/);
+    assert.match(html, /2\. Conteúdo/);
+    assert.match(html, /3\. CTA/);
+    // Slides render in order.
+    assert.ok(html.indexOf('slide-1.png') < html.indexOf('slide-2.png'));
+    assert.ok(html.indexOf('slide-2.png') < html.indexOf('slide-3.png'));
+  });
+});
+
+test('POST .../approve does NOT upsert a carousel item into the gaveta (that queue only understands single-image Meta publishing)', async () => {
+  await withGaveta(async ({ workDir, bareDir }) => {
+    process.env.OPENSQUAD_GAVETA_DIR = workDir;
+    try {
+      await withServer(async (dir, server) => {
+        await createCentralProject({ projectId: 'gaveta-carrossel', name: 'Gaveta Carrossel' }, dir);
+        // One carousel day plus a normal single-image day — the second is
+        // the control that proves the skip is targeted and did not just
+        // break queueing for everything.
+        const batch = await generateContentSchedulePlan('gaveta-carrossel', {
+          days: 2,
+          startDate: '2026-08-10',
+          formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }],
+          carouselsPerWeek: 1,
+          maxCarouselSlides: 2,
+        }, dir);
+        const carouselItem = batch.items.find((item) => item.format === 'carousel');
+        const singleItem = batch.items.find((item) => item.format !== 'carousel');
+        assert.ok(carouselItem && singleItem, 'fixture must contain one of each');
+
+        for (const item of [carouselItem, singleItem]) {
+          const approved = await request(server, `/api/projects/gaveta-carrossel/content/${item.contentId}/approve`, { method: 'POST' });
+          assert.equal(approved.response.status, 200);
+        }
+
+        const checkDir = `${workDir}-check`;
+        await execFileAsync('git', ['clone', bareDir, checkDir]);
+        const queueDir = join(checkDir, 'queue', 'gaveta-carrossel');
+        assert.equal(existsSync(join(queueDir, `${carouselItem.contentId}.json`)), false, 'a carousel has no top-level image — queued it would retry a broken mediaUrl:null upload forever');
+        assert.equal(existsSync(join(queueDir, `${singleItem.contentId}.json`)), true, 'a normal single-image item must still be queued exactly as before');
+        await rm(checkDir, { recursive: true, force: true });
+      });
+    } finally {
+      delete process.env.OPENSQUAD_GAVETA_DIR;
+    }
+  });
+});
+
 test('publishWithGaveteSync pulls the gaveta first and pushes the published result after', async () => {
   await withGaveta(async ({ workDir, bareDir }) => {
     const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
@@ -2135,6 +2253,70 @@ test('publishWithGaveteSync skips the real publish and syncs local state when th
       await rm(dir, { recursive: true, force: true });
     }
   });
+});
+
+test('publishCarouselToInstagram uploads every slide and sends image_urls (plural) to meta-publish-multi, not image_url', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+  try {
+    await createCentralProject({ projectId: 'carrossel-publish', name: 'Boss Pizzaria' }, dir);
+    // expiresAt present so saveProjectToken's local-validation branch is
+    // taken, never a real call to graph.facebook.com — same reasoning as
+    // the 'POST .../token calls syncTokenSecretsToGitHub...' test's own
+    // comment at content-central-server.test.js:4502-4508.
+    await saveProjectToken('carrossel-publish', {
+      token: 'EAAB-fake',
+      expiresAt: '2026-12-01T00:00:00.000Z',
+      account: { handle: '@bosspizzaria', instagramUserId: '999' },
+    }, dir);
+
+    const batch = await generateContentSchedulePlan('carrossel-publish', {
+      days: 1,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 7,
+      maxCarouselSlides: 2,
+    }, dir);
+    const item = batch.items.find((entry) => entry.format === 'carousel');
+    // Point each slide at a real local file resolveGeneratedImageAbsolutePath
+    // can find — same /api/projects/:id/assets/ URL convention every
+    // generated image already uses.
+    const assetsDir = join(dir, '_opensquad', 'content-central', 'projects', 'carrossel-publish', 'assets', 'generated');
+    await mkdir(assetsDir, { recursive: true });
+    for (const [index, slide] of item.slides.entries()) {
+      const filename = `slide-${index}.png`;
+      await writeFile(join(assetsDir, filename), Buffer.from('fake-png'));
+      slide.image.url = `/api/projects/carrossel-publish/assets/assets/generated/${filename}`;
+    }
+    item.caption = { text: 'Legenda do carrossel', version: 1 };
+    const project = await loadProjectForTest('carrossel-publish', dir);
+
+    const execCalls = [];
+    const uploadedPaths = [];
+    const result = await publishCarouselToInstagram({ content: item, project }, dir, {
+      uploader: async (localPath) => {
+        uploadedPaths.push(localPath);
+        return `https://cdn.example.com/${uploadedPaths.length}.png`;
+      },
+      execFileAsync: async (cmd, args) => {
+        execCalls.push({ cmd, args });
+        return { stdout: JSON.stringify({ ok: true, results: [{ ok: true, media_id: 'media-carrossel', permalink: 'https://instagram.com/p/carrossel' }] }) };
+      },
+    });
+
+    assert.equal(uploadedPaths.length, 2, 'one upload per slide');
+    assert.equal(result.mediaId, 'media-carrossel');
+    assert.equal(result.permalink, 'https://instagram.com/p/carrossel');
+
+    assert.equal(execCalls.length, 1);
+    const payloadArgIndex = execCalls[0].args.indexOf('--payload-json');
+    const payload = JSON.parse(execCalls[0].args[payloadArgIndex + 1]);
+    const target = payload.publish_targets[0];
+    assert.deepEqual(target.image_urls, ['https://cdn.example.com/1.png', 'https://cdn.example.com/2.png']);
+    assert.equal(target.image_url, undefined, 'must never send the singular field for a carousel');
+    assert.equal(target.caption, 'Legenda do carrossel');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('GET .../content syncs gaveta-published items so the calendar shows them as published', async () => {
@@ -4183,6 +4365,194 @@ test('POST generate-special-date creates a real content card for the chosen date
         captions.push(content.contentTopic.specialDateLabel);
         return 'Legenda de Black Friday.';
       },
+    },
+  );
+});
+
+test('POST carousels creates a placeholder immediately and the background pipeline fills in the roteiro + real images', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'carrossel-http', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+
+      const generated = await request(server, '/api/projects/carrossel-http/carousels', {
+        method: 'POST',
+        body: JSON.stringify({ briefing: '3 dicas de pizza', slideCount: 3 }),
+      });
+      assert.equal(generated.response.status, 201);
+      assert.equal(generated.body.carousel.slideCount, 3);
+      assert.equal(generated.body.carousel.status, 'generating');
+
+      const carouselId = generated.body.carousel.carouselId;
+      let finalCarousel;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-http/carousels');
+        finalCarousel = body.carousels.find((entry) => entry.carouselId === carouselId);
+        if (finalCarousel?.status === 'ready') break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      assert.equal(finalCarousel.status, 'ready');
+      assert.equal(finalCarousel.format, 'listicle');
+      assert.equal(finalCarousel.slides.length, 3);
+      finalCarousel.slides.forEach((slide) => {
+        assert.equal(slide.image.generating, false);
+        assert.equal(slide.image.url, 'https://cdn.example.com/carrossel.png');
+      });
+    },
+    {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/carrossel.png', mimeType: 'image/png' }),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, index) => ({
+          role: index === 0 ? 'cover' : index === slideCount - 1 ? 'cta' : 'content',
+          slideText: `Slide ${index + 1}`,
+        })),
+      }),
+    },
+  );
+});
+
+test('carousels-delete removes it from the listing, and carousels-regenerate-slide replaces only the target slide', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'carrossel-http-2', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+      const generated = await request(server, '/api/projects/carrossel-http-2/carousels', {
+        method: 'POST',
+        body: JSON.stringify({ briefing: 'teste', slideCount: 2 }),
+      });
+      const carouselId = generated.body.carousel.carouselId;
+
+      let ready;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-http-2/carousels');
+        ready = body.carousels.find((entry) => entry.carouselId === carouselId);
+        if (ready?.status === 'ready') break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      const targetSlideId = ready.slides[0].slideId;
+      const otherSlideId = ready.slides[1].slideId;
+
+      const regenerated = await request(server, `/api/projects/carrossel-http-2/carousels-regenerate-slide/${carouselId}/${targetSlideId}`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      assert.equal(regenerated.response.status, 200);
+
+      let final;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-http-2/carousels');
+        final = body.carousels.find((entry) => entry.carouselId === carouselId);
+        const slide = final.slides.find((s) => s.slideId === targetSlideId);
+        if (slide?.image.url === 'https://cdn.example.com/regen.png' && !slide.image.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      assert.equal(final.slides.find((s) => s.slideId === targetSlideId).image.url, 'https://cdn.example.com/regen.png');
+      assert.equal(final.slides.find((s) => s.slideId === otherSlideId).image.url, 'https://cdn.example.com/original.png');
+
+      const deleted = await request(server, `/api/projects/carrossel-http-2/carousels-delete/${carouselId}`, { method: 'POST' });
+      assert.equal(deleted.response.status, 200);
+      const { body: afterDelete } = await request(server, '/api/projects/carrossel-http-2/carousels');
+      assert.equal(afterDelete.carousels.length, 0);
+    },
+    {
+      // Task 2's regenerate path never sends a `note` — unlike ad creatives,
+      // there's no edit-note UI for a carousel slide in this plan (it's a
+      // plain "regenerate this slide" click). So the original-vs-regenerated
+      // image is distinguished by call order instead: the 2 slides from
+      // `POST carousels` are calls 1-2 (concurrency 2, but both resolve
+      // synchronously here so call order is still deterministic array
+      // order), and the later `carousels-regenerate-slide` call is always
+      // call 3.
+      imageGenerator: (() => {
+        let call = 0;
+        return async () => {
+          call += 1;
+          return {
+            url: call <= 2 ? 'https://cdn.example.com/original.png' : 'https://cdn.example.com/regen.png',
+            mimeType: 'image/png',
+          };
+        };
+      })(),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, index) => ({ role: 'content', slideText: `Slide ${index + 1}` })),
+      }),
+    },
+  );
+});
+
+test('carousel-regenerate-slide on a batch-item carousel regenerates only the target slide', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'carrossel-item-regen', name: 'Boss Pizzaria', handle: '@bosspizzaria', approvalEmail: 'a@example.com' }),
+      });
+
+      await request(server, '/api/projects/carrossel-item-regen/generate', {
+        method: 'POST',
+        body: JSON.stringify({
+          days: 1,
+          startDate: '2026-08-24',
+          formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+          carouselsPerWeek: 7,
+          maxCarouselSlides: 2,
+        }),
+      });
+
+      let item;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-item-regen/content');
+        item = body.content.find((entry) => entry.format === 'carousel');
+        if (item?.slides?.length === 2 && item.slides.every((slide) => !slide.image.generating)) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+
+      const contentId = item.contentId;
+      const targetSlideId = item.slides[0].slideId;
+      const otherSlideId = item.slides[1].slideId;
+
+      const regenerated = await request(server, `/api/projects/carrossel-item-regen/content/${contentId}/carousel-regenerate-slide/${targetSlideId}`, {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      assert.equal(regenerated.response.status, 200);
+
+      let final;
+      for (let i = 0; i < 50; i += 1) {
+        const { body } = await request(server, '/api/projects/carrossel-item-regen/content');
+        final = body.content.find((entry) => entry.contentId === contentId);
+        const slide = final.slides.find((s) => s.slideId === targetSlideId);
+        if (slide?.image.url === 'https://cdn.example.com/regen.png' && !slide.image.generating) break;
+        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+      }
+      assert.equal(final.slides.find((s) => s.slideId === targetSlideId).image.url, 'https://cdn.example.com/regen.png');
+      assert.equal(final.slides.find((s) => s.slideId === otherSlideId).image.url, 'https://cdn.example.com/original.png');
+    },
+    {
+      // Same call-order trick as the standalone-carousel version of this
+      // test above: the 2 slides from the initial /generate are calls 1-2,
+      // the later carousel-regenerate-slide call is always call 3.
+      imageGenerator: (() => {
+        let call = 0;
+        return async () => {
+          call += 1;
+          return {
+            url: call <= 2 ? 'https://cdn.example.com/original.png' : 'https://cdn.example.com/regen.png',
+            mimeType: 'image/png',
+          };
+        };
+      })(),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, index) => ({ role: 'content', slideText: `Slide ${index + 1}` })),
+      }),
     },
   );
 });

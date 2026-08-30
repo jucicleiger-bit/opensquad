@@ -384,6 +384,9 @@ export interface ContentItem {
   usedSegmentProductReference?: boolean;
   createdAt?: string;
   updatedAt?: string;
+  format?: "single" | "carousel";
+  slides?: CarouselSlide[];
+  briefing?: string;
 }
 
 class ApiError extends Error {}
@@ -558,6 +561,11 @@ export interface GenerateContentInput {
   // Optional reviewed/edited planning preview. When present, the backend
   // applies per-card subject/orientation edits to the generated drafts.
   approvedPlan?: PlannedContentSchedule;
+  // 0 (or omitted) = off. Distributed evenly across each week of the range
+  // (see carouselWeekdaysForRange in content-central.js) rather than
+  // front-loaded.
+  carouselsPerWeek?: string;
+  maxCarouselSlides?: string;
 }
 
 export function generateContent(
@@ -748,6 +756,85 @@ export function deleteAdCreative(projectId: string, adCreativeId: string): Promi
   });
 }
 
+// Carrossel avulso — same "separate from organic content" shape as
+// AdCreative: no scheduledDate, no approval, no calendar. 1 carousel holds
+// N independently-regenerable slides instead of 1 image.
+export interface CarouselSlide {
+  slideId: string;
+  order: number;
+  role: "cover" | "content" | "cta";
+  slideText: string;
+  image: {
+    url?: string;
+    previewUrl?: string;
+    generating?: boolean;
+    aspectRatio?: string;
+    dimensions?: { width: number; height: number };
+  };
+  imageGenerationError: string | null;
+}
+
+export interface Carousel {
+  carouselId: string;
+  projectId: string;
+  briefing: string;
+  format: string;
+  slideCount: number;
+  slides: CarouselSlide[];
+  outlineGenerationError: string | null;
+  status: "generating" | "ready";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function listCarousels(projectId: string): Promise<{ carousels: Carousel[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels`);
+}
+
+export interface GenerateCarouselInput {
+  briefing: string;
+  slideCount: number;
+}
+
+export function generateCarousel(
+  projectId: string,
+  input: GenerateCarouselInput,
+): Promise<{ carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function regenerateCarouselSlide(
+  projectId: string,
+  carouselId: string,
+  slideId: string,
+  note?: string,
+): Promise<{ carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-regenerate-slide/${encodeURIComponent(carouselId)}/${encodeURIComponent(slideId)}`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function regenerateCarouselItemSlide(
+  projectId: string,
+  contentId: string,
+  slideId: string,
+  note?: string,
+): Promise<{ item: ContentItem }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/content/${encodeURIComponent(contentId)}/carousel-regenerate-slide/${encodeURIComponent(slideId)}`, {
+    method: "POST",
+    body: JSON.stringify({ note }),
+  });
+}
+
+export function deleteCarousel(projectId: string, carouselId: string): Promise<{ deleted: boolean }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-delete/${encodeURIComponent(carouselId)}`, {
+    method: "POST",
+  });
+}
 
 // For catalog (venda direta) projects: no formats/channels matrix — just
 // how many days, how many stories per day, and when the first one goes out.

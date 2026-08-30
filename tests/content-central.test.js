@@ -8,6 +8,7 @@ import {
   approveContent,
   buildApprovalPayload,
   calculateTokenDaysRemaining,
+  carouselWeekdaysForRange,
   createCentralProject,
   deleteCommercialCatalogItem,
   deleteCommercialProposal,
@@ -30,7 +31,9 @@ import {
   saveCommercialProposal,
   buildSegmentLayoutReferences,
   buildSegmentTemplateContentItem,
+  carouselBriefingFromContentTopic,
   deleteAdCreative,
+  deleteCarousel,
   deleteLearningEntry,
   deleteProjectContent,
   deleteProjectReference,
@@ -39,7 +42,12 @@ import {
   enrichBatchItemsWithRealImages,
   enrichSegmentTemplateItemsForProspect,
   generateAdCreative,
+  generateCarousel,
   listAdCreatives,
+  listCarousels,
+  enqueueCarouselGeneration,
+  regenerateCarouselSlide,
+  enqueueCarouselSlideRegeneration,
   generateCatalogSchedulePlan,
   creativeShapeGroupForChannel,
   generateContentBatch,
@@ -3302,9 +3310,10 @@ test('animateContentForReels attaches a rendered video to the card using the inj
     await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const batch = await generateContentBatch('animar-reels', { days: 1, startDate: '2026-07-20', channel: 'instagram_reels' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'animar-reels');
+    const paths = getCentralPaths(dir, 'animar-reels');
     await enrichBatchItemsWithRealImages(batch, project, 'animar-reels', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/reels.png', mimeType: 'image/png' }),
-    });
+    }, paths);
     const targetContentId = batch.items[0].contentId;
 
     const content = await animateContentForReels('animar-reels', targetContentId, {
@@ -3370,9 +3379,10 @@ test('animateContentForReels rejects an animator that resolves without a usable 
     await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     const batch = await generateContentBatch('animar-vazio', { days: 1, startDate: '2026-07-20', channel: 'instagram_reels' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'animar-vazio');
+    const paths = getCentralPaths(dir, 'animar-vazio');
     await enrichBatchItemsWithRealImages(batch, project, 'animar-vazio', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/reels.png', mimeType: 'image/png' }),
-    });
+    }, paths);
 
     await assert.rejects(
       () => animateContentForReels('animar-vazio', batch.items[0].contentId, {
@@ -3705,12 +3715,13 @@ test('multi-product offers rotate a persisted hero focus and prioritize its matc
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'rodizio-rotativo');
     const calls = [];
+    const paths = getCentralPaths(dir, 'rodizio-rotativo');
     await enrichBatchItemsWithRealImages(batch, project, 'rodizio-rotativo', {
       imageGenerator: async (payload) => {
         calls.push(payload);
         return { url: 'https://cdn.example.com/rodizio.png', mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     const focusedProducts = calls.map((call) => {
       const match = call.content.image.prompt.match(/O foco visual desta peça é ([^.]+)\./i);
@@ -3888,9 +3899,10 @@ test('a project whose ONLY product photo was uploaded offer-scoped (scope: "offe
     const batch = await generateContentBatch('so-foto-de-oferta', { days: 2, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'so-foto-de-oferta');
     const calls = [];
+    const paths = getCentralPaths(dir, 'so-foto-de-oferta');
     await enrichBatchItemsWithRealImages(batch, project, 'so-foto-de-oferta', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/img.png', mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     const productBPayload = calls.find((call) => call.content.contentTopic.offerName === 'Produto B');
     assert.ok(productBPayload, 'expected a generation call for the photo-less offer');
@@ -4181,12 +4193,13 @@ test('a marketing offer with NO photo of its own never borrows a photo already c
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'rei-do-xiaomi-sem-foto');
     const calls = [];
+    const paths = getCentralPaths(dir, 'rei-do-xiaomi-sem-foto');
     await enrichBatchItemsWithRealImages(batch, project, 'rei-do-xiaomi-sem-foto', {
       imageGenerator: async (payload) => {
         calls.push(payload);
         return { url: 'https://cdn.example.com/img.png', mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     const notePayload = calls.find((call) => call.content.contentTopic.offerName === 'Redmi Note 15 8/256GB');
     assert.ok(notePayload, 'expected a generation call for the photo-less offer');
@@ -4517,6 +4530,87 @@ test('generateContentSchedulePlan organizes multiple formats by frequency and in
   });
 });
 
+test('generateContentSchedulePlan clamps carouselsPerWeek to 0-7 and maxCarouselSlides to 2-10', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-clamp-config', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-clamp-config', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 99,
+      maxCarouselSlides: 1,
+    }, dir);
+    assert.equal(batch.carouselsPerWeek, 7);
+    assert.equal(batch.maxCarouselSlides, 2);
+
+    const negative = await generateContentSchedulePlan('carrossel-clamp-config', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: -3,
+      maxCarouselSlides: 999,
+    }, dir);
+    assert.equal(negative.carouselsPerWeek, 0);
+    assert.equal(negative.maxCarouselSlides, 10);
+
+    const defaulted = await generateContentSchedulePlan('carrossel-clamp-config', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+    }, dir);
+    assert.equal(defaulted.carouselsPerWeek, 0);
+    assert.equal(defaulted.maxCarouselSlides, 3);
+  });
+});
+
+test('generateContentSchedulePlan builds carousel-format placeholder items on the quota days, leaving other days single-image', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-calendario', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-calendario', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 2,
+      maxCarouselSlides: 4,
+    }, dir);
+
+    const feedItems = batch.items.filter((item) => item.channel === 'instagram_feed');
+    assert.equal(feedItems.length, 7, 'one Feed item per day regardless of format');
+    const carouselItems = feedItems.filter((item) => item.format === 'carousel');
+    assert.equal(carouselItems.length, 2, 'exactly carouselsPerWeek items became carousels');
+    // carouselWeekdaysForRange(7, 2) = {0, 3} — day 1 and day 4 (1-indexed dayNumber).
+    assert.deepEqual(carouselItems.map((item) => item.dayNumber).sort(), [1, 4]);
+
+    for (const item of carouselItems) {
+      assert.equal(item.image, undefined, 'a carousel item has no top-level image');
+      assert.equal(item.slides.length, 4, 'uses maxCarouselSlides, not the standalone tab\'s own field');
+      assert.equal(item.creativeGroupKey, null, 'a carousel item is never shared with a sibling channel');
+      item.slides.forEach((slide, index) => {
+        assert.equal(slide.order, index + 1);
+        assert.equal(slide.image.generating, true);
+        assert.equal(slide.channel, 'instagram_feed');
+      });
+    }
+
+    const singleItems = feedItems.filter((item) => item.format !== 'carousel');
+    assert.equal(singleItems.length, 5);
+    singleItems.forEach((item) => assert.ok(item.image, 'every non-carousel item keeps its normal single image'));
+  });
+});
+
+test('generateContentSchedulePlan skips the carousel quota entirely when the batch has no instagram_feed format', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-sem-feed', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-sem-feed', {
+      days: 7,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 5,
+    }, dir);
+    assert.ok(batch.items.every((item) => item.format !== 'carousel'));
+  });
+});
+
 test('content offers drive varied schedule topics with exact prices and post types', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -4661,9 +4755,10 @@ test('a plain orientation/institutional offer with no pillar and no explicit CTA
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'conteudo-sem-venda');
 
     const calls = [];
+    const paths = getCentralPaths(dir, 'conteudo-sem-venda');
     await enrichBatchItemsWithRealImages(batch, project, 'conteudo-sem-venda', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: `https://cdn.example.com/${calls.length}.png`, mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     assert.equal(calls.length, 2);
     for (const call of calls) {
@@ -5286,9 +5381,10 @@ test('a paired combo topic carries exactly one photo per offer through to real i
 
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'combo-fotos');
     const calls = [];
+    const paths = getCentralPaths(dir, 'combo-fotos');
     await enrichBatchItemsWithRealImages(batch, project, 'combo-fotos', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/combo.png', mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     assert.equal(calls.length, 1);
     // buildPrimaryAiImageReferences must end up with exactly one product
@@ -5904,9 +6000,10 @@ test('a resolved "convida" pillar drives a real sales CTA, while a non-sales pil
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'cta-pilar');
 
     const calls = [];
+    const paths = getCentralPaths(dir, 'cta-pilar');
     await enrichBatchItemsWithRealImages(batch, project, 'cta-pilar', {
       imageGenerator: async (payload) => { calls.push(payload); return { url: `https://cdn.example.com/${calls.length}.png`, mimeType: 'image/png' }; },
-    });
+    }, paths);
 
     const convidaCall = calls.find((call) => call.content.contentTopic.pillar?.role === 'convida');
     const ensinaCall = calls.find((call) => call.content.contentTopic.pillar?.role === 'ensina');
@@ -6184,10 +6281,11 @@ test('enrichBatchItemsWithRealImages writes real captions in parallel with the i
     const batch = await generateContentBatch('copy-agent-batch', { days: 1, startDate: '2026-07-20' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'copy-agent-batch');
 
+    const paths = getCentralPaths(dir, 'copy-agent-batch');
     await enrichBatchItemsWithRealImages(batch, project, 'copy-agent-batch', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/batch.png', mimeType: 'image/png' }),
       captionGenerator: async () => 'Legenda pronta escrita pelo Agente Redator.',
-    });
+    }, paths);
 
     assert.equal(batch.items[0].image.generatedSource, 'ai');
     assert.equal(batch.items[0].caption.text, 'Legenda pronta escrita pelo Agente Redator.');
@@ -6207,11 +6305,12 @@ test('enrichBatchItemsWithRealImages records an error instead of silently leavin
     const skeletonText = batch.items[0].caption.text;
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'copy-agent-empty');
 
+    const paths = getCentralPaths(dir, 'copy-agent-empty');
     await enrichBatchItemsWithRealImages(batch, project, 'copy-agent-empty', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/batch.png', mimeType: 'image/png' }),
       // Simulates Hermes resolving without throwing but with an empty response.
       captionGenerator: async () => null,
-    });
+    }, paths);
 
     assert.equal(batch.items[0].caption.text, skeletonText);
     assert.notEqual(batch.items[0].caption.generatedSource, 'ai');
@@ -6232,12 +6331,13 @@ test('enrichBatchItemsWithRealImages records an error instead of silently keepin
     const batch = await generateContentBatch('imagem-sem-url', { days: 1, startDate: '2026-07-20' }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'imagem-sem-url');
 
+    const paths = getCentralPaths(dir, 'imagem-sem-url');
     await enrichBatchItemsWithRealImages(batch, project, 'imagem-sem-url', {
       // Resolves without throwing, but with no usable url — used to be
       // silently treated as success (imageGenerationError stayed null)
       // while the card kept its local SVG placeholder forever.
       imageGenerator: async () => ({}),
-    });
+    }, paths);
 
     assert.notEqual(batch.items[0].image.generatedSource, 'ai');
     assert.match(batch.items[0].imageGenerationError, /não retornou uma URL de imagem/);
@@ -6307,6 +6407,7 @@ test('enrichBatchItemsWithRealImages generates one creative per shape group and 
 
     let imageCalls = 0;
     let captionCalls = 0;
+    const paths = getCentralPaths(dir, 'compartilhar-criativo');
     await enrichBatchItemsWithRealImages(batch, project, 'compartilhar-criativo', {
       imageGenerator: async () => {
         imageCalls += 1;
@@ -6316,7 +6417,7 @@ test('enrichBatchItemsWithRealImages generates one creative per shape group and 
         captionCalls += 1;
         return `Legenda gerada ${captionCalls}`;
       },
-    });
+    }, paths);
 
     // Only two AI calls total: one for the Story/Facebook Story group, one for the solo Feed item.
     assert.equal(imageCalls, 2);
@@ -6359,6 +6460,7 @@ test('enrichBatchItemsWithRealImages animates Reels slots automatically once the
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'reels-auto-animar');
 
     let animateCalls = 0;
+    const paths = getCentralPaths(dir, 'reels-auto-animar');
     await enrichBatchItemsWithRealImages(batch, project, 'reels-auto-animar', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/generated.png', mimeType: 'image/png' }),
       captionGenerator: async () => 'Legenda gerada',
@@ -6367,7 +6469,7 @@ test('enrichBatchItemsWithRealImages animates Reels slots automatically once the
         assert.equal(content.channel, 'instagram_reels', 'videoAnimator should only ever be called for the Reels item');
         return { url: 'https://cdn.example.com/generated.mp4', mimeType: 'video/mp4', durationSeconds: 7 };
       },
-    });
+    }, paths);
 
     assert.equal(animateCalls, 1);
     const content = await listProjectContent('reels-auto-animar', dir);
@@ -6401,10 +6503,11 @@ test('enrichBatchItemsWithRealImages records a videoGenerationError instead of f
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'reels-auto-falha');
 
+    const paths = getCentralPaths(dir, 'reels-auto-falha');
     await enrichBatchItemsWithRealImages(batch, project, 'reels-auto-falha', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/generated.png', mimeType: 'image/png' }),
       videoAnimator: async () => { throw new Error('ffmpeg indisponível'); },
-    });
+    }, paths);
 
     const content = await listProjectContent('reels-auto-falha', dir);
     const reels = content[0];
@@ -6441,9 +6544,10 @@ test('regenerating a card picks up a real photo attached to the offer AFTER the 
       channel: 'instagram_feed',
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'foto-anexada-depois');
+    const paths = getCentralPaths(dir, 'foto-anexada-depois');
     await enrichBatchItemsWithRealImages(batch, project, 'foto-anexada-depois', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/generico.png', mimeType: 'image/png' }),
-    });
+    }, paths);
     const beforePhoto = await listProjectContent('foto-anexada-depois', dir);
     assert.doesNotMatch(beforePhoto[0].image.prompt, /Foto selecionada:/);
 
@@ -6500,9 +6604,10 @@ test('a "Pedido de alteração" note asks the image generator for a targeted edi
       channel: 'instagram_feed',
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'pedido-alteracao');
+    const paths = getCentralPaths(dir, 'pedido-alteracao');
     await enrichBatchItemsWithRealImages(batch, project, 'pedido-alteracao', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
-    });
+    }, paths);
     const [before] = await listProjectContent('pedido-alteracao', dir);
 
     const withNoteCalls = [];
@@ -6552,9 +6657,10 @@ test('regenerating one card\'s image individually unlinks it from its shared-cre
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'desvincular-criativo');
 
+    const paths = getCentralPaths(dir, 'desvincular-criativo');
     await enrichBatchItemsWithRealImages(batch, project, 'desvincular-criativo', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/shared.png', mimeType: 'image/png' }),
-    });
+    }, paths);
 
     const before = await listProjectContent('desvincular-criativo', dir);
     const story = before.find((item) => item.channel === 'instagram_story');
@@ -6600,10 +6706,11 @@ test('regenerateContentGroup regenerates a shared creative once and copies it to
     }, dir);
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'regenerar-grupo');
 
+    const paths = getCentralPaths(dir, 'regenerar-grupo');
     await enrichBatchItemsWithRealImages(batch, project, 'regenerar-grupo', {
       imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
       captionGenerator: async () => 'Legenda original.',
-    });
+    }, paths);
 
     const before = await listProjectContent('regenerar-grupo', dir);
     const groupIds = before.map((item) => item.contentId);
@@ -7287,6 +7394,65 @@ test('reconcileInterruptedGenerations clears a card stuck "generating" from a pr
   });
 });
 
+test('reconcileInterruptedGenerations also clears a stuck carousel slide, and one broken project directory does not block reconciling the rest', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-travado', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-travado', { briefing: 'teste', slideCount: 2 }, dir);
+
+    // Simulates the exact scenario this fixes: the server got killed
+    // (process manager restart, a forced kill during a deploy) while a
+    // slide's real image generation was mid-flight. Slide 1 already
+    // finished fine (generateCarousel's own skeleton defaults every slide
+    // to generating:true — flip it here so only slide 0 looks stuck).
+    const raw = JSON.parse(await readFile(carousel.filePath, 'utf-8'));
+    raw.slides[0].image.generating = true;
+    raw.slides[1].image.generating = false;
+    await writeFile(carousel.filePath, JSON.stringify(raw, null, 2), 'utf-8');
+
+    // A leftover/incomplete project directory (no project.json) — used to
+    // throw inside the reconcile loop and silently abort reconciliation for
+    // every project after it.
+    await mkdir(join(dir, '_opensquad', 'content-central', 'projects', 'projeto-quebrado'), { recursive: true });
+
+    const fixed = await reconcileInterruptedGenerations(dir);
+    const carouselFix = fixed.find((entry) => entry.carouselId === carousel.carouselId);
+    assert.ok(carouselFix, 'the stuck carousel must still be reconciled despite the broken project directory');
+
+    const reloaded = JSON.parse(await readFile(carousel.filePath, 'utf-8'));
+    assert.equal(reloaded.slides[0].image.generating, false);
+    assert.match(reloaded.slides[0].imageGenerationError, /servidor foi reiniciado/);
+    assert.equal(reloaded.slides[1].image.generating, false, 'the already-finished slide must be left as-is');
+    assert.equal(reloaded.slides[1].imageGenerationError, null, 'and must not get an error it never had');
+  });
+});
+
+test('reconcileInterruptedGenerations also clears a stuck slide inside a batch-item (calendar) carousel', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-calendario-travado', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-calendario-travado', {
+      days: 1,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 7,
+      maxCarouselSlides: 2,
+    }, dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    const raw = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    raw.slides[0].image.generating = true;
+    raw.slides[1].image.generating = false;
+    await writeFile(carouselItem.filePath, JSON.stringify(raw, null, 2), 'utf-8');
+
+    const fixed = await reconcileInterruptedGenerations(dir);
+    assert.ok(fixed.some((entry) => entry.contentId === carouselItem.contentId));
+
+    const reloaded = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(reloaded.slides[0].image.generating, false);
+    assert.match(reloaded.slides[0].imageGenerationError, /servidor foi reiniciado/);
+    assert.equal(reloaded.status, 'draft_generated', 'a batch item\'s own status field must never be touched by this reconcile — only image.generating and slide-level errors');
+  });
+});
+
 test('listCentralProjects returns safe project summaries without secrets', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -7612,12 +7778,13 @@ test('an institutional special-date post (no offer linked) gets a warm, celebrat
 
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-sem-oferta');
     const generatorCalls = [];
+    const paths = getCentralPaths(dir, 'data-sem-oferta');
     await enrichBatchItemsWithRealImages(batch, project, 'data-sem-oferta', {
       imageGenerator: async (payload) => {
         generatorCalls.push(payload);
         return { url: 'https://cdn.example.com/dia-dos-pais.png', mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     assert.equal(generatorCalls.length, 1);
     const prompt = generatorCalls[0].content.image.prompt;
@@ -7704,12 +7871,13 @@ test('generateSpecialDateContent shares one creative across same-shape channels 
 
     const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-varios-formatos');
     let imageCalls = 0;
+    const paths = getCentralPaths(dir, 'data-varios-formatos');
     await enrichBatchItemsWithRealImages(batch, project, 'data-varios-formatos', {
       imageGenerator: async () => {
         imageCalls += 1;
         return { url: `https://cdn.example.com/dia-dos-pais-${imageCalls}.png`, mimeType: 'image/png' };
       },
-    });
+    }, paths);
 
     // One AI generation for the vertical group (Story/Reels/Facebook Story),
     // one for the feed group (Feed/Facebook Feed) — 2 total, not 5.
@@ -7858,6 +8026,70 @@ test('listAdCreatives returns an empty list for a project that never generated a
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'anuncio-vazio', name: 'Boss Pizzaria' }, dir);
     assert.deepEqual(await listAdCreatives('anuncio-vazio', dir), []);
+  });
+});
+
+test('generateCarousel creates a placeholder carousel with N generating slides, no image/roteiro yet', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-base', name: 'Boss Pizzaria' }, dir);
+
+    const carousel = await generateCarousel('carrossel-base', { briefing: '5 dicas de pizza', slideCount: 5 }, dir);
+
+    assert.equal(carousel.slideCount, 5);
+    assert.equal(carousel.slides.length, 5);
+    assert.equal(carousel.status, 'generating');
+    assert.equal(carousel.format, '');
+    assert.equal(carousel.outlineGenerationError, null);
+    carousel.slides.forEach((slide, index) => {
+      assert.equal(slide.order, index + 1);
+      assert.equal(slide.channel, 'instagram_feed');
+      assert.equal(slide.image.generating, true);
+      assert.deepEqual(slide.image.dimensions, { width: 1080, height: 1350 });
+      assert.equal(slide.contentTopic, null);
+      assert.equal(slide.slideText, '');
+    });
+  });
+});
+
+test('generateCarousel clamps slideCount to the 2-10 range and requires a briefing', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-clamp', name: 'Boss Pizzaria' }, dir);
+
+    const tooFew = await generateCarousel('carrossel-clamp', { briefing: 'teste', slideCount: 1 }, dir);
+    assert.equal(tooFew.slideCount, 2);
+
+    const tooMany = await generateCarousel('carrossel-clamp', { briefing: 'teste', slideCount: 99 }, dir);
+    assert.equal(tooMany.slideCount, 10);
+
+    await assert.rejects(
+      () => generateCarousel('carrossel-clamp', { briefing: '   ' }, dir),
+      /briefing/i,
+    );
+  });
+});
+
+test('listCarousels and deleteCarousel round-trip real files on disk', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-lista', name: 'Boss Pizzaria' }, dir);
+    const a = await generateCarousel('carrossel-lista', { briefing: 'briefing A', slideCount: 3 }, dir);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const b = await generateCarousel('carrossel-lista', { briefing: 'briefing B', slideCount: 4 }, dir);
+
+    const listed = await listCarousels('carrossel-lista', dir);
+    assert.equal(listed.length, 2);
+    assert.equal(listed[0].carouselId, b.carouselId, 'newest first');
+
+    await deleteCarousel('carrossel-lista', a.carouselId, dir);
+    const afterDelete = await listCarousels('carrossel-lista', dir);
+    assert.equal(afterDelete.length, 1);
+    assert.equal(afterDelete[0].carouselId, b.carouselId);
+  });
+});
+
+test('listCarousels returns an empty list for a project that never generated a carousel', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-vazio', name: 'Boss Pizzaria' }, dir);
+    assert.deepEqual(await listCarousels('carrossel-vazio', dir), []);
   });
 });
 
@@ -8345,4 +8577,378 @@ test('listCentralProjects (a read path) does not throw on an already-stored, unb
     assert.ok(found);
     assert.deepEqual(found.brandInput.contentGoalWeights, { authority: 90, engagement: 5 });
   });
+});
+
+test('enqueueCarouselGeneration fills the roteiro and generates a real image per slide, isolating one slide\'s failure from the rest', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-full', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-full', { briefing: '3 dicas de pizza', slideCount: 3 }, dir);
+
+    let imageCall = 0;
+    enqueueCarouselGeneration('carrossel-full', carousel, {
+      outlineGenerator: async ({ briefing, slideCount }) => {
+        assert.equal(briefing, '3 dicas de pizza');
+        assert.equal(slideCount, 3);
+        return {
+          format: 'listicle',
+          slides: [
+            { role: 'cover', slideText: '3 dicas de pizza' },
+            { role: 'content', slideText: 'Dica 1: use forno bem quente' },
+            { role: 'cta', slideText: 'Salve esse post' },
+          ],
+        };
+      },
+      imageGenerator: async (payload) => {
+        imageCall += 1;
+        if (payload.content.contentTopic.objective.includes('Dica 1')) {
+          throw new Error('provider timeout');
+        }
+        return { url: `https://cdn.example.com/slide-${imageCall}.png`, mimeType: 'image/png' };
+      },
+    }, dir);
+
+    // Fire-and-forget — poll disk for the background pipeline to finish.
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-full', dir)).find((entry) => entry.carouselId === carousel.carouselId);
+      if (reloaded?.status === 'ready') break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(reloaded.status, 'ready');
+    assert.equal(reloaded.format, 'listicle');
+    assert.equal(reloaded.slides[0].slideText, '3 dicas de pizza');
+    assert.equal(reloaded.slides[0].role, 'cover');
+    assert.equal(reloaded.slides[0].image.url, 'https://cdn.example.com/slide-1.png');
+    assert.equal(reloaded.slides[0].imageGenerationError, null);
+    assert.match(reloaded.slides[1].imageGenerationError, /provider timeout/);
+    assert.equal(reloaded.slides[2].image.url, `https://cdn.example.com/slide-${imageCall}.png`);
+    assert.equal(reloaded.slides[2].imageGenerationError, null);
+    reloaded.slides.forEach((slide) => assert.equal(slide.image.generating, false));
+  });
+});
+
+test('enqueueCarouselGeneration records outlineGenerationError and marks every slide errored when the outline is invalid', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-roteiro-falho', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-roteiro-falho', { briefing: 'teste', slideCount: 2 }, dir);
+
+    enqueueCarouselGeneration('carrossel-roteiro-falho', carousel, {
+      outlineGenerator: async () => null,
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir);
+
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-roteiro-falho', dir)).find((entry) => entry.carouselId === carousel.carouselId);
+      if (reloaded?.status === 'ready') break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(reloaded.status, 'ready');
+    assert.match(reloaded.outlineGenerationError, /roteiro/i);
+    reloaded.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.imageGenerationError, reloaded.outlineGenerationError);
+    });
+  });
+});
+
+test('carouselBriefingFromContentTopic turns a regular contentTopic into a free-text briefing', () => {
+  assert.match(
+    carouselBriefingFromContentTopic({ offerName: 'Pizza Família', objective: 'Vender mais no fim de semana', items: 'Borda recheada, refri grátis' }),
+    /Pizza Família/,
+  );
+  assert.match(
+    carouselBriefingFromContentTopic({ offerName: 'Pizza Família', objective: 'Vender mais no fim de semana', items: 'Borda recheada, refri grátis' }),
+    /Vender mais no fim de semana/,
+  );
+  // A goal-driven topic (no offerName) still produces something usable —
+  // falls back to label/objective only, never throws on a missing field.
+  assert.doesNotThrow(() => carouselBriefingFromContentTopic({ label: 'Autoridade', objective: 'Mostrar bastidores' }));
+});
+
+test('runCarouselGeneration/enqueueCarouselGeneration accept a briefing/slideCount override and a markReady override instead of reading carousel.briefing/status directly', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-override', name: 'Boss Pizzaria' }, dir);
+    // Deliberately built without generateCarousel — simulates a batch-item
+    // shaped object that has no .briefing field and a foreign .status value
+    // the carousel engine must never overwrite.
+    const paths = getCentralPaths(dir, 'carrossel-override');
+    const filePath = join(paths.draftsDir, 'fake-batch-item.json');
+    await mkdir(paths.draftsDir, { recursive: true });
+    const fakeItem = {
+      contentId: 'fake-1',
+      status: 'draft_generated',
+      slideCount: 2,
+      slides: [
+        { slideId: 's1', order: 1, role: 'content', slideText: '', contentTopic: null, image: { generating: true, references: [] }, imageGenerationError: null },
+        { slideId: 's2', order: 2, role: 'content', slideText: '', contentTopic: null, image: { generating: true, references: [] }, imageGenerationError: null },
+      ],
+      outlineGenerationError: null,
+      filePath,
+    };
+    await writeFile(filePath, JSON.stringify(fakeItem, null, 2), 'utf-8');
+
+    let receivedBriefing;
+    await new Promise((resolveDone) => {
+      enqueueCarouselGeneration('carrossel-override', fakeItem, {
+        outlineGenerator: async ({ briefing, slideCount }) => {
+          receivedBriefing = briefing;
+          return { format: 'listicle', slides: Array.from({ length: slideCount }, (_, i) => ({ role: 'content', slideText: `Slide ${i + 1}` })) };
+        },
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      }, dir, {
+        briefing: 'briefing sintetizado do contentTopic',
+        slideCount: 2,
+        markReady: () => {}, // no-op — a batch item's own .status must be left alone
+      });
+      setTimeout(resolveDone, 300);
+    });
+
+    assert.equal(receivedBriefing, 'briefing sintetizado do contentTopic');
+    const reloaded = JSON.parse(await readFile(filePath, 'utf-8'));
+    assert.equal(reloaded.status, 'draft_generated', 'markReady override must prevent the engine from touching .status');
+    assert.equal(reloaded.slides[0].image.url, 'https://cdn.example.com/x.png');
+  });
+});
+
+test('enrichBatchItemsWithRealImages fills in the roteiro and real per-slide images for a carousel-format item, leaving single-image items untouched', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-enrich', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-enrich', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-enrich');
+    const project = await loadProjectForTest('carrossel-enrich', dir);
+
+    await enrichBatchItemsWithRealImages(batch, project, 'carrossel-enrich', {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, i) => ({ role: i === 0 ? 'cover' : 'cta', slideText: `Slide ${i + 1}` })),
+      }),
+    }, paths);
+
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+    const singleItem = batch.items.find((item) => item.format !== 'carousel');
+
+    const reloadedCarousel = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(reloadedCarousel.status, 'draft_generated', 'must not be overwritten by the carousel engine\'s own ready/generating status field');
+    reloadedCarousel.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.image.url, 'https://cdn.example.com/x.png');
+    });
+
+    const reloadedSingle = JSON.parse(await readFile(singleItem.filePath, 'utf-8'));
+    assert.equal(reloadedSingle.image.generating, false);
+    assert.ok(reloadedSingle.image.url || reloadedSingle.image.previewDataUrl);
+  });
+});
+
+test('a batch-item carousel keeps format:"carousel" on disk DURING generation, parking the roteiro style in carouselFormat', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-format-vivo', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-format-vivo', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-format-vivo');
+    const project = await loadProjectForTest('carrossel-format-vivo', dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    // Blocks every image call until we release it, so the assertion below
+    // runs strictly after the roteiro step and before any slide finishes —
+    // exactly the multi-minute window a crash could land in.
+    let releaseImages;
+    const imagesHeld = new Promise((resolveHold) => { releaseImages = resolveHold; });
+    let firstImageCallSeen;
+    const firstImageCall = new Promise((resolveSeen) => { firstImageCallSeen = resolveSeen; });
+
+    const work = enrichBatchItemsWithRealImages(batch, project, 'carrossel-format-vivo', {
+      imageGenerator: async () => {
+        firstImageCallSeen();
+        await imagesHeld;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+      carouselOutlineGenerator: async ({ slideCount }) => ({
+        format: 'listicle',
+        slides: Array.from({ length: slideCount }, (_, i) => ({ role: i === 0 ? 'cover' : 'cta', slideText: `Slide ${i + 1}` })),
+      }),
+    }, paths);
+
+    await firstImageCall;
+    const midFlight = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(midFlight.format, 'carousel', 'format must never be clobbered to the roteiro style, or reconcileInterruptedGenerations cannot see this item after a crash');
+    assert.equal(midFlight.carouselFormat, 'listicle', 'the roteiro style belongs in carouselFormat, and it must already be there mid-flight');
+    assert.ok(midFlight.slides.some((slide) => slide.image.generating), 'sanity: generation really is still in flight at this point');
+
+    releaseImages();
+    await work;
+
+    const done = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(done.format, 'carousel');
+    assert.equal(done.carouselFormat, 'listicle');
+  });
+});
+
+test('a standalone carousel still stores the roteiro style in its own .format field, unchanged by the batch-item setFormat override', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-format-avulso', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-format-avulso', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselGeneration('carrossel-format-avulso', carousel, {
+      outlineGenerator: async () => ({
+        format: 'listicle',
+        slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
+      }),
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir);
+
+    // Fire-and-forget — poll disk for the background pipeline to finish
+    // instead of a fixed wait, same pattern the rest of this file already
+    // uses (a fixed setTimeout here was flaky under a loaded machine).
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-format-avulso', dir))[0];
+      if (reloaded?.status === 'ready') break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(reloaded.format, 'listicle', 'a real Carousel object\'s .format IS the roteiro style — the default setFormat must keep behaving exactly as before');
+    assert.equal(reloaded.status, 'ready');
+  });
+});
+
+test('enrichBatchItemsWithRealImages does not leave a carousel\'s slides stuck generating when no AI image generator is configured', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-sem-ia', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-sem-ia', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-sem-ia');
+    const project = await loadProjectForTest('carrossel-sem-ia', dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    // enableAiImages:false — the server's default. Nothing else will ever
+    // flip the slides' generating flag, so this call has to.
+    await enrichBatchItemsWithRealImages(batch, project, 'carrossel-sem-ia', {}, paths);
+
+    const reloaded = JSON.parse(await readFile(carouselItem.filePath, 'utf-8'));
+    assert.equal(reloaded.format, 'carousel');
+    reloaded.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false, 'a generation that never started must not look interrupted');
+      assert.match(slide.imageGenerationError, /IA/);
+    });
+
+    // And reconcile must therefore have nothing to fix — no misleading
+    // "o servidor foi reiniciado" for a run that never started.
+    const fixed = await reconcileInterruptedGenerations(dir);
+    assert.equal(fixed.length, 0);
+  });
+});
+
+test('buildApprovalPayload does not throw on a carousel-format item (no top-level image)', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'carrossel-aprovacao',
+      name: 'Boss Pizzaria',
+      handle: '@bosspizzaria',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-aprovacao', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const carouselItem = batch.items.find((item) => item.format === 'carousel');
+
+    const payload = await buildApprovalPayload('carrossel-aprovacao', carouselItem.contentId, dir, batch.batchId);
+
+    assert.equal(payload.contentId, carouselItem.contentId);
+    assert.equal(payload.creative.imageLocalPath, null);
+    assert.equal(payload.creative.imagePrompt, '');
+    assert.ok(payload.creative.caption);
+    await stat(payload.files.json);
+  });
+});
+
+test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only the target slide\'s image', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-regen', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-regen', { briefing: 'teste', slideCount: 2 }, dir);
+    await new Promise((resolveDone) => {
+      enqueueCarouselGeneration('carrossel-regen', carousel, {
+        outlineGenerator: async () => ({
+          format: 'listicle',
+          slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
+        }),
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
+      }, dir);
+      setTimeout(resolveDone, 200);
+    });
+
+    const before = (await listCarousels('carrossel-regen', dir))[0];
+    const targetSlideId = before.slides[0].slideId;
+
+    const refreshed = await regenerateCarouselSlide('carrossel-regen', before.carouselId, targetSlideId, dir);
+    assert.equal(refreshed.slides.find((s) => s.slideId === targetSlideId).image.url, 'https://cdn.example.com/original.png', 'regenerateCarouselSlide only refreshes references, image unchanged until enqueue runs');
+
+    enqueueCarouselSlideRegeneration('carrossel-regen', before.carouselId, targetSlideId, {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/regenerated.png', mimeType: 'image/png' }),
+    }, dir);
+
+    let reloaded;
+    for (let i = 0; i < 50; i += 1) {
+      reloaded = (await listCarousels('carrossel-regen', dir))[0];
+      const slide = reloaded.slides.find((s) => s.slideId === targetSlideId);
+      if (slide?.image.url === 'https://cdn.example.com/regenerated.png' && !slide.image.generating) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    const changedSlide = reloaded.slides.find((s) => s.slideId === targetSlideId);
+    const untouchedSlide = reloaded.slides.find((s) => s.slideId !== targetSlideId);
+    assert.equal(changedSlide.image.url, 'https://cdn.example.com/regenerated.png');
+    assert.equal(untouchedSlide.image.url, 'https://cdn.example.com/original.png', 'the other slide must be untouched');
+  });
+});
+
+test('carouselWeekdaysForRange distributes evenly within each 7-day window using a fixed step', () => {
+  assert.deepEqual(carouselWeekdaysForRange(7, 0), new Set());
+  assert.deepEqual(carouselWeekdaysForRange(7, 1), new Set([0]));
+  assert.deepEqual(carouselWeekdaysForRange(7, 2), new Set([0, 3]));
+  assert.deepEqual(carouselWeekdaysForRange(7, 3), new Set([0, 2, 4]));
+  assert.deepEqual(carouselWeekdaysForRange(7, 7), new Set([0, 1, 2, 3, 4, 5, 6]));
+});
+
+test('carouselWeekdaysForRange repeats the same weekly pattern across multiple full weeks', () => {
+  const result = carouselWeekdaysForRange(14, 2);
+  assert.deepEqual(result, new Set([0, 3, 7, 10]));
+});
+
+test('carouselWeekdaysForRange scales the quota down proportionally for a partial trailing week, never past the last day', () => {
+  // 10 days = 1 full week (quota 2 -> days 0,3) + a 3-day partial week
+  // (quota round(2*3/7)=1 -> day 7 only, the partial week's own day 0).
+  const result = carouselWeekdaysForRange(10, 2);
+  assert.deepEqual(result, new Set([0, 3, 7]));
+  result.forEach((dayIndex) => assert.ok(dayIndex < 10, `${dayIndex} must be within the 10-day range`));
+});
+
+test('carouselWeekdaysForRange returns an empty set for a range shorter than a week with a rounded-down-to-zero quota', () => {
+  // round(1*2/7) = round(0.57) = 1, so this actually gets 1 day — verifying
+  // the rounding direction explicitly rather than assuming it.
+  const result = carouselWeekdaysForRange(2, 1);
+  assert.deepEqual(result, new Set([0]));
 });
