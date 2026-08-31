@@ -169,7 +169,8 @@ export function References() {
     if (!confirm("Apagar esta referência?")) return;
     const ok = await persist(removeById(references, reference.id));
     if (ok && reference.storagePath) {
-      await supabase.storage.from("content-media").remove([reference.storagePath]);
+      const { error: removeError } = await supabase.storage.from("content-media").remove([reference.storagePath]);
+      if (removeError) setError(removeError.message);
     }
   }
 
