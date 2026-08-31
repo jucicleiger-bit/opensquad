@@ -1,10 +1,10 @@
 -- supabase/migrations/0002_publish_backend.sql
 
-alter table projects add column instagram_account jsonb not null default '{}'::jsonb;
-alter table projects add column instagram_token_secret_id uuid;
-alter table projects add column instagram_token_expires_at timestamptz;
+alter table projects add column if not exists instagram_account jsonb not null default '{}'::jsonb;
+alter table projects add column if not exists instagram_token_secret_id uuid;
+alter table projects add column if not exists instagram_token_expires_at timestamptz;
 
-create table alert_notifications (
+create table if not exists alert_notifications (
   key text primary key,
   last_sent_at timestamptz not null
 );
@@ -41,6 +41,10 @@ begin
 end;
 $$;
 revoke execute on function set_instagram_token(uuid, text, timestamptz) from public, anon, authenticated;
+-- Make the service_role grant explicit rather than relying on Supabase's
+-- bootstrap default privileges holding on this specific project — if that
+-- assumption doesn't hold, every publish silently errors.
+grant execute on function set_instagram_token(uuid, text, timestamptz) to service_role;
 
 -- Reads back the decrypted token for the publish-sweep Edge Function.
 -- Same SECURITY DEFINER + revoked-grant pattern — nothing but the
@@ -62,3 +66,12 @@ begin
 end;
 $$;
 revoke execute on function get_instagram_token(uuid) from public, anon, authenticated;
+grant execute on function get_instagram_token(uuid) to service_role;
+
+-- Rollback (manual, run by hand if needed — not auto-executed):
+-- drop function if exists get_instagram_token(uuid);
+-- drop function if exists set_instagram_token(uuid, text, timestamptz);
+-- drop table if exists alert_notifications;
+-- alter table projects drop column if exists instagram_token_expires_at;
+-- alter table projects drop column if exists instagram_token_secret_id;
+-- alter table projects drop column if exists instagram_account;
