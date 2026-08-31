@@ -1,6 +1,7 @@
 import { Routes, Route } from "react-router-dom";
 import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
+import { Approval } from "@/pages/Approval";
 import { RequireAuth } from "@/components/RequireAuth";
 
 export function App() {
@@ -12,6 +13,14 @@ export function App() {
         element={
           <RequireAuth>
             <Dashboard />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects/:projectId/aprovacao"
+        element={
+          <RequireAuth>
+            <Approval />
           </RequireAuth>
         }
       />
