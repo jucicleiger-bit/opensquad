@@ -3,6 +3,7 @@ import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Approval } from "@/pages/Approval";
 import { CalendarPage } from "@/pages/Calendar";
+import { Company } from "@/pages/Company";
 import { Account } from "@/pages/Account";
 import { RequireAuth } from "@/components/RequireAuth";
 
@@ -39,6 +40,14 @@ export function App() {
         element={
           <RequireAuth>
             <CalendarPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects/:projectId/empresa"
+        element={
+          <RequireAuth>
+            <Company />
           </RequireAuth>
         }
       />

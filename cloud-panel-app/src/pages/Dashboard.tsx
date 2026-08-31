@@ -39,6 +39,7 @@ export function Dashboard() {
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <Link to={`/projects/${project.id}/aprovacao`}>Aprovação</Link>
             <Link to={`/projects/${project.id}/calendario`}>Calendário</Link>
+            <Link to={`/projects/${project.id}/empresa`}>Empresa</Link>
           </div>
         </div>
       ))}
