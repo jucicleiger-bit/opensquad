@@ -40,6 +40,7 @@ export function Dashboard() {
             <Link to={`/projects/${project.id}/aprovacao`}>Aprovação</Link>
             <Link to={`/projects/${project.id}/calendario`}>Calendário</Link>
             <Link to={`/projects/${project.id}/empresa`}>Empresa</Link>
+            <Link to={`/projects/${project.id}/ofertas`}>Ofertas e Pilares</Link>
           </div>
         </div>
       ))}
