@@ -95,6 +95,7 @@ function fakeClientWithStorage() {
               single: async () => ({ data: { id: `project-uuid-for-${value}` }, error: null }),
             }),
           }),
+          update: (_patch) => ({ eq: async () => ({ error: null }) }),
         };
       }
       if (table === 'content_items') {
@@ -203,7 +204,7 @@ test('migrateContentForProject skips items with missing contentId and records er
   await rm(targetDir, { recursive: true, force: true });
 });
 
-import { runMigration } from '../src/migrate-to-supabase.js';
+import { runMigration, migrateCompanyBrandData } from '../src/migrate-to-supabase.js';
 
 test('runMigration is idempotent — running twice does not duplicate rows', async () => {
   const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-full-'));
@@ -222,5 +223,61 @@ test('runMigration is idempotent — running twice does not duplicate rows', asy
   // option is what guarantees no duplicate rows server-side.
   assert.equal(client.upserts.projects.length, 2);
 
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+function fakeClientForCompanyBrand() {
+  const updates = [];
+  return {
+    updates,
+    from(table) {
+      if (table !== 'projects') throw new Error(`fakeClientForCompanyBrand: unhandled table ${table}`);
+      return {
+        update: (patch) => ({
+          eq: async (_col, value) => {
+            updates.push({ slug: value, patch });
+            return { error: null };
+          },
+        }),
+      };
+    },
+  };
+}
+
+test('migrateCompanyBrandData normalizes and writes companyProfile/brandXray/brandBriefing by slug', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-brand-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    join(projectDir, 'project.json'),
+    JSON.stringify({
+      companyProfile: { segment: 'Pizzaria', audience: 'Famílias' },
+      brandXray: { status: 'approved', blocks: { summary: { text: 'Marca calorosa' } } },
+      brandBriefing: {},
+    }),
+  );
+
+  const client = fakeClientForCompanyBrand();
+  const result = await migrateCompanyBrandData(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.updates.length, 1);
+  assert.equal(client.updates[0].slug, 'acme-pizza');
+  assert.equal(client.updates[0].patch.company_profile.segment, 'Pizzaria');
+  assert.equal(client.updates[0].patch.company_profile.audience, 'Famílias');
+  assert.equal(client.updates[0].patch.brand_xray.status, 'approved');
+  assert.equal(client.updates[0].patch.brand_xray.blocks.summary.text, 'Marca calorosa');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateCompanyBrandData records an error when project.json is missing', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-brand-missing-'));
+  const client = fakeClientForCompanyBrand();
+  const result = await migrateCompanyBrandData(targetDir, 'no-such-project', client);
+  assert.equal(result.migrated, 0);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].slug, 'no-such-project');
   await rm(targetDir, { recursive: true, force: true });
 });

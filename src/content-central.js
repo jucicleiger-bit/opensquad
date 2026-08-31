@@ -7679,7 +7679,7 @@ function normalizeProjectOffers(offers) {
     : [];
 }
 
-function normalizeCompanyProfile(input = {}) {
+export function normalizeCompanyProfile(input = {}) {
   return {
     segmentGroup: cleanText(input?.segmentGroup),
     segmentCategory: cleanText(input?.segmentCategory),
@@ -7982,7 +7982,7 @@ function normalizeBrandIdentity(input = {}) {
   };
 }
 
-function normalizeBrandXray(input = {}) {
+export function normalizeBrandXray(input = {}) {
   const rawBlocks = input?.blocks || {};
   const blocks = {};
   for (const [id, label] of BRAND_XRAY_BLOCKS) {
@@ -8338,7 +8338,7 @@ function buildConsolidatedXrayVisualDirection(project, xrayInput = {}) {
   ].filter(Boolean).join(' ');
 }
 
-function normalizeBrandBriefing(input = {}) {
+export function normalizeBrandBriefing(input = {}) {
   const blocks = {};
   const rawBlocks = input?.blocks || {};
   for (const [id, label] of BRAND_BRIEFING_BLOCKS) {

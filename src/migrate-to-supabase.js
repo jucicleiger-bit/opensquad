@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import sharp from 'sharp';
-import { getCentralPaths } from './content-central.js';
+import { getCentralPaths, normalizeCompanyProfile, normalizeBrandXray, normalizeBrandBriefing } from './content-central.js';
 import { createSupabaseAdminClient } from './supabase-client.js';
 
 async function readJsonIfExists(path) {
@@ -189,6 +189,32 @@ export async function migrateContentForProject(targetDir, slug, client) {
   return result;
 }
 
+export async function migrateCompanyBrandData(targetDir, slug, client) {
+  const result = { migrated: 0, errors: [] };
+  const { projectsDir } = getCentralPaths(targetDir);
+  const project = await readJsonIfExists(join(projectsDir, slug, 'project.json'));
+  if (!project) {
+    result.errors.push({ slug, error: 'project.json not found' });
+    return result;
+  }
+
+  const { error } = await client
+    .from('projects')
+    .update({
+      company_profile: normalizeCompanyProfile(project.companyProfile),
+      brand_xray: normalizeBrandXray(project.brandXray),
+      brand_briefing: normalizeBrandBriefing(project.brandBriefing),
+    })
+    .eq('slug', slug);
+  if (error) {
+    result.errors.push({ slug, error: error.message || String(error) });
+    return result;
+  }
+
+  result.migrated += 1;
+  return result;
+}
+
 export async function runMigration(targetDir, client) {
   const projects = await migrateProjects(targetDir, client);
   const { projectsDir } = getCentralPaths(targetDir);
@@ -202,13 +228,18 @@ export async function runMigration(targetDir, client) {
   }
 
   const content = { migrated: 0, errors: [] };
+  const companyBrand = { migrated: 0, errors: [] };
   for (const slug of slugs) {
     const perProject = await migrateContentForProject(targetDir, slug, client);
     content.migrated += perProject.migrated;
     content.errors.push(...perProject.errors);
+
+    const perProjectBrand = await migrateCompanyBrandData(targetDir, slug, client);
+    companyBrand.migrated += perProjectBrand.migrated;
+    companyBrand.errors.push(...perProjectBrand.errors);
   }
 
-  return { projects, content };
+  return { projects, content, companyBrand };
 }
 
 async function main() {
@@ -216,8 +247,10 @@ async function main() {
   const result = await runMigration(process.cwd(), client);
   console.log(`Projects migrated: ${result.projects.migrated} (${result.projects.errors.length} errors)`);
   console.log(`Content items migrated: ${result.content.migrated} (${result.content.errors.length} errors)`);
-  if (result.projects.errors.length || result.content.errors.length) {
-    console.error('Errors:', JSON.stringify([...result.projects.errors, ...result.content.errors], null, 2));
+  console.log(`Company/brand data migrated: ${result.companyBrand.migrated} (${result.companyBrand.errors.length} errors)`);
+  const allErrors = [...result.projects.errors, ...result.content.errors, ...result.companyBrand.errors];
+  if (allErrors.length) {
+    console.error('Errors:', JSON.stringify(allErrors, null, 2));
     process.exitCode = 1;
   }
 }
