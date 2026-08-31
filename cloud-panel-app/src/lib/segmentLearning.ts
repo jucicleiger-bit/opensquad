@@ -16,6 +16,11 @@ export type SegmentLevel = (typeof SEGMENT_LEVELS)[number];
 // Each kept segment is tagged with the field it came from (group:/
 // category:/specialty:) — two projects only share a node when they have
 // the IDENTICAL set of populated fields with identical values.
+// Note the positional quirk this feeds into segmentNodeLabelFromFields:
+// callers assign SEGMENT_LEVELS[index] to each returned path by its
+// POSITION in this array, not by which real field it came from — so when
+// group is missing, the first returned path (built from category) still
+// gets level "setor", not "nicho". See segmentNodeLabelFromFields below.
 export function segmentNodePathsFromFields(group: string, category: string, specialty: string): string[] {
   const g = group.trim();
   const c = category.trim();

@@ -66,7 +66,7 @@ export function SegmentLearning() {
       setRowId(null);
     } else {
       const raw = learning.segment_learnings as { nodes?: unknown } | null;
-      setStore({ nodes: raw && typeof raw.nodes === "object" && raw.nodes !== null ? (raw.nodes as SegmentLearningStore["nodes"]) : {} });
+      setStore({ nodes: raw && typeof raw === "object" && raw.nodes && typeof raw.nodes === "object" ? (raw.nodes as SegmentLearningStore["nodes"]) : {} });
       setRowId(learning.id);
     }
     setLoaded(true);
@@ -136,7 +136,8 @@ export function SegmentLearning() {
     if (!node) return;
     const ok = await persist({ nodes: { ...store.nodes, [path]: { ...node, entries: removeById(node.entries, entry.id) } } });
     if (ok && entry.storagePath) {
-      await supabase.storage.from("content-media").remove([entry.storagePath]);
+      const { error: removeError } = await supabase.storage.from("content-media").remove([entry.storagePath]);
+      if (removeError) setError(removeError.message);
     }
   }
 
