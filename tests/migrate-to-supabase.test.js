@@ -110,6 +110,9 @@ function fakeClientWithStorage() {
       if (table === 'schedules') {
         return { upsert: async (rows) => { upserts.schedules.push(...rows); return { error: null }; } };
       }
+      if (table === 'global_learning' || table === 'segment_templates') {
+        return { upsert: async (rows) => { upserts[table] = upserts[table] || []; upserts[table].push(...rows); return { error: null }; } };
+      }
       throw new Error(`fakeClientWithStorage: unhandled table ${table}`);
     },
     storage: {
@@ -204,7 +207,7 @@ test('migrateContentForProject skips items with missing contentId and records er
   await rm(targetDir, { recursive: true, force: true });
 });
 
-import { runMigration, migrateCompanyBrandData, migrateProjectReferences } from '../src/migrate-to-supabase.js';
+import { runMigration, migrateCompanyBrandData, migrateProjectReferences, migrateGlobalLearning, migrateSegmentTemplates } from '../src/migrate-to-supabase.js';
 
 test('runMigration is idempotent — running twice does not duplicate rows', async () => {
   const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-full-'));
@@ -483,5 +486,131 @@ test('migrateProjectReferences preserves a cloud-only reference that was never w
   assert.equal(client.updates[0].patch.brand_profile.references.length, 1);
   assert.equal(client.updates[0].patch.brand_profile.references[0].id, 'cloud-only');
 
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+function fakeClientForGlobalLearning() {
+  const upserts = { global_learning: [], segment_templates: [] };
+  const uploads = [];
+  return {
+    upserts,
+    uploads,
+    auth: {
+      admin: {
+        listUsers: async () => ({ data: { users: [{ id: 'owner-uuid-1' }] }, error: null }),
+      },
+    },
+    from(table) {
+      if (table !== 'global_learning' && table !== 'segment_templates') throw new Error(`fakeClientForGlobalLearning: unhandled table ${table}`);
+      return {
+        upsert: async (rows) => { upserts[table].push(...rows); return { error: null }; },
+      };
+    },
+    storage: {
+      from: (bucket) => ({
+        upload: async (path, buffer, opts) => {
+          uploads.push({ bucket, path, size: buffer.length, contentType: opts?.contentType });
+          return { data: { path }, error: null };
+        },
+      }),
+    },
+  };
+}
+
+test('migrateGlobalLearning uploads image entries, stamps storagePath, and writes one global_learning row', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-learning-'));
+  const root = join(targetDir, '_opensquad', 'content-central');
+  await mkdir(join(root, 'assets', 'learning', 'segment', 'alimenticio'), { recursive: true });
+  await writeFile(join(root, 'assets', 'learning', 'segment', 'alimenticio', 'foto.jpg'), Buffer.from([0xff, 0xd8, 0xff]));
+  await writeFile(join(root, 'segment-learnings.json'), JSON.stringify({
+    schemaVersion: 2,
+    nodes: {
+      'group:alimenticio': {
+        label: 'Alimentício',
+        entries: [
+          { id: 'e1', bucket: 'approved', kind: 'text', text: 'Funciona bem falar de frescor', source: 'manual', createdAt: '2026-01-01T00:00:00.000Z' },
+          { id: 'e2', bucket: 'avoid', kind: 'image', text: 'Evitar esse enquadramento', imagePath: 'segment/alimenticio/foto.jpg', source: 'manual', createdAt: '2026-01-01T00:00:00.000Z' },
+        ],
+      },
+    },
+  }));
+  await writeFile(join(root, 'offer-type-learnings.json'), JSON.stringify({
+    schemaVersion: 1,
+    types: { combo: { baseInstruction: 'Sempre mostrar preço por pessoa', entries: [] } },
+  }));
+
+  const client = fakeClientForGlobalLearning();
+  const result = await migrateGlobalLearning(targetDir, client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.uploads.length, 1);
+  assert.equal(client.uploads[0].bucket, 'content-media');
+  assert.equal(client.uploads[0].path, 'learning/segment/alimenticio/foto.jpg');
+  assert.equal(client.upserts.global_learning.length, 1);
+  const written = client.upserts.global_learning[0];
+  assert.equal(written.owner_id, 'owner-uuid-1');
+  assert.equal(written.segment_learnings.nodes['group:alimenticio'].entries[0].text, 'Funciona bem falar de frescor');
+  assert.equal(written.segment_learnings.nodes['group:alimenticio'].entries[1].storagePath, 'learning/segment/alimenticio/foto.jpg');
+  assert.equal(written.offer_type_learnings.types.combo.baseInstruction, 'Sempre mostrar preço por pessoa');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateGlobalLearning migrates a legacy v1 segment-learnings.json via migrateSegmentLearningStoreV1ToV2', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-learning-v1-'));
+  const root = join(targetDir, '_opensquad', 'content-central');
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'segment-learnings.json'), JSON.stringify({
+    segments: { s1: { label: 'Alimentício', approved: ['Falar de frescor'], avoid: [], technical: [] } },
+  }));
+
+  const client = fakeClientForGlobalLearning();
+  const result = await migrateGlobalLearning(targetDir, client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  const written = client.upserts.global_learning[0];
+  const node = written.segment_learnings.nodes['alimenticio'];
+  assert.ok(node, 'expected a node keyed by the slugified v1 label');
+  assert.equal(node.entries[0].text, 'Falar de frescor');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateSegmentTemplates uploads each piece image and upserts one row per segment', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-templates-'));
+  const templateDir = join(targetDir, '_opensquad', 'content-central', 'segment-templates', 'alimenticio-pizzaria', 'images');
+  await mkdir(templateDir, { recursive: true });
+  await writeFile(join(templateDir, 'capa.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  await writeFile(
+    join(targetDir, '_opensquad', 'content-central', 'segment-templates', 'alimenticio-pizzaria', 'template.json'),
+    JSON.stringify({
+      segmentId: 'alimenticio-pizzaria',
+      label: 'Pizzaria',
+      pieces: [{ key: 'capa', label: 'Capa', channel: 'instagram_feed', angleNote: '', imagePath: 'images/capa.png' }],
+    }),
+  );
+
+  const client = fakeClientForGlobalLearning();
+  const result = await migrateSegmentTemplates(targetDir, client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.uploads.length, 1);
+  assert.equal(client.uploads[0].path, 'segment-templates/alimenticio-pizzaria/images/capa.png');
+  assert.equal(client.upserts.segment_templates.length, 1);
+  assert.equal(client.upserts.segment_templates[0].segment_id, 'alimenticio-pizzaria');
+  assert.equal(client.upserts.segment_templates[0].pieces[0].storagePath, 'segment-templates/alimenticio-pizzaria/images/capa.png');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateSegmentTemplates returns an empty result when segment-templates/ does not exist', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-templates-empty-'));
+  const client = fakeClientForGlobalLearning();
+  const result = await migrateSegmentTemplates(targetDir, client);
+  assert.equal(result.migrated, 0);
+  assert.equal(result.errors.length, 0);
   await rm(targetDir, { recursive: true, force: true });
 });

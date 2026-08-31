@@ -4992,7 +4992,7 @@ function normalizeLearnings(input) {
 
 const SEGMENT_LEVELS = ['setor', 'nicho', 'especialidade'];
 
-function normalizeSegmentLearningEntry(input = {}) {
+export function normalizeSegmentLearningEntry(input = {}) {
   const kind = input.kind === 'image' ? 'image' : 'text';
   const purpose = kind === 'image' && ['product', 'creative'].includes(input.purpose) ? input.purpose : undefined;
   const isCreativeImage = kind === 'image' && purpose === 'creative';

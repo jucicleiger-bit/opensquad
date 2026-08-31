@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import sharp from 'sharp';
-import { getCentralPaths, normalizeCompanyProfile, normalizeBrandXray, normalizeBrandBriefing, normalizeProjectOffers, normalizeProjectOfferGroups, normalizeProjectPillars, normalizeProjectReferences } from './content-central.js';
+import { getCentralPaths, normalizeCompanyProfile, normalizeBrandXray, normalizeBrandBriefing, normalizeProjectOffers, normalizeProjectOfferGroups, normalizeProjectPillars, normalizeProjectReferences, migrateSegmentLearningStoreV1ToV2, normalizeSegmentLearningEntry } from './content-central.js';
 import { createSupabaseAdminClient } from './supabase-client.js';
 
 async function readJsonIfExists(path) {
@@ -308,6 +308,148 @@ export async function migrateProjectReferences(targetDir, slug, client) {
   return result;
 }
 
+function contentTypeForFilename(filename) {
+  const ext = String(filename).split('.').pop()?.toLowerCase() || '';
+  return {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    webp: 'image/webp', gif: 'image/gif', svg: 'image/svg+xml',
+  }[ext] || 'application/octet-stream';
+}
+
+async function lookUpOwnerId(client) {
+  const { data: usersData, error: usersError } = await client.auth.admin.listUsers();
+  if (usersError) throw new Error(`failed to look up the owner user: ${usersError.message}`);
+  if (!usersData.users.length) throw new Error('no Supabase Auth user exists yet — create the single owner user before migrating');
+  return usersData.users[0].id;
+}
+
+function toSegmentLearningsV2(stored) {
+  if (!stored) return { schemaVersion: 2, nodes: {} };
+  if (stored.schemaVersion === 2) return { ...stored, nodes: stored.nodes || {} };
+  return migrateSegmentLearningStoreV1ToV2(stored);
+}
+
+async function uploadLearningEntryImage(client, root, entry) {
+  if (entry.kind !== 'image' || !entry.imagePath) return null;
+  const fullPath = join(root, 'assets', 'learning', entry.imagePath);
+  if (!existsSync(fullPath)) return null;
+  const buffer = await readFile(fullPath);
+  const storagePath = `learning/${entry.imagePath}`;
+  const { error } = await client.storage.from('content-media').upload(storagePath, buffer, {
+    contentType: contentTypeForFilename(entry.imagePath),
+    upsert: true,
+  });
+  if (error) throw new Error(error.message || String(error));
+  return storagePath;
+}
+
+async function withEntryStoragePaths(client, root, entries, errors) {
+  const result = [];
+  for (const entry of entries) {
+    try {
+      const storagePath = await uploadLearningEntryImage(client, root, entry);
+      result.push(storagePath ? { ...entry, storagePath } : entry);
+    } catch (err) {
+      errors.push({ entryId: entry.id, error: err.message });
+      result.push(entry);
+    }
+  }
+  return result;
+}
+
+export async function migrateGlobalLearning(targetDir, client) {
+  const result = { migrated: 0, errors: [] };
+  const { root, segmentLearningsPath, offerTypeLearningsPath } = getCentralPaths(targetDir);
+  const ownerId = await lookUpOwnerId(client);
+
+  const rawSegmentStore = await readJsonIfExists(segmentLearningsPath);
+  const segmentStore = toSegmentLearningsV2(rawSegmentStore);
+  const segmentNodes = {};
+  for (const [path, node] of Object.entries(segmentStore.nodes)) {
+    const entries = (node.entries || []).map(normalizeSegmentLearningEntry);
+    segmentNodes[path] = { label: node.label, entries: await withEntryStoragePaths(client, root, entries, result.errors) };
+  }
+
+  const rawOfferTypeStore = await readJsonIfExists(offerTypeLearningsPath);
+  const offerTypeTypes = {};
+  for (const [type, node] of Object.entries(rawOfferTypeStore?.types || {})) {
+    const entries = (node.entries || []).map(normalizeSegmentLearningEntry);
+    offerTypeTypes[type] = {
+      baseInstruction: node.baseInstruction || '',
+      entries: await withEntryStoragePaths(client, root, entries, result.errors),
+    };
+  }
+
+  const { error } = await client
+    .from('global_learning')
+    .upsert([{
+      owner_id: ownerId,
+      segment_learnings: { nodes: segmentNodes },
+      offer_type_learnings: { types: offerTypeTypes },
+    }], { onConflict: 'owner_id' });
+  if (error) {
+    result.errors.push({ error: error.message || String(error) });
+    return result;
+  }
+
+  result.migrated += 1;
+  return result;
+}
+
+export async function migrateSegmentTemplates(targetDir, client) {
+  const result = { migrated: 0, errors: [] };
+  const { segmentTemplatesDir } = getCentralPaths(targetDir);
+  const ownerId = await lookUpOwnerId(client);
+
+  let dirEntries;
+  try {
+    dirEntries = await readdir(segmentTemplatesDir, { withFileTypes: true });
+  } catch (err) {
+    if (err.code === 'ENOENT') return result;
+    throw err;
+  }
+
+  for (const dirEntry of dirEntries) {
+    if (!dirEntry.isDirectory()) continue;
+    const segmentId = dirEntry.name;
+    const templateDir = join(segmentTemplatesDir, segmentId);
+    const template = await readJsonIfExists(join(templateDir, 'template.json'));
+    if (!template) continue;
+
+    const pieces = [];
+    for (const piece of template.pieces || []) {
+      try {
+        const fullPath = join(templateDir, piece.imagePath);
+        let storagePath;
+        if (existsSync(fullPath)) {
+          const buffer = await readFile(fullPath);
+          storagePath = `segment-templates/${segmentId}/${piece.imagePath}`;
+          const { error: uploadError } = await client.storage.from('content-media').upload(storagePath, buffer, {
+            contentType: contentTypeForFilename(piece.imagePath),
+            upsert: true,
+          });
+          if (uploadError) throw new Error(uploadError.message || String(uploadError));
+        }
+        pieces.push(storagePath ? { ...piece, storagePath } : piece);
+      } catch (err) {
+        result.errors.push({ segmentId, piece: piece.key, error: err.message });
+        pieces.push(piece);
+      }
+    }
+
+    const { error } = await client
+      .from('segment_templates')
+      .upsert([{ owner_id: ownerId, segment_id: segmentId, label: template.label, pieces }], { onConflict: 'owner_id,segment_id' });
+    if (error) {
+      result.errors.push({ segmentId, error: error.message || String(error) });
+      continue;
+    }
+    result.migrated += 1;
+  }
+
+  return result;
+}
+
 export async function runMigration(targetDir, client) {
   const projects = await migrateProjects(targetDir, client);
   const { projectsDir } = getCentralPaths(targetDir);
@@ -337,7 +479,10 @@ export async function runMigration(targetDir, client) {
     references.errors.push(...perProjectReferences.errors);
   }
 
-  return { projects, content, companyBrand, references };
+  const globalLearning = await migrateGlobalLearning(targetDir, client);
+  const segmentTemplates = await migrateSegmentTemplates(targetDir, client);
+
+  return { projects, content, companyBrand, references, globalLearning, segmentTemplates };
 }
 
 async function main() {
@@ -347,7 +492,9 @@ async function main() {
   console.log(`Content items migrated: ${result.content.migrated} (${result.content.errors.length} errors)`);
   console.log(`Company/brand data migrated: ${result.companyBrand.migrated} (${result.companyBrand.errors.length} errors)`);
   console.log(`Reference files migrated: ${result.references.migrated} (${result.references.errors.length} errors)`);
-  const allErrors = [...result.projects.errors, ...result.content.errors, ...result.companyBrand.errors, ...result.references.errors];
+  console.log(`Global learning migrated: ${result.globalLearning.migrated} (${result.globalLearning.errors.length} errors)`);
+  console.log(`Segment templates migrated: ${result.segmentTemplates.migrated} (${result.segmentTemplates.errors.length} errors)`);
+  const allErrors = [...result.projects.errors, ...result.content.errors, ...result.companyBrand.errors, ...result.references.errors, ...result.globalLearning.errors, ...result.segmentTemplates.errors];
   if (allErrors.length) {
     console.error('Errors:', JSON.stringify(allErrors, null, 2));
     process.exitCode = 1;
