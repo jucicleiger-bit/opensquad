@@ -281,3 +281,35 @@ test('migrateCompanyBrandData records an error when project.json is missing', as
   assert.equal(result.errors[0].slug, 'no-such-project');
   await rm(targetDir, { recursive: true, force: true });
 });
+
+test('migrateCompanyBrandData also normalizes and writes content_strategy (offers/offerGroups/pillars)', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-strategy-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    join(projectDir, 'project.json'),
+    JSON.stringify({
+      companyProfile: {},
+      brandXray: {},
+      brandBriefing: {},
+      contentStrategy: {
+        offers: [{ id: 'offer-1', name: 'Rodízio', type: 'rodizio', price: 'R$ 49,90', items: '', cta: '', notes: '', active: true, pillarId: null, groupId: null }],
+        offerGroups: [{ id: 'group-1', name: 'Geral', comboChance: 0, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }],
+        pillars: [{ id: 'pillar-1', name: 'Prova social', role: 'prova', objective: '', visualTreatment: 'leve', color: '#7C7C7C', weight: 1, requiresEvidence: true, active: true }],
+      },
+    }),
+  );
+
+  const client = fakeClientForCompanyBrand();
+  const result = await migrateCompanyBrandData(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.updates.length, 1);
+  assert.equal(client.updates[0].patch.content_strategy.offers.length, 1);
+  assert.equal(client.updates[0].patch.content_strategy.offers[0].name, 'Rodízio');
+  assert.equal(client.updates[0].patch.content_strategy.offerGroups[0].name, 'Geral');
+  assert.equal(client.updates[0].patch.content_strategy.pillars[0].name, 'Prova social');
+
+  await rm(targetDir, { recursive: true, force: true });
+});

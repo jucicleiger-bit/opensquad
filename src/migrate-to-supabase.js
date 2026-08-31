@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import sharp from 'sharp';
-import { getCentralPaths, normalizeCompanyProfile, normalizeBrandXray, normalizeBrandBriefing } from './content-central.js';
+import { getCentralPaths, normalizeCompanyProfile, normalizeBrandXray, normalizeBrandBriefing, normalizeProjectOffers, normalizeProjectOfferGroups, normalizeProjectPillars } from './content-central.js';
 import { createSupabaseAdminClient } from './supabase-client.js';
 
 async function readJsonIfExists(path) {
@@ -204,6 +204,11 @@ export async function migrateCompanyBrandData(targetDir, slug, client) {
       company_profile: normalizeCompanyProfile(project.companyProfile),
       brand_xray: normalizeBrandXray(project.brandXray),
       brand_briefing: normalizeBrandBriefing(project.brandBriefing),
+      content_strategy: {
+        offers: normalizeProjectOffers(project.contentStrategy?.offers),
+        offerGroups: normalizeProjectOfferGroups(project.contentStrategy?.offerGroups),
+        pillars: normalizeProjectPillars(project.contentStrategy?.pillars),
+      },
     })
     .eq('slug', slug);
   if (error) {

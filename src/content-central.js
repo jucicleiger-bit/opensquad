@@ -7673,7 +7673,7 @@ function includesMeaningfulOfferText(ruleText, offerText, currentOfferText) {
   return tokens.some((token) => ruleText.includes(token));
 }
 
-function normalizeProjectOffers(offers) {
+export function normalizeProjectOffers(offers) {
   return Array.isArray(offers)
     ? offers.map((offer) => normalizeProjectOffer(offer)).filter((offer) => offer.name)
     : [];
@@ -8562,7 +8562,7 @@ function normalizeProjectPillar(input, now = new Date(), existingPillars = []) {
   };
 }
 
-function normalizeProjectPillars(pillars) {
+export function normalizeProjectPillars(pillars) {
   if (!Array.isArray(pillars)) return [];
   return pillars
     .map((pillar) => {
@@ -8639,7 +8639,7 @@ function normalizeProjectOfferGroup(input, now = new Date(), existingGroups = []
   };
 }
 
-function normalizeProjectOfferGroups(groups) {
+export function normalizeProjectOfferGroups(groups) {
   if (!Array.isArray(groups)) return [];
   return groups
     .map((group) => {
