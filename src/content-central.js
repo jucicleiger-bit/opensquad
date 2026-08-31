@@ -7674,9 +7674,16 @@ function includesMeaningfulOfferText(ruleText, offerText, currentOfferText) {
 }
 
 export function normalizeProjectOffers(offers) {
-  return Array.isArray(offers)
-    ? offers.map((offer) => normalizeProjectOffer(offer)).filter((offer) => offer.name)
-    : [];
+  if (!Array.isArray(offers)) return [];
+  return offers
+    .map((offer) => {
+      try {
+        return normalizeProjectOffer(offer);
+      } catch {
+        return null;
+      }
+    })
+    .filter((offer) => offer && offer.name);
 }
 
 export function normalizeCompanyProfile(input = {}) {
