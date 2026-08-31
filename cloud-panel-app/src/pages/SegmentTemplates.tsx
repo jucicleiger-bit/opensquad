@@ -36,7 +36,8 @@ export function SegmentTemplates() {
 
   useEffect(() => {
     templates?.forEach((template) => {
-      template.pieces.forEach(async (piece) => {
+      const pieces = Array.isArray(template?.pieces) ? template.pieces : [];
+      pieces.forEach(async (piece) => {
         const cacheKey = `${template.id}-${piece.key}`;
         if (!piece.storagePath || signedUrls[cacheKey]) return;
         const { data } = await supabase.storage.from("content-media").createSignedUrl(piece.storagePath, 300);
@@ -58,7 +59,7 @@ export function SegmentTemplates() {
         <section key={template.id} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <h2 style={{ margin: 0 }}>{template.label}</h2>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-            {template.pieces.map((piece) => {
+            {(Array.isArray(template?.pieces) ? template.pieces : []).map((piece) => {
               const cacheKey = `${template.id}-${piece.key}`;
               return (
                 <div key={piece.key} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>

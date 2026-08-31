@@ -59,7 +59,8 @@ export function OfferTypeLearning() {
       setRowId(null);
     } else {
       const raw = data.offer_type_learnings as { types?: unknown } | null;
-      setStore({ types: raw && typeof raw.types === "object" && raw.types !== null ? (raw.types as OfferTypeStore["types"]) : {} });
+      const types = raw && typeof raw === "object" && raw.types && typeof raw.types === "object" ? (raw.types as Record<string, unknown>) : {};
+      setStore({ types: types as OfferTypeStore["types"] });
       setRowId(data.id);
     }
     setLoaded(true);
@@ -76,7 +77,10 @@ export function OfferTypeLearning() {
   }
 
   useEffect(() => {
-    Object.values(store.types).forEach((node) => node.entries.forEach((entry) => { if (entry.kind === "image") ensureSignedUrl(entry); }));
+    Object.values(store.types).forEach((node) => {
+      const entries = Array.isArray(node?.entries) ? node.entries : [];
+      entries.forEach((entry) => { if (entry.kind === "image") ensureSignedUrl(entry); });
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store]);
 
@@ -111,21 +115,31 @@ export function OfferTypeLearning() {
       storagePath = path;
     }
     const node = store.types[entryDraft.type] || { entries: [] };
+    const entries = Array.isArray(node?.entries) ? node.entries : [];
     const entry: LearningEntry = {
       id: entryDraft.id, bucket: entryDraft.bucket, kind: entryDraft.kind,
       text: entryDraft.text.trim(), title: entryDraft.kind === "image" ? entryDraft.title.trim() : "",
       storagePath, source: "manual", createdAt: new Date().toISOString(),
     };
-    const ok = await persist({ types: { ...store.types, [entryDraft.type]: { ...node, entries: upsertById(node.entries, entry) } } });
-    if (ok) { setEntryDraft(null); setEntryDraftFile(null); }
+    const ok = await persist({ types: { ...store.types, [entryDraft.type]: { ...node, entries: upsertById(entries, entry) } } });
+    if (ok) { setEntryDraft(null); setEntryDraftFile(null); } else if (storagePath) {
+      const { error: cleanupError } = await supabase.storage.from("content-media").remove([storagePath]);
+      if (cleanupError) {
+        setError((current) => `${current ? current + " " : ""}(arquivo enviado não pôde ser limpo: ${cleanupError.message})`);
+      }
+    }
   }
 
   async function deleteEntry(type: string, entry: LearningEntry) {
     if (!confirm("Apagar esta entrada?")) return;
     const node = store.types[type];
     if (!node) return;
-    const ok = await persist({ types: { ...store.types, [type]: { ...node, entries: removeById(node.entries, entry.id) } } });
-    if (ok && entry.storagePath) await supabase.storage.from("content-media").remove([entry.storagePath]);
+    const entries = Array.isArray(node?.entries) ? node.entries : [];
+    const ok = await persist({ types: { ...store.types, [type]: { ...node, entries: removeById(entries, entry.id) } } });
+    if (ok && entry.storagePath) {
+      const { error: removeError } = await supabase.storage.from("content-media").remove([entry.storagePath]);
+      if (removeError) setError(removeError.message);
+    }
   }
 
   if (error) return <div className="card">Erro: {error}</div>;
@@ -136,7 +150,7 @@ export function OfferTypeLearning() {
       <h1>Aprendizado por Tipo de Oferta</h1>
       {OFFER_TYPES.map(([type, label]) => {
         const node = store.types[type];
-        const entries = node?.entries || [];
+        const entries = Array.isArray(node?.entries) ? node.entries : [];
         return (
           <section key={type} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <h2 style={{ margin: 0 }}>{label}</h2>
