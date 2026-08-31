@@ -204,7 +204,7 @@ test('migrateContentForProject skips items with missing contentId and records er
   await rm(targetDir, { recursive: true, force: true });
 });
 
-import { runMigration, migrateCompanyBrandData } from '../src/migrate-to-supabase.js';
+import { runMigration, migrateCompanyBrandData, migrateProjectReferences } from '../src/migrate-to-supabase.js';
 
 test('runMigration is idempotent — running twice does not duplicate rows', async () => {
   const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-full-'));
@@ -311,5 +311,106 @@ test('migrateCompanyBrandData also normalizes and writes content_strategy (offer
   assert.equal(client.updates[0].patch.content_strategy.offerGroups[0].name, 'Geral');
   assert.equal(client.updates[0].patch.content_strategy.pillars[0].name, 'Prova social');
 
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+function fakeClientForReferences() {
+  const updates = [];
+  const uploads = [];
+  return {
+    updates,
+    uploads,
+    from(table) {
+      if (table !== 'projects') throw new Error(`fakeClientForReferences: unhandled table ${table}`);
+      return {
+        update: (patch) => ({
+          eq: async (_col, value) => {
+            updates.push({ slug: value, patch });
+            return { error: null };
+          },
+        }),
+      };
+    },
+    storage: {
+      from: (bucket) => ({
+        upload: async (path, buffer, opts) => {
+          uploads.push({ bucket, path, size: buffer.length, contentType: opts?.contentType });
+          return { data: { path }, error: null };
+        },
+      }),
+    },
+  };
+}
+
+test('migrateProjectReferences uploads reference file bytes and stamps storagePath', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-refs-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(join(projectDir, 'assets', 'references'), { recursive: true });
+  await writeFile(join(projectDir, 'assets', 'references', 'img.jpg'), Buffer.from([0xff, 0xd8, 0xff]));
+  await writeFile(
+    join(projectDir, 'project.json'),
+    JSON.stringify({
+      projectId: 'acme-pizza',
+      brand: {
+        logo: 'acme-logo.png',
+        references: [{
+          id: 'img', filename: 'img.jpg', relativePath: 'assets/references/img.jpg',
+          mimeType: 'image/jpeg', referenceCategory: 'visual_inspiration',
+        }],
+      },
+    }),
+  );
+
+  const client = fakeClientForReferences();
+  const result = await migrateProjectReferences(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.uploads.length, 1);
+  assert.equal(client.uploads[0].bucket, 'content-media');
+  assert.equal(client.uploads[0].path, 'acme-pizza/assets/references/img.jpg');
+  assert.equal(client.updates.length, 1);
+  assert.equal(client.updates[0].slug, 'acme-pizza');
+  assert.equal(client.updates[0].patch.brand_profile.logo, 'acme-logo.png');
+  assert.equal(client.updates[0].patch.brand_profile.references[0].storagePath, 'acme-pizza/assets/references/img.jpg');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateProjectReferences keeps a reference without storagePath when its file is missing on disk', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-refs-missing-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(
+    join(projectDir, 'project.json'),
+    JSON.stringify({
+      projectId: 'acme-pizza',
+      brand: {
+        references: [{
+          id: 'ghost', filename: 'ghost.jpg', relativePath: 'assets/references/ghost.jpg',
+          mimeType: 'image/jpeg', referenceCategory: 'visual_inspiration',
+        }],
+      },
+    }),
+  );
+
+  const client = fakeClientForReferences();
+  const result = await migrateProjectReferences(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.uploads.length, 0);
+  assert.equal(client.updates[0].patch.brand_profile.references[0].storagePath, undefined);
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateProjectReferences records an error when project.json is missing', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-refs-nofile-'));
+  const client = fakeClientForReferences();
+  const result = await migrateProjectReferences(targetDir, 'no-such-project', client);
+  assert.equal(result.migrated, 0);
+  assert.equal(result.errors.length, 1);
+  assert.equal(result.errors[0].slug, 'no-such-project');
   await rm(targetDir, { recursive: true, force: true });
 });

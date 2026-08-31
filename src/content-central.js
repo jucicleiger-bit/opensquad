@@ -8757,7 +8757,7 @@ function normalizeReferenceUsageRoles(value, fallbackRole = 'visual_reference') 
   return [...new Set(roles.length ? roles : [fallback])];
 }
 
-function normalizeProjectReferences(project) {
+export function normalizeProjectReferences(project) {
   const existing = Array.isArray(project.brand?.references) ? project.brand.references : [];
   const migrated = Array.isArray(project.brand?.referenceFiles)
     ? project.brand.referenceFiles.map((relativePath) => normalizeReferenceMetadata({
