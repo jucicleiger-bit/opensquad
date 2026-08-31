@@ -243,22 +243,61 @@ export async function migrateProjectReferences(targetDir, slug, client) {
     return result;
   }
 
+  const { data: currentRow, error: fetchError } = await client
+    .from('projects')
+    .select('brand_profile')
+    .eq('slug', slug)
+    .single();
+  if (fetchError) {
+    result.errors.push({ slug, error: fetchError.message || String(fetchError) });
+    return result;
+  }
+  const currentBrandProfile = currentRow?.brand_profile && typeof currentRow.brand_profile === 'object' ? currentRow.brand_profile : {};
+  const currentReferences = Array.isArray(currentBrandProfile.references) ? currentBrandProfile.references : [];
+  const currentById = new Map(currentReferences.map((reference) => [reference.id, reference]));
+
   const { projectDir } = getCentralPaths(targetDir, slug);
-  const references = normalizeProjectReferences(project);
-  const withStorage = [];
-  for (const reference of references) {
+  const localReferences = normalizeProjectReferences(project);
+  const seenIds = new Set();
+  const merged = [];
+
+  for (const reference of localReferences) {
+    seenIds.add(reference.id);
+    const existing = currentById.get(reference.id);
+    if (existing) {
+      // Already migrated before — the cloud copy may have been edited via
+      // the References page since, so it wins for every editable field.
+      // Only bring in a fresh storagePath if this run actually uploaded
+      // one; otherwise keep whatever the cloud copy already has.
+      try {
+        const storagePath = await uploadReferenceFile(client, projectDir, slug, reference);
+        merged.push(storagePath ? { ...existing, storagePath } : existing);
+      } catch (err) {
+        result.errors.push({ slug, reference: reference.relativePath, error: err.message });
+        merged.push(existing);
+      }
+      continue;
+    }
+    // New reference the cloud has never seen — bring it in with the
+    // normalized local metadata.
     try {
       const storagePath = await uploadReferenceFile(client, projectDir, slug, reference);
-      withStorage.push(storagePath ? { ...reference, storagePath } : reference);
+      merged.push(storagePath ? { ...reference, storagePath } : reference);
     } catch (err) {
       result.errors.push({ slug, reference: reference.relativePath, error: err.message });
-      withStorage.push(reference);
+      merged.push(reference);
     }
+  }
+
+  // References that exist only in the cloud (added via the References
+  // page, never written back to local disk) are preserved untouched.
+  for (const reference of currentReferences) {
+    if (!seenIds.has(reference.id)) merged.push(reference);
   }
 
   const { error } = await client
     .from('projects')
-    .update({ brand_profile: { ...project.brand, references: withStorage } })
+    .update({ brand_profile: { ...currentBrandProfile, ...project.brand, references: merged } })
     .eq('slug', slug);
   if (error) {
     result.errors.push({ slug, error: error.message || String(error) });

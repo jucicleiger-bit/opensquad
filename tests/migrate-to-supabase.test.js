@@ -314,7 +314,7 @@ test('migrateCompanyBrandData also normalizes and writes content_strategy (offer
   await rm(targetDir, { recursive: true, force: true });
 });
 
-function fakeClientForReferences() {
+function fakeClientForReferences(existingBrandProfile = {}) {
   const updates = [];
   const uploads = [];
   return {
@@ -323,6 +323,11 @@ function fakeClientForReferences() {
     from(table) {
       if (table !== 'projects') throw new Error(`fakeClientForReferences: unhandled table ${table}`);
       return {
+        select: () => ({
+          eq: () => ({
+            single: async () => ({ data: { brand_profile: existingBrandProfile }, error: null }),
+          }),
+        }),
         update: (patch) => ({
           eq: async (_col, value) => {
             updates.push({ slug: value, patch });
@@ -412,5 +417,71 @@ test('migrateProjectReferences records an error when project.json is missing', a
   assert.equal(result.migrated, 0);
   assert.equal(result.errors.length, 1);
   assert.equal(result.errors[0].slug, 'no-such-project');
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateProjectReferences preserves a cloud-edited reference on rerun instead of overwriting it with stale local data', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-refs-rerun-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(join(projectDir, 'assets', 'references'), { recursive: true });
+  await writeFile(join(projectDir, 'assets', 'references', 'img.jpg'), Buffer.from([0xff, 0xd8, 0xff]));
+  await writeFile(
+    join(projectDir, 'project.json'),
+    JSON.stringify({
+      projectId: 'acme-pizza',
+      brand: {
+        references: [{
+          id: 'img', filename: 'img.jpg', relativePath: 'assets/references/img.jpg',
+          mimeType: 'image/jpeg', referenceCategory: 'visual_inspiration', instruction: 'stale local instruction',
+        }],
+      },
+    }),
+  );
+
+  const existingBrandProfile = {
+    references: [{
+      id: 'img', filename: 'img.jpg', relativePath: 'assets/references/img.jpg',
+      storagePath: 'acme-pizza/assets/references/img.jpg', mimeType: 'image/jpeg',
+      referenceCategory: 'official_asset', instruction: 'edited in the cloud panel',
+      role: 'brand_asset', usageRoles: ['brand_asset'], weight: 'high',
+      automaticRule: 'x', useInNextGeneration: true, createdAt: '2026-01-01T00:00:00.000Z',
+    }],
+  };
+  const client = fakeClientForReferences(existingBrandProfile);
+  const result = await migrateProjectReferences(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  const written = client.updates[0].patch.brand_profile.references[0];
+  assert.equal(written.instruction, 'edited in the cloud panel');
+  assert.equal(written.referenceCategory, 'official_asset');
+  assert.equal(written.storagePath, 'acme-pizza/assets/references/img.jpg');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateProjectReferences preserves a cloud-only reference that was never written back to local disk', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-refs-cloudonly-'));
+  const projectDir = join(targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza');
+  await mkdir(projectDir, { recursive: true });
+  await writeFile(join(projectDir, 'project.json'), JSON.stringify({ projectId: 'acme-pizza', brand: {} }));
+
+  const existingBrandProfile = {
+    references: [{
+      id: 'cloud-only', filename: 'uploaded-in-cloud.png', relativePath: 'assets/references/uploaded-in-cloud.png',
+      storagePath: 'acme-pizza/references/cloud-only-uploaded-in-cloud.png', mimeType: 'image/png',
+      referenceCategory: 'visual_inspiration', instruction: '', role: 'visual_reference',
+      usageRoles: ['visual_reference'], weight: 'medium', automaticRule: 'x',
+      useInNextGeneration: true, createdAt: '2026-01-01T00:00:00.000Z',
+    }],
+  };
+  const client = fakeClientForReferences(existingBrandProfile);
+  const result = await migrateProjectReferences(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  assert.equal(client.updates[0].patch.brand_profile.references.length, 1);
+  assert.equal(client.updates[0].patch.brand_profile.references[0].id, 'cloud-only');
+
   await rm(targetDir, { recursive: true, force: true });
 });

@@ -142,6 +142,11 @@ export function References() {
       setNewCategory("visual_inspiration");
       setNewInstruction("");
       input.value = "";
+    } else {
+      const { error: cleanupError } = await supabase.storage.from("content-media").remove([storagePath]);
+      if (cleanupError) {
+        setError((current) => `${current ? current + " " : ""}(arquivo enviado não pôde ser limpo: ${cleanupError.message})`);
+      }
     }
   }
 
@@ -155,7 +160,6 @@ export function References() {
       ...original,
       referenceCategory: editDraft.referenceCategory,
       role,
-      usageRoles: [role],
       weight: editDraft.weight,
       instruction: editDraft.instruction,
       useInNextGeneration: editDraft.useInNextGeneration,
