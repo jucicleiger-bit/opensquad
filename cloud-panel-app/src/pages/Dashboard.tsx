@@ -28,7 +28,10 @@ export function Dashboard() {
 
   return (
     <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 12 }}>
-      <h1>Projetos</h1>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h1>Projetos</h1>
+        <Link to="/conta">Conta / MFA</Link>
+      </div>
       {projects.length === 0 ? <p>Nenhum projeto ainda.</p> : null}
       {projects.map((project) => (
         <div key={project.id} className="card">

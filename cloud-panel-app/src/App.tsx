@@ -3,6 +3,7 @@ import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Approval } from "@/pages/Approval";
 import { CalendarPage } from "@/pages/Calendar";
+import { Account } from "@/pages/Account";
 import { RequireAuth } from "@/components/RequireAuth";
 
 export function App() {
@@ -14,6 +15,14 @@ export function App() {
         element={
           <RequireAuth>
             <Dashboard />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/conta"
+        element={
+          <RequireAuth>
+            <Account />
           </RequireAuth>
         }
       />
