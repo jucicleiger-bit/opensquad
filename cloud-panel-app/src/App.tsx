@@ -5,6 +5,7 @@ import { Approval } from "@/pages/Approval";
 import { CalendarPage } from "@/pages/Calendar";
 import { Company } from "@/pages/Company";
 import { OffersAndPillars } from "@/pages/OffersAndPillars";
+import { References } from "@/pages/References";
 import { Account } from "@/pages/Account";
 import { RequireAuth } from "@/components/RequireAuth";
 
@@ -57,6 +58,14 @@ export function App() {
         element={
           <RequireAuth>
             <OffersAndPillars />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects/:projectId/referencias"
+        element={
+          <RequireAuth>
+            <References />
           </RequireAuth>
         }
       />
