@@ -4719,6 +4719,58 @@ test('startWhatsAppPublishScheduler starts independently of OPENSQUAD_AUTO_PUBLI
   }
 });
 
+test('startWhatsAppPublishScheduler does not double-publish a due item when a sweep outlasts the interval', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+  try {
+    await createCentralProject({ projectId: 'wa-overlap', name: 'WA Overlap' }, dir);
+    await saveProjectWhatsAppInstance('wa-overlap', { sessionName: 'opensquad-wa-overlap' }, dir);
+
+    const paths = getCentralPaths(dir, 'wa-overlap');
+    const batchDir = join(paths.draftsDir, 'batch-1');
+    await mkdir(batchDir, { recursive: true });
+    const contentFilePath = join(batchDir, 'content-1.json');
+    await writeFile(contentFilePath, JSON.stringify({
+      contentId: 'content-1',
+      channel: 'whatsapp_status',
+      status: 'aprovado',
+      scheduledDate: '2020-01-01',
+      scheduledTime: '00:00',
+      caption: { text: 'oi' },
+      publish: { mediaUrl: 'https://cdn.example.com/x.png' },
+      filePath: contentFilePath,
+    }), 'utf-8');
+
+    process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
+    process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS = '20';
+    try {
+      const calls = [];
+      let timer;
+      await withMockedFetch(async (url) => {
+        calls.push(String(url));
+        // Slower than the 20ms interval — a second tick fires while this
+        // call is still in flight; the `running` guard must skip it instead
+        // of posting the same status update again.
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return new Response(JSON.stringify({ id: 'wamid-1' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }, async () => {
+        timer = startWhatsAppPublishScheduler(dir);
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      });
+      clearInterval(timer);
+      assert.equal(calls.length, 1, `expected exactly one WAHA status/image call, got ${calls.length}`);
+    } finally {
+      delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
+      delete process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS;
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+});
+
 test('startStuckMediaRetryScheduler does not start when OPENSQUAD_ENABLE_REAL_PUBLISHING is not true, even with OPENSQUAD_GAVETA_DIR set', async () => {
   delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
   process.env.OPENSQUAD_GAVETA_DIR = '/tmp/some-gaveta';

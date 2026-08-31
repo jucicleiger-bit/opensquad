@@ -4882,9 +4882,18 @@ export function startPublishScheduler(targetDir) {
   if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
   if (process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER === 'false') return null;
   const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
-  const sweep = () => runDuePublishSweep(targetDir, {
-    metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
-  }).catch((err) => console.error('[content-central] publish sweep failed:', err.message));
+  // See startWhatsAppPublishScheduler's `running` guard: a slow sweep can
+  // outlast intervalMs and overlap the next tick before realPublished:true
+  // is persisted, double-publishing the same item.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runDuePublishSweep(targetDir, {
+      metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
+    }).catch((err) => console.error('[content-central] publish sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;
@@ -4900,10 +4909,21 @@ export function startPublishScheduler(targetDir) {
 export function startWhatsAppPublishScheduler(targetDir) {
   if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
   const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
-  const sweep = () => runDuePublishSweep(targetDir, {
-    metaPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
-    channels: WHATSAPP_CHANNELS,
-  }).catch((err) => console.error('[content-central] whatsapp publish sweep failed:', err.message));
+  // A slow WAHA call (up to OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS, default
+  // 90s, plus image upload) can outlast intervalMs — without this guard the
+  // next tick starts a second sweep before publishOneItem has persisted
+  // realPublished:true for the in-flight item, so it gets published twice.
+  // Same fix as startSocialSellingRadarScheduler's `running` guard below.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runDuePublishSweep(targetDir, {
+      metaPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
+      channels: WHATSAPP_CHANNELS,
+    }).catch((err) => console.error('[content-central] whatsapp publish sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;
