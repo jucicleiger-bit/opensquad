@@ -1,5 +1,6 @@
 import { Routes, Route } from "react-router-dom";
 import { Login } from "@/pages/Login";
+import { Dashboard } from "@/pages/Dashboard";
 import { RequireAuth } from "@/components/RequireAuth";
 
 export function App() {
@@ -10,7 +11,7 @@ export function App() {
         path="/"
         element={
           <RequireAuth>
-            <div>Dashboard placeholder — Task 3 replaces this</div>
+            <Dashboard />
           </RequireAuth>
         }
       />
