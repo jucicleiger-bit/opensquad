@@ -31,14 +31,13 @@ export function Dashboard() {
       <h1>Projetos</h1>
       {projects.length === 0 ? <p>Nenhum projeto ainda.</p> : null}
       {projects.map((project) => (
-        <Link
-          key={project.id}
-          to={`/projects/${project.id}/aprovacao`}
-          className="card"
-          style={{ textDecoration: "none", color: "inherit" }}
-        >
+        <div key={project.id} className="card">
           <strong>{project.name}</strong>
-        </Link>
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <Link to={`/projects/${project.id}/aprovacao`}>Aprovação</Link>
+            <Link to={`/projects/${project.id}/calendario`}>Calendário</Link>
+          </div>
+        </div>
       ))}
     </div>
   );
