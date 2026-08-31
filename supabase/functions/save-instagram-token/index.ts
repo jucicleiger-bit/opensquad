@@ -34,6 +34,18 @@ Deno.serve(async (req) => {
     return new Response(JSON.stringify({ error: 'projectId and token are required' }), { status: 400 });
   }
 
+  // Verify the caller owns this project using RLS on the user-scoped client.
+  // The `projects` table has a policy owner_id = auth.uid(), so a SELECT
+  // through userClient returns nothing if the caller doesn't own this project.
+  const { data: ownedProject, error: ownershipError } = await userClient
+    .from('projects')
+    .select('id')
+    .eq('id', projectId)
+    .maybeSingle();
+  if (ownershipError || !ownedProject) {
+    return new Response(JSON.stringify({ error: 'Project not found or not owned by the authenticated user' }), { status: 403 });
+  }
+
   // Service-role client — the only one allowed to call set_instagram_token
   // (EXECUTE is revoked from anon/authenticated in the migration).
   const adminClient = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
