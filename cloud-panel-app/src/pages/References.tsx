@@ -181,8 +181,8 @@ export function References() {
     }
   }
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!loaded) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!loaded) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -194,34 +194,32 @@ export function References() {
       </div>
 
       <Card style={{ padding: 20 }}>
-        <div className="reference-gallery">
+        <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
           {references.map((reference) => (
-            <div key={reference.id} className="reference-card">
-              <div className="reference-thumb">
+            <div key={reference.id} className="field-card" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ width: "100%", height: 140, borderRadius: 8, overflow: "hidden", background: "var(--surface-2)", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {reference.mimeType.startsWith("image/") && signedUrls[reference.id] ? (
-                  <img src={signedUrls[reference.id]} alt={reference.filename} />
+                  <img src={signedUrls[reference.id]} alt={reference.filename} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 ) : (
-                  <span>{reference.storagePath ? reference.filename : "arquivo indisponível"}</span>
+                  <span className="muted" style={{ fontSize: 12, textAlign: "center", padding: 8 }}>{reference.storagePath ? reference.filename : "arquivo indisponível"}</span>
                 )}
               </div>
-              <div className="reference-body">
-                <div className="reference-name">{reference.filename}</div>
-                <div className="reference-meta">
-                  <span className="pill">{reference.referenceCategory}</span>
-                  <span className="pill">peso {reference.weight}</span>
-                </div>
-                <p className="reference-note">{reference.instruction || "Sem observação."}</p>
-                <div className="card-actions">
-                  <Button variant="secondary" onClick={() => setEditDraft(draftFromReference(reference))}>Editar</Button>
-                  <Button variant="ghost" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</Button>
-                </div>
+              <strong>{reference.filename}</strong>
+              <div style={{ display: "flex", gap: 6 }}>
+                <span className="pill">{reference.referenceCategory}</span>
+                <span className="pill">peso {reference.weight}</span>
+              </div>
+              <p className="muted" style={{ margin: 0 }}>{reference.instruction || "Sem observação."}</p>
+              <div className="button-row">
+                <Button variant="secondary" onClick={() => setEditDraft(draftFromReference(reference))}>Editar</Button>
+                <Button variant="ghost" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</Button>
               </div>
             </div>
           ))}
         </div>
 
         {editDraft ? (
-          <form onSubmit={saveEdit} className="reference-panel" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <form onSubmit={saveEdit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <select value={editDraft.referenceCategory} onChange={(e) => setEditDraft({ ...editDraft, referenceCategory: e.target.value })}>
               {REFERENCE_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>

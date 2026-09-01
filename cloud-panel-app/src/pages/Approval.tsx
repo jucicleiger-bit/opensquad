@@ -78,8 +78,8 @@ export function Approval() {
     setBusyId(null);
   }
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!items) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!items) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   const groups = groupByDay(items, scheduledDate);
 

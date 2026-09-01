@@ -48,8 +48,8 @@ export function SegmentTemplates() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templates]);
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!templates) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!templates) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -67,7 +67,7 @@ export function SegmentTemplates() {
                   {signedUrls[cacheKey] ? (
                     <img src={signedUrls[cacheKey]} alt={piece.label} style={{ width: 120, height: 120, objectFit: "cover", borderRadius: 4 }} />
                   ) : (
-                    <span style={{ width: 120, height: 120, display: "flex", alignItems: "center", justifyContent: "center", background: "#eee", borderRadius: 4, fontSize: 11 }}>
+                    <span style={{ width: 120, height: 120, display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-2)", borderRadius: 4, fontSize: 11 }}>
                       sem imagem
                     </span>
                   )}

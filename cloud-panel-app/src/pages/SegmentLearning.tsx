@@ -156,8 +156,8 @@ export function SegmentLearning() {
     }
   }
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!loaded) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!loaded) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>

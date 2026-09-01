@@ -54,8 +54,8 @@ export function CalendarPage() {
     setBusyId(null);
   }
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!rows) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!rows) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   const groups = groupByDay(rows, (row) => row.run_at.slice(0, 10));
 

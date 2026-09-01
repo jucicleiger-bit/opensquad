@@ -1,4 +1,4 @@
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { Login } from "@/pages/Login";
 import { Dashboard } from "@/pages/Dashboard";
 import { Overview } from "@/pages/Overview";
@@ -32,6 +32,7 @@ export function App() {
         <Route path="/aprendizado/tipos-de-oferta" element={<OfferTypeLearning />} />
         <Route path="/aprendizado/templates" element={<SegmentTemplates />} />
         <Route path="/projects/:projectId" element={<ProjectWorkspaceLayout />}>
+          <Route index element={<Navigate to="visao-geral" replace />} />
           <Route path="visao-geral" element={<Overview />} />
           <Route path="empresa" element={<Company />} />
           <Route path="referencias" element={<References />} />
