@@ -24,6 +24,10 @@ function newDraft(path: string): EntryDraft {
   return { id: crypto.randomUUID(), path, bucket: "approved", kind: "text", text: "", title: "" };
 }
 
+function entriesOf(node: { entries?: unknown } | undefined): LearningEntry[] {
+  return node && Array.isArray(node.entries) ? (node.entries as LearningEntry[]) : [];
+}
+
 export function SegmentLearning() {
   const { projectId } = useParams<{ projectId: string }>();
   const [nodes, setNodes] = useState<SegmentNodeRef[]>([]);
@@ -85,7 +89,7 @@ export function SegmentLearning() {
 
   useEffect(() => {
     Object.values(store.nodes).forEach((node) => {
-      node.entries.forEach((entry) => { if (entry.kind === "image") ensureSignedUrl(entry); });
+      entriesOf(node).forEach((entry) => { if (entry.kind === "image") ensureSignedUrl(entry); });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store]);
@@ -125,16 +129,24 @@ export function SegmentLearning() {
       text: draft.text.trim(), title: draft.kind === "image" ? draft.title.trim() : "",
       storagePath, source: "manual", createdAt: new Date().toISOString(),
     };
-    const nextNode = { ...node, entries: upsertById(node.entries, entry) };
+    const nextNode = { ...node, entries: upsertById(entriesOf(node), entry) };
     const ok = await persist({ nodes: { ...store.nodes, [draft.path]: nextNode } });
-    if (ok) { setDraft(null); setDraftFile(null); }
+    if (ok) {
+      setDraft(null);
+      setDraftFile(null);
+    } else if (storagePath) {
+      const { error: cleanupError } = await supabase.storage.from("content-media").remove([storagePath]);
+      if (cleanupError) {
+        setError((current) => `${current ? current + " " : ""}(arquivo enviado não pôde ser limpo: ${cleanupError.message})`);
+      }
+    }
   }
 
   async function deleteEntry(path: string, entry: LearningEntry) {
     if (!confirm("Apagar esta entrada?")) return;
     const node = store.nodes[path];
     if (!node) return;
-    const ok = await persist({ nodes: { ...store.nodes, [path]: { ...node, entries: removeById(node.entries, entry.id) } } });
+    const ok = await persist({ nodes: { ...store.nodes, [path]: { ...node, entries: removeById(entriesOf(node), entry.id) } } });
     if (ok && entry.storagePath) {
       const { error: removeError } = await supabase.storage.from("content-media").remove([entry.storagePath]);
       if (removeError) setError(removeError.message);
@@ -149,7 +161,7 @@ export function SegmentLearning() {
       <h1>Aprendizado do Segmento</h1>
       {nodes.length === 0 ? <p>Este projeto ainda não tem Setor/Categoria/Especialidade definidos em Empresa.</p> : null}
       {nodes.map((node) => {
-        const entries = store.nodes[node.path]?.entries || [];
+        const entries = entriesOf(store.nodes[node.path]);
         return (
           <section key={node.path} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <h2 style={{ margin: 0 }}>{node.level}: {node.label || "(sem nome)"}</h2>
