@@ -212,7 +212,7 @@ export function References() {
                 </div>
                 <p className="reference-note">{reference.instruction || "Sem observação."}</p>
                 <div className="card-actions">
-                  <Button onClick={() => setEditDraft(draftFromReference(reference))}>Editar</Button>
+                  <Button variant="secondary" onClick={() => setEditDraft(draftFromReference(reference))}>Editar</Button>
                   <Button variant="ghost" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</Button>
                 </div>
               </div>
