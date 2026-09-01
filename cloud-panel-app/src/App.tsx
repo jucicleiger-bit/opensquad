@@ -6,6 +6,9 @@ import { CalendarPage } from "@/pages/Calendar";
 import { Company } from "@/pages/Company";
 import { OffersAndPillars } from "@/pages/OffersAndPillars";
 import { References } from "@/pages/References";
+import { SegmentLearning } from "@/pages/SegmentLearning";
+import { OfferTypeLearning } from "@/pages/OfferTypeLearning";
+import { SegmentTemplates } from "@/pages/SegmentTemplates";
 import { Account } from "@/pages/Account";
 import { RequireAuth } from "@/components/RequireAuth";
 
@@ -66,6 +69,30 @@ export function App() {
         element={
           <RequireAuth>
             <References />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/projects/:projectId/aprendizado"
+        element={
+          <RequireAuth>
+            <SegmentLearning />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/aprendizado/tipos-de-oferta"
+        element={
+          <RequireAuth>
+            <OfferTypeLearning />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/aprendizado/templates"
+        element={
+          <RequireAuth>
+            <SegmentTemplates />
           </RequireAuth>
         }
       />

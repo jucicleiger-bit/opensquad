@@ -30,7 +30,11 @@ export function Dashboard() {
     <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h1>Projetos</h1>
-        <Link to="/conta">Conta / MFA</Link>
+        <div style={{ display: "flex", gap: 12 }}>
+          <Link to="/aprendizado/tipos-de-oferta">Aprendizado: Tipos de Oferta</Link>
+          <Link to="/aprendizado/templates">Templates de Segmento</Link>
+          <Link to="/conta">Conta / MFA</Link>
+        </div>
       </div>
       {projects.length === 0 ? <p>Nenhum projeto ainda.</p> : null}
       {projects.map((project) => (
@@ -42,6 +46,7 @@ export function Dashboard() {
             <Link to={`/projects/${project.id}/empresa`}>Empresa</Link>
             <Link to={`/projects/${project.id}/ofertas`}>Ofertas e Pilares</Link>
             <Link to={`/projects/${project.id}/referencias`}>Referências</Link>
+            <Link to={`/projects/${project.id}/aprendizado`}>Aprendizado</Link>
           </div>
         </div>
       ))}
