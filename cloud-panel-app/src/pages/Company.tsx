@@ -88,7 +88,7 @@ function BrandDocumentSection({
     <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
-        <span style={{ color: "var(--text-dim)" }}>{doc.status}</span>
+        <span style={{ color: "var(--muted)" }}>{doc.status}</span>
       </div>
       {!hasContent ? <p>Ainda não gerado localmente.</p> : null}
       {blockDefs.map(([id, label]) => {
@@ -185,8 +185,11 @@ export function Company() {
   if (!loaded || !brandXray || !brandBriefing) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Empresa</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Empresa</h2>
+        <span className="step">coleta rápida</span>
+      </div>
 
       <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <h2 style={{ margin: 0 }}>Perfil</h2>
@@ -195,7 +198,7 @@ export function Company() {
           <select
             value={profile.audienceType}
             onChange={(e) => updateField("audienceType", e.target.value)}
-            style={{ width: "100%", padding: 8, borderRadius: 8, border: "1px solid var(--border)" }}
+            style={{ width: "100%" }}
           >
             {AUDIENCE_TYPE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>

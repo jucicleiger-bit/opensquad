@@ -53,8 +53,11 @@ export function Account() {
   }
 
   return (
-    <div style={{ maxWidth: 480, margin: "40px auto" }} className="card">
-      <h1>Autenticação em duas etapas</h1>
+    <div className="card">
+      <div className="section-title">
+        <h2>Autenticação em duas etapas</h2>
+        <span className="step">segurança</span>
+      </div>
 
       {stage === "loading" ? <p>Carregando...</p> : null}
 
@@ -76,7 +79,7 @@ export function Account() {
           <p>Escaneie com o app autenticador (Google Authenticator, Authy, etc.):</p>
           <img src={qrCode} alt="QR code do MFA" style={{ maxWidth: 220 }} />
           {secret ? (
-            <p style={{ fontSize: 13, color: "var(--text-dim)" }}>
+            <p style={{ fontSize: 13, color: "var(--muted)" }}>
               Não consegue escanear? Cadastre manualmente: <code>{secret}</code>
             </p>
           ) : null}
@@ -94,7 +97,7 @@ export function Account() {
         </form>
       ) : null}
 
-      {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
+      {error ? <p style={{ color: "var(--bad)" }}>{error}</p> : null}
     </div>
   );
 }

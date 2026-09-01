@@ -83,7 +83,7 @@ export function Login() {
           onChange={(e) => setCode(e.target.value)}
           required
         />
-        {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
+        {error ? <p style={{ color: "var(--bad)" }}>{error}</p> : null}
         <button type="submit" className="primary" disabled={busy}>
           {busy ? "Verificando..." : "Confirmar"}
         </button>
