@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
+import { Card } from "@/components/Card";
 
 interface Stats {
   total: number;
@@ -14,7 +16,7 @@ interface ChecklistItem {
 }
 
 export function Overview() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [stats, setStats] = useState<Stats | null>(null);
   const [checklist, setChecklist] = useState<ChecklistItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -22,8 +24,8 @@ export function Overview() {
   useEffect(() => {
     async function load() {
       const [itemsResult, projectResult] = await Promise.all([
-        supabase.from("content_items").select("status").eq("project_id", projectId),
-        supabase.from("projects").select("company_profile, content_strategy, brand_profile").eq("id", projectId).single(),
+        supabase.from("content_items").select("status").eq("project_id", project.id),
+        supabase.from("projects").select("company_profile, content_strategy, brand_profile").eq("id", project.id).single(),
       ]);
       if (itemsResult.error) {
         setError(itemsResult.error.message);
@@ -49,30 +51,40 @@ export function Overview() {
       ]);
     }
     load();
-  }, [projectId]);
+  }, [project.id]);
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!stats || !checklist) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!stats || !checklist) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   return (
-    <section className="card tab-panel active">
-      <div className="section-title"><h2>Visão geral</h2><span className="step">comece aqui</span></div>
-      <div className="stat-grid">
-        <div className="stat-card"><b>{stats.total}</b><span>conteúdos</span></div>
-        <div className="stat-card"><b>{stats.draft}</b><span>aguardando aprovação</span></div>
-        <div className="stat-card"><b>{stats.approved}</b><span>aprovados</span></div>
+    <div>
+      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>{project.name}</h2>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>{project.slug}</p>
+
+      <div className="grid" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+        <Card style={{ padding: "var(--space-md)" }}>
+          <b style={{ display: "block", fontSize: "var(--text-2xl)" }}>{stats.total}</b>
+          <span className="muted">conteúdos</span>
+        </Card>
+        <Card style={{ padding: "var(--space-md)" }}>
+          <b style={{ display: "block", fontSize: "var(--text-2xl)" }}>{stats.draft}</b>
+          <span className="muted">aguardando aprovação</span>
+        </Card>
+        <Card style={{ padding: "var(--space-md)" }}>
+          <b style={{ display: "block", fontSize: "var(--text-2xl)" }}>{stats.approved}</b>
+          <span className="muted">aprovados</span>
+        </Card>
       </div>
-      <h3 className="section-heading">Checklist do projeto</h3>
-      <div className="checklist">
+
+      <h3 style={{ margin: "var(--space-lg) 0 var(--space-sm)" }}>Checklist do projeto</h3>
+      <div style={{ display: "grid", gap: "var(--space-xs)" }}>
         {checklist.map((item) => (
-          <div key={item.label} className={`checklist-item${item.done ? " done" : ""}`}>
-            <span className="check-icon">{item.done ? "✓" : "•"}</span>
-            <div className="check-label">
-              <div className="check-title">{item.label}</div>
-            </div>
+          <div key={item.label} className="field-card" style={{ display: "flex", alignItems: "center", gap: "var(--space-sm)" }}>
+            <span style={{ width: 20 }}>{item.done ? "✓" : "•"}</span>
+            <span>{item.label}</span>
           </div>
         ))}
       </div>
-    </section>
+    </div>
   );
 }
