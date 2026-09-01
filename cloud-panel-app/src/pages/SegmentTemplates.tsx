@@ -51,9 +51,12 @@ export function SegmentTemplates() {
   if (!templates) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Templates de Segmento</h1>
-      <p style={{ color: "var(--text-dim)" }}>Somente leitura — criar/editar template continua via script local.</p>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Templates de Segmento</h2>
+        <span className="step">somente leitura</span>
+      </div>
+      <p style={{ color: "var(--muted)" }}>Criar/editar template continua via script local.</p>
       {templates.length === 0 ? <p>Nenhum template registrado ainda.</p> : null}
       {templates.map((template) => (
         <section key={template.id} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>

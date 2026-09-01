@@ -146,8 +146,11 @@ export function OfferTypeLearning() {
   if (!loaded) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Aprendizado por Tipo de Oferta</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Aprendizado por Tipo de Oferta</h2>
+        <span className="step">global</span>
+      </div>
       {OFFER_TYPES.map(([type, label]) => {
         const node = store.types[type];
         const entries = Array.isArray(node?.entries) ? node.entries : [];

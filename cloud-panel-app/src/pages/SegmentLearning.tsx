@@ -157,8 +157,11 @@ export function SegmentLearning() {
   if (!loaded) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Aprendizado do Segmento</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Aprendizado do Segmento</h2>
+        <span className="step">aprendizado</span>
+      </div>
       {nodes.length === 0 ? <p>Este projeto ainda não tem Setor/Categoria/Especialidade definidos em Empresa.</p> : null}
       {nodes.map((node) => {
         const entries = entriesOf(store.nodes[node.path]);
