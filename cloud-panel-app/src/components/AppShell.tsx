@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, Outlet, useLocation, useParams } from "react-router-dom";
+import { Link, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/lib/supabaseClient";
 
 interface Project {
@@ -18,6 +18,8 @@ const PROJECT_TABS: Array<[string, string]> = [
   ["aprendizado", "Aprendizado"],
 ];
 
+const ACCOUNT_TAB: [string, string] = ["/conta", "Conta e token"];
+
 const GLOBAL_TABS: Array<[string, string]> = [
   ["/aprendizado/tipos-de-oferta", "Tipos de Oferta"],
   ["/aprendizado/templates", "Templates de Segmento"],
@@ -27,17 +29,25 @@ const GLOBAL_TABS: Array<[string, string]> = [
 export function AppShell() {
   const { projectId } = useParams<{ projectId: string }>();
   const location = useLocation();
-  const [projects, setProjects] = useState<Project[]>([]);
+  const navigate = useNavigate();
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [projectsError, setProjectsError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase
       .from("projects")
       .select("id, name, slug")
       .order("name")
-      .then(({ data }) => setProjects(data || []));
+      .then(({ data, error }) => {
+        if (error) {
+          setProjectsError(error.message);
+          return;
+        }
+        setProjects(data || []);
+      });
   }, []);
 
-  const selected = projects.find((p) => p.id === projectId);
+  const selected = projects?.find((p) => p.id === projectId);
 
   return (
     <>
@@ -52,7 +62,7 @@ export function AppShell() {
             </div>
           </div>
           <div className="hero-metrics">
-            <div className="metric"><b>{projects.length}</b><span>projetos</span></div>
+            <div className="metric"><b>{projects?.length ?? 0}</b><span>projetos</span></div>
             <div className="metric"><b>{selected ? selected.name : "--"}</b><span>selecionado</span></div>
             <div className="metric"><b>Nuvem</b><span>sincronizado com o Supabase</span></div>
           </div>
@@ -60,9 +70,9 @@ export function AppShell() {
       </header>
       <main className="wrap design-shell">
         <aside className="card sidebar">
-          <div className="section-title"><h2>Projetos</h2><span className="pill">{projects.length}</span></div>
+          <div className="section-title"><h2>Projetos</h2><span className="pill">{projects?.length ?? 0}</span></div>
           <div className="projects">
-            {projects.map((project) => (
+            {(projects || []).map((project) => (
               <Link
                 key={project.id}
                 to={`/projects/${project.id}/visao-geral`}
@@ -72,17 +82,24 @@ export function AppShell() {
                 <strong>{project.name}</strong>
               </Link>
             ))}
-            {projects.length === 0 ? <p className="muted">Nenhum projeto ainda.</p> : null}
+            {projectsError ? <p className="muted">Erro: {projectsError}</p> : null}
+            {!projectsError && projects === null ? <p className="muted">Carregando...</p> : null}
+            {!projectsError && projects !== null && projects.length === 0 ? <p className="muted">Nenhum projeto ainda.</p> : null}
           </div>
         </aside>
         <nav className="card section-nav" aria-label="Seções do painel">
-          {(projectId ? PROJECT_TABS : GLOBAL_TABS).map(([target, label]) => {
-            const to = projectId ? `/projects/${projectId}/${target}` : target;
+          {(projectId ? [...PROJECT_TABS, ACCOUNT_TAB] : GLOBAL_TABS).map(([target, label]) => {
+            const to = projectId && !target.startsWith("/") ? `/projects/${projectId}/${target}` : target;
             const active = location.pathname === to;
             return (
-              <Link key={to} to={to} className={`tab-button${active ? " active" : ""}`}>
+              <button
+                key={to}
+                type="button"
+                className={`tab-button${active ? " active" : ""}`}
+                onClick={() => navigate(to)}
+              >
                 {label}
-              </Link>
+              </button>
             );
           })}
         </nav>
