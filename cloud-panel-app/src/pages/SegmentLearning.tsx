@@ -1,8 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
 import { upsertById, removeById } from "@/lib/contentStrategy";
 import { segmentNodesForProject, type SegmentNodeRef, type LearningEntry } from "@/lib/segmentLearning";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 
 interface SegmentLearningStore {
   nodes: Record<string, { label: string; entries: LearningEntry[] }>;
@@ -29,7 +32,7 @@ function entriesOf(node: { entries?: unknown } | undefined): LearningEntry[] {
 }
 
 export function SegmentLearning() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [nodes, setNodes] = useState<SegmentNodeRef[]>([]);
   const [store, setStore] = useState<SegmentLearningStore>(EMPTY_STORE);
   const [rowId, setRowId] = useState<string | null>(null);
@@ -41,16 +44,16 @@ export function SegmentLearning() {
   const [draftFile, setDraftFile] = useState<File | null>(null);
 
   async function load() {
-    const { data: project, error: projectError } = await supabase
+    const { data: projectData, error: projectError } = await supabase
       .from("projects")
       .select("company_profile")
-      .eq("id", projectId)
+      .eq("id", project.id)
       .single();
     if (projectError) {
       setError(projectError.message);
       return;
     }
-    const profile = (project.company_profile || {}) as Record<string, unknown>;
+    const profile = (projectData.company_profile || {}) as Record<string, unknown>;
     setNodes(segmentNodesForProject(
       String(profile.segmentGroup || ""),
       String(profile.segmentCategory || ""),
@@ -79,7 +82,7 @@ export function SegmentLearning() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [project.id]);
 
   async function ensureSignedUrl(entry: LearningEntry) {
     if (!entry.storagePath || signedUrls[entry.id]) return;
@@ -158,23 +161,20 @@ export function SegmentLearning() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Aprendizado do Segmento</h2>
-        <span className="step">aprendizado</span>
-      </div>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Aprendizado do Segmento</h2>
       {nodes.length === 0 ? <p>Este projeto ainda não tem Setor/Categoria/Especialidade definidos em Empresa.</p> : null}
       {nodes.map((node) => {
         const entries = entriesOf(store.nodes[node.path]);
         return (
-          <section key={node.path} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Card key={node.path} style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
             <h2 style={{ margin: 0 }}>{node.level}: {node.label || "(sem nome)"}</h2>
             {entries.map((entry) => (
-              <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div key={entry.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 {entry.kind === "image" && signedUrls[entry.id] ? (
                   <img src={signedUrls[entry.id]} alt={entry.title || entry.text} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4 }} />
                 ) : null}
                 <span style={{ flex: 1 }}>[{entry.bucket}] {entry.text}</span>
-                <button type="button" className="danger" onClick={() => deleteEntry(node.path, entry)} disabled={busy}>Apagar</button>
+                <Button variant="ghost" onClick={() => deleteEntry(node.path, entry)} disabled={busy}>Apagar</Button>
               </div>
             ))}
             {draft?.path === node.path ? (
@@ -194,14 +194,14 @@ export function SegmentLearning() {
                 ) : null}
                 <textarea placeholder="Texto do aprendizado" value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} required />
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button type="submit" className="primary" disabled={busy}>Salvar</button>
-                  <button type="button" onClick={() => { setDraft(null); setDraftFile(null); }}>Cancelar</button>
+                  <Button type="submit" disabled={busy}>Salvar</Button>
+                  <Button variant="ghost" onClick={() => { setDraft(null); setDraftFile(null); }}>Cancelar</Button>
                 </div>
               </form>
             ) : (
-              <button type="button" onClick={() => setDraft(newDraft(node.path))} disabled={!rowId}>+ Nova entrada</button>
+              <Button variant="ghost" onClick={() => setDraft(newDraft(node.path))} disabled={!rowId}>+ Nova entrada</Button>
             )}
-          </section>
+          </Card>
         );
       })}
     </div>

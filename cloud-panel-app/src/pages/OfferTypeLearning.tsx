@@ -1,6 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { upsertById, removeById } from "@/lib/contentStrategy";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 
 interface LearningEntry {
   id: string;
@@ -147,30 +149,27 @@ export function OfferTypeLearning() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Aprendizado por Tipo de Oferta</h2>
-        <span className="step">global</span>
-      </div>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Aprendizado por Tipo de Oferta</h2>
       {OFFER_TYPES.map(([type, label]) => {
         const node = store.types[type];
         const entries = Array.isArray(node?.entries) ? node.entries : [];
         return (
-          <section key={type} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Card key={type} style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
             <h2 style={{ margin: 0 }}>{label}</h2>
             <textarea
               placeholder="Instrução base"
               value={instructionDrafts[type] ?? node?.baseInstruction ?? ""}
               onChange={(e) => setInstructionDrafts((prev) => ({ ...prev, [type]: e.target.value }))}
             />
-            <button type="button" onClick={() => saveInstruction(type)} disabled={busy}>Salvar instrução</button>
+            <Button onClick={() => saveInstruction(type)} disabled={busy}>Salvar instrução</Button>
 
             {entries.map((entry) => (
-              <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+              <div key={entry.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
                 {entry.kind === "image" && signedUrls[entry.id] ? (
                   <img src={signedUrls[entry.id]} alt={entry.title || entry.text} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4 }} />
                 ) : null}
                 <span style={{ flex: 1 }}>[{entry.bucket}] {entry.text}</span>
-                <button type="button" className="danger" onClick={() => deleteEntry(type, entry)} disabled={busy}>Apagar</button>
+                <Button variant="ghost" onClick={() => deleteEntry(type, entry)} disabled={busy}>Apagar</Button>
               </div>
             ))}
             {entryDraft?.type === type ? (
@@ -190,14 +189,14 @@ export function OfferTypeLearning() {
                 ) : null}
                 <textarea placeholder="Texto do aprendizado" value={entryDraft.text} onChange={(e) => setEntryDraft({ ...entryDraft, text: e.target.value })} required />
                 <div style={{ display: "flex", gap: 8 }}>
-                  <button type="submit" className="primary" disabled={busy}>Salvar</button>
-                  <button type="button" onClick={() => { setEntryDraft(null); setEntryDraftFile(null); }}>Cancelar</button>
+                  <Button type="submit" disabled={busy}>Salvar</Button>
+                  <Button variant="ghost" onClick={() => { setEntryDraft(null); setEntryDraftFile(null); }}>Cancelar</Button>
                 </div>
               </form>
             ) : (
-              <button type="button" onClick={() => setEntryDraft(newDraft(type))} disabled={!rowId}>+ Nova entrada</button>
+              <Button variant="ghost" onClick={() => setEntryDraft(newDraft(type))} disabled={!rowId}>+ Nova entrada</Button>
             )}
-          </section>
+          </Card>
         );
       })}
     </div>

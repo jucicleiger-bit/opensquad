@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { Card } from "@/components/Card";
 
 interface TemplatePiece {
   key: string;
@@ -52,14 +53,11 @@ export function SegmentTemplates() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Templates de Segmento</h2>
-        <span className="step">somente leitura</span>
-      </div>
-      <p style={{ color: "var(--muted)" }}>Criar/editar template continua via script local.</p>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Templates de Segmento</h2>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>Somente leitura — criar/editar template continua via script local.</p>
       {templates.length === 0 ? <p>Nenhum template registrado ainda.</p> : null}
       {templates.map((template) => (
-        <section key={template.id} className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <Card key={template.id} style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
           <h2 style={{ margin: 0 }}>{template.label}</h2>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
             {(Array.isArray(template?.pieces) ? template.pieces : []).map((piece) => {
@@ -78,7 +76,7 @@ export function SegmentTemplates() {
               );
             })}
           </div>
-        </section>
+        </Card>
       ))}
     </div>
   );
