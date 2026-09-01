@@ -58,8 +58,11 @@ export function CalendarPage() {
   const groups = groupByDay(rows, (row) => row.run_at.slice(0, 10));
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Calendário</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Calendário</h2>
+        <span className="step">agenda</span>
+      </div>
       {groups.length === 0 ? <p>Nada agendado.</p> : null}
       {groups.map((group) => (
         <section key={group.day}>
@@ -70,7 +73,7 @@ export function CalendarPage() {
                 <div>
                   <strong>{row.content_items?.channel}</strong> — {STATUS_LABEL[row.status] || row.status}
                   <br />
-                  <span style={{ color: "var(--text-dim)" }}>{row.run_at.slice(11, 16)}</span>
+                  <span style={{ color: "var(--muted)" }}>{row.run_at.slice(11, 16)}</span>
                 </div>
                 {row.status === "pending" ? (
                   <input

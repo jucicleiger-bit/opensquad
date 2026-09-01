@@ -80,8 +80,11 @@ export function Approval() {
   const groups = groupByDay(items, scheduledDate);
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Aprovação</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Conteúdos gerados</h2>
+        <span className="step">revisão</span>
+      </div>
       {groups.length === 0 ? <p>Nada aguardando aprovação.</p> : null}
       {groups.map((group) => (
         <section key={group.day}>
