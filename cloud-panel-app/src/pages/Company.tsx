@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
 import { approveBrandDocument, type BrandDocument } from "@/lib/approveBrandDocument";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 
 interface CompanyProfile {
   segmentGroup: string; segmentCategory: string; segmentSpecialty: string;
@@ -85,7 +88,7 @@ function BrandDocumentSection({
 }) {
   const hasContent = Object.keys(doc.blocks).length > 0;
   return (
-    <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <Card style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <h2 style={{ margin: 0 }}>{title}</h2>
         <span style={{ color: "var(--muted)" }}>{doc.status}</span>
@@ -102,16 +105,16 @@ function BrandDocumentSection({
         );
       })}
       {hasContent && doc.status !== "approved" ? (
-        <button type="button" className="primary" onClick={onApprove} disabled={busy}>
+        <Button type="button" onClick={onApprove} disabled={busy}>
           Aprovar
-        </button>
+        </Button>
       ) : null}
-    </section>
+    </Card>
   );
 }
 
 export function Company() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [profile, setProfile] = useState<CompanyProfile>(EMPTY_PROFILE);
   const [brandXray, setBrandXray] = useState<BrandDocument | null>(null);
   const [brandBriefing, setBrandBriefing] = useState<BrandDocument | null>(null);
@@ -123,7 +126,7 @@ export function Company() {
     const { data, error: queryError } = await supabase
       .from("projects")
       .select("company_profile, brand_xray, brand_briefing")
-      .eq("id", projectId)
+      .eq("id", project.id)
       .single();
     if (queryError) {
       setError(queryError.message);
@@ -138,7 +141,7 @@ export function Company() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [project.id]);
 
   function updateField(key: keyof CompanyProfile, value: string) {
     if (key === "tone" || key === "contentGoals") {
@@ -150,7 +153,7 @@ export function Company() {
 
   async function saveProfile() {
     setBusy(true);
-    const { error: updateError } = await supabase.from("projects").update({ company_profile: profile }).eq("id", projectId);
+    const { error: updateError } = await supabase.from("projects").update({ company_profile: profile }).eq("id", project.id);
     if (updateError) setError(updateError.message);
     setBusy(false);
   }
@@ -159,7 +162,7 @@ export function Company() {
     if (!brandXray) return;
     setBusy(true);
     const approved = approveBrandDocument(brandXray);
-    const { error: updateError } = await supabase.from("projects").update({ brand_xray: approved }).eq("id", projectId);
+    const { error: updateError } = await supabase.from("projects").update({ brand_xray: approved }).eq("id", project.id);
     if (updateError) {
       setError(updateError.message);
     } else {
@@ -172,7 +175,7 @@ export function Company() {
     if (!brandBriefing) return;
     setBusy(true);
     const approved = approveBrandDocument(brandBriefing);
-    const { error: updateError } = await supabase.from("projects").update({ brand_briefing: approved }).eq("id", projectId);
+    const { error: updateError } = await supabase.from("projects").update({ brand_briefing: approved }).eq("id", project.id);
     if (updateError) {
       setError(updateError.message);
     } else {
@@ -185,13 +188,13 @@ export function Company() {
   if (!loaded || !brandXray || !brandBriefing) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Empresa</h2>
-        <span className="step">coleta rápida</span>
-      </div>
+    <div>
+      <h2 style={{ margin: "0 0 var(--space-2xs)" }}>Empresa / Raio-X</h2>
+      <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>
+        Cadastre os fatos da empresa. A identidade visual fica na aba Imagem e identidade visual.
+      </p>
 
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+      <Card style={{ padding: 20 }}>
         <h2 style={{ margin: 0 }}>Perfil</h2>
         <div className="field-card">
           <label>Foco comercial</label>
@@ -240,10 +243,10 @@ export function Company() {
             />
           </div>
         </div>
-        <button type="button" className="primary" onClick={saveProfile} disabled={busy}>
+        <Button type="button" onClick={saveProfile} disabled={busy}>
           Salvar perfil
-        </button>
-      </section>
+        </Button>
+      </Card>
 
       <BrandDocumentSection title="Raio-X de marca" blockDefs={BRAND_XRAY_BLOCKS} doc={brandXray} onApprove={approveXray} busy={busy} />
       <BrandDocumentSection title="Briefing" blockDefs={BRAND_BRIEFING_BLOCKS} doc={brandBriefing} onApprove={approveBriefing} busy={busy} />

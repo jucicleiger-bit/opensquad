@@ -1,5 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { supabase } from "@/lib/supabaseClient";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 
 type Stage = "loading" | "no-factor" | "enrolling" | "verified";
 
@@ -53,11 +55,8 @@ export function Account() {
   }
 
   return (
-    <div className="card">
-      <div className="section-title">
-        <h2>Autenticação em duas etapas</h2>
-        <span className="step">segurança</span>
-      </div>
+    <Card style={{ padding: 20, maxWidth: 480, margin: "40px auto" }}>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Conta e token</h2>
 
       {stage === "loading" ? <p>Carregando...</p> : null}
 
@@ -68,9 +67,9 @@ export function Account() {
       {stage === "no-factor" ? (
         <>
           <p>Nenhum fator de MFA ativo — hoje o login pede só senha.</p>
-          <button type="button" className="primary" onClick={startEnroll} disabled={busy}>
+          <Button type="button" onClick={startEnroll} disabled={busy}>
             {busy ? "Gerando..." : "Ativar MFA"}
-          </button>
+          </Button>
         </>
       ) : null}
 
@@ -91,13 +90,13 @@ export function Account() {
             onChange={(e) => setCode(e.target.value)}
             required
           />
-          <button type="submit" className="primary" disabled={busy}>
+          <Button type="submit" disabled={busy}>
             {busy ? "Confirmando..." : "Confirmar"}
-          </button>
+          </Button>
         </form>
       ) : null}
 
       {error ? <p style={{ color: "var(--bad)" }}>{error}</p> : null}
-    </div>
+    </Card>
   );
 }
