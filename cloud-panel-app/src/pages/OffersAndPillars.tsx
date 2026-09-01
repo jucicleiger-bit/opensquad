@@ -158,8 +158,11 @@ export function OffersAndPillars() {
   if (!loaded) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Ofertas e Pilares</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Ofertas e Pilares</h2>
+        <span className="step">assuntos</span>
+      </div>
 
       <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <h2 style={{ margin: 0 }}>Grupos de ofertas</h2>

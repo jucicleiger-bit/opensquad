@@ -182,8 +182,11 @@ export function References() {
   if (!loaded) return <div className="card">Carregando...</div>;
 
   return (
-    <div style={{ maxWidth: 720, margin: "40px auto", display: "flex", flexDirection: "column", gap: 24 }}>
-      <h1>Referências</h1>
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div className="section-title">
+        <h2>Referências</h2>
+        <span className="step">identidade visual</span>
+      </div>
 
       <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {references.map((reference) => (
