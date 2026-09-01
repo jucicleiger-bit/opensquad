@@ -1,8 +1,12 @@
 // src/pages/Approval.tsx
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
 import { groupByDay } from "@/lib/groupByDay";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
+import styles from "./Approval.module.css";
 
 interface ContentItem {
   id: string;
@@ -20,7 +24,7 @@ function scheduledDate(item: ContentItem): string | null {
 }
 
 export function Approval() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [items, setItems] = useState<ContentItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -31,7 +35,7 @@ export function Approval() {
     const { data, error: queryError } = await supabase
       .from("content_items")
       .select("id, channel, status, copy, media_url, content_id, schedules(run_at)")
-      .eq("project_id", projectId)
+      .eq("project_id", project.id)
       .in("status", ["draft", "approved"]);
     if (queryError) {
       setError(queryError.message);
@@ -43,7 +47,7 @@ export function Approval() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [project.id]);
 
   async function ensureSignedUrl(item: ContentItem) {
     if (!item.media_url || signedUrls[item.id]) return;
@@ -81,28 +85,27 @@ export function Approval() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Conteúdos gerados</h2>
-        <span className="step">revisão</span>
+      <div>
+        <h2 style={{ margin: "0 0 var(--space-lg)" }}>Aguardando aprovação</h2>
       </div>
       {groups.length === 0 ? <p>Nada aguardando aprovação.</p> : null}
       {groups.map((group) => (
         <section key={group.day}>
           <h2>{group.day}</h2>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div className={styles.list}>
             {group.items.map((item) => {
               const draft = drafts[item.id] ?? item.copy ?? "";
               const dirty = draft !== (item.copy || "");
               return (
-                <div key={item.id} className="content-card">
-                  <div className={`content-preview channel-${item.channel}${!item.media_url ? " empty" : ""}`}>
+                <Card key={item.id} className={styles.card}>
+                  <div className={styles.phone}>
                     {item.media_url ? (
                       signedUrls[item.id] ? (
                         <img src={signedUrls[item.id]} alt={item.content_id || item.id} />
                       ) : (
-                        <button type="button" onClick={() => ensureSignedUrl(item)}>
+                        <Button variant="secondary" onClick={() => ensureSignedUrl(item)}>
                           Ver imagem
-                        </button>
+                        </Button>
                       )
                     ) : (
                       <span>Sem imagem</span>
@@ -114,37 +117,35 @@ export function Approval() {
                       <span className="pill">{item.status}</span>
                     </div>
                     <textarea
+                      className={styles.caption}
                       rows={4}
                       value={draft}
                       onChange={(e) => setDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
                     />
-                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                    <div className={styles.actions}>
                       {dirty ? (
-                        <button type="button" onClick={() => saveCaption(item)} disabled={busyId === item.id}>
+                        <Button onClick={() => saveCaption(item)} disabled={busyId === item.id}>
                           Salvar legenda
-                        </button>
+                        </Button>
                       ) : null}
                       {item.status !== "approved" ? (
-                        <button
-                          type="button"
-                          className="primary"
+                        <Button
                           onClick={() => approve(item)}
                           disabled={busyId === item.id}
                         >
                           Aprovar
-                        </button>
+                        </Button>
                       ) : null}
-                      <button
-                        type="button"
-                        className="danger"
+                      <Button
+                        variant="ghost"
                         onClick={() => reject(item)}
                         disabled={busyId === item.id}
                       >
                         Rejeitar
-                      </button>
+                      </Button>
                     </div>
                   </div>
-                </div>
+                </Card>
               );
             })}
           </div>

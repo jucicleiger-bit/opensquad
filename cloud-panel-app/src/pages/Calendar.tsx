@@ -1,8 +1,10 @@
 // src/pages/Calendar.tsx
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
 import { groupByDay } from "@/lib/groupByDay";
+import { Card } from "@/components/Card";
 
 interface ScheduleRow {
   id: string;
@@ -19,7 +21,7 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export function CalendarPage() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [rows, setRows] = useState<ScheduleRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -28,7 +30,7 @@ export function CalendarPage() {
     const { data, error: queryError } = await supabase
       .from("schedules")
       .select("id, run_at, status, content_items!inner(id, channel, status, content_id)")
-      .eq("content_items.project_id", projectId)
+      .eq("content_items.project_id", project.id)
       .order("run_at");
     if (queryError) {
       setError(queryError.message);
@@ -40,7 +42,7 @@ export function CalendarPage() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [project.id]);
 
   async function reschedule(row: ScheduleRow, newDate: string) {
     if (!newDate) return;
@@ -59,9 +61,8 @@ export function CalendarPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Calendário</h2>
-        <span className="step">agenda</span>
+      <div>
+        <h2 style={{ margin: 0 }}>Calendário</h2>
       </div>
       {groups.length === 0 ? <p>Nada agendado.</p> : null}
       {groups.map((group) => (
@@ -69,7 +70,7 @@ export function CalendarPage() {
           <h2>{group.day}</h2>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {group.items.map((row) => (
-              <div key={row.id} className="card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <Card key={row.id} style={{ padding: 14 }}>
                 <div>
                   <strong>{row.content_items?.channel}</strong> — {STATUS_LABEL[row.status] || row.status}
                   <br />
@@ -83,7 +84,7 @@ export function CalendarPage() {
                     onChange={(e) => reschedule(row, e.target.value)}
                   />
                 ) : null}
-              </div>
+              </Card>
             ))}
           </div>
         </section>

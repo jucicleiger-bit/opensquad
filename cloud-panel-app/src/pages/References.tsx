@@ -1,8 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
 import { upsertById, removeById } from "@/lib/contentStrategy";
 import { REFERENCE_CATEGORIES, REFERENCE_WEIGHTS, roleForCategory, automaticRuleForCategory, buildReferenceStoragePath } from "@/lib/references";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 
 interface Reference {
   id: string;
@@ -41,7 +44,7 @@ function draftFromReference(reference: Reference): ReferenceDraft {
 }
 
 export function References() {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [slug, setSlug] = useState<string | null>(null);
   const [brandProfile, setBrandProfile] = useState<Record<string, unknown>>({});
   const [error, setError] = useState<string | null>(null);
@@ -59,7 +62,7 @@ export function References() {
     const { data, error: queryError } = await supabase
       .from("projects")
       .select("slug, brand_profile")
-      .eq("id", projectId)
+      .eq("id", project.id)
       .single();
     if (queryError) {
       setError(queryError.message);
@@ -73,7 +76,7 @@ export function References() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [project.id]);
 
   async function ensureSignedUrl(reference: Reference) {
     if (!reference.storagePath || signedUrls[reference.id]) return;
@@ -91,7 +94,7 @@ export function References() {
   async function persist(nextReferences: Reference[]): Promise<boolean> {
     setBusy(true);
     const nextBrandProfile = { ...brandProfile, references: nextReferences };
-    const { error: updateError } = await supabase.from("projects").update({ brand_profile: nextBrandProfile }).eq("id", projectId);
+    const { error: updateError } = await supabase.from("projects").update({ brand_profile: nextBrandProfile }).eq("id", project.id);
     if (updateError) {
       setError(updateError.message);
       setBusy(false);
@@ -183,12 +186,14 @@ export function References() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Referências</h2>
-        <span className="step">identidade visual</span>
+      <div>
+        <h2 style={{ margin: "0 0 var(--space-2xs)" }}>Imagem e identidade visual</h2>
+        <p className="muted" style={{ marginTop: 0, marginBottom: 20 }}>
+          Referências visuais usadas para orientar a geração de conteúdo.
+        </p>
       </div>
 
-      <section className="card">
+      <Card style={{ padding: 20 }}>
         <div className="reference-gallery">
           {references.map((reference) => (
             <div key={reference.id} className="reference-card">
@@ -207,8 +212,8 @@ export function References() {
                 </div>
                 <p className="reference-note">{reference.instruction || "Sem observação."}</p>
                 <div className="card-actions">
-                  <button type="button" onClick={() => setEditDraft(draftFromReference(reference))}>Editar</button>
-                  <button type="button" className="danger" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</button>
+                  <Button onClick={() => setEditDraft(draftFromReference(reference))}>Editar</Button>
+                  <Button variant="ghost" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</Button>
                 </div>
               </div>
             </div>
@@ -228,14 +233,14 @@ export function References() {
               <input type="checkbox" checked={editDraft.useInNextGeneration} onChange={(e) => setEditDraft({ ...editDraft, useInNextGeneration: e.target.checked })} /> Usar na próxima geração
             </label>
             <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" className="primary" disabled={busy}>Salvar</button>
-              <button type="button" onClick={() => setEditDraft(null)}>Cancelar</button>
+              <Button type="submit" disabled={busy}>Salvar</Button>
+              <Button type="button" variant="secondary" onClick={() => setEditDraft(null)}>Cancelar</Button>
             </div>
           </form>
         ) : null}
-      </section>
+      </Card>
 
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <Card style={{ padding: 20 }}>
         <h2 style={{ margin: 0 }}>Adicionar referência</h2>
         <form onSubmit={addReference} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <input type="file" name="file" accept="image/*,.pdf,.txt,.md,.doc,.docx" required />
@@ -243,9 +248,9 @@ export function References() {
             {REFERENCE_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
           </select>
           <input type="text" placeholder="Observação curta" value={newInstruction} onChange={(e) => setNewInstruction(e.target.value)} />
-          <button type="submit" className="primary" disabled={busy}>Enviar</button>
+          <Button type="submit" disabled={busy}>Enviar</Button>
         </form>
-      </section>
+      </Card>
     </div>
   );
 }
