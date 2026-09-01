@@ -43,6 +43,11 @@ export function ProjectWorkspaceLayout() {
       .eq("id", projectId)
       .single();
     if (queryError) {
+      if (queryError.code === "PGRST116") {
+        setProject(null);
+        setError(null);
+        return;
+      }
       setError(queryError.message);
       return;
     }
