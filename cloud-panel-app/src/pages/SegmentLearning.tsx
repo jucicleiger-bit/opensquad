@@ -195,7 +195,7 @@ export function SegmentLearning() {
                 <textarea placeholder="Texto do aprendizado" value={draft.text} onChange={(e) => setDraft({ ...draft, text: e.target.value })} required />
                 <div style={{ display: "flex", gap: 8 }}>
                   <Button type="submit" disabled={busy}>Salvar</Button>
-                  <Button variant="ghost" onClick={() => { setDraft(null); setDraftFile(null); }}>Cancelar</Button>
+                  <Button type="button" variant="ghost" onClick={() => { setDraft(null); setDraftFile(null); }}>Cancelar</Button>
                 </div>
               </form>
             ) : (

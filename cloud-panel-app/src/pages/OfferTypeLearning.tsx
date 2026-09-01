@@ -190,7 +190,7 @@ export function OfferTypeLearning() {
                 <textarea placeholder="Texto do aprendizado" value={entryDraft.text} onChange={(e) => setEntryDraft({ ...entryDraft, text: e.target.value })} required />
                 <div style={{ display: "flex", gap: 8 }}>
                   <Button type="submit" disabled={busy}>Salvar</Button>
-                  <Button variant="ghost" onClick={() => { setEntryDraft(null); setEntryDraftFile(null); }}>Cancelar</Button>
+                  <Button type="button" variant="ghost" onClick={() => { setEntryDraft(null); setEntryDraftFile(null); }}>Cancelar</Button>
                 </div>
               </form>
             ) : (
