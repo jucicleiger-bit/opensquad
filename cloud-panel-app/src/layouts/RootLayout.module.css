@@ -1,0 +1,48 @@
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  border-bottom: 1px solid var(--line);
+  background: rgba(6, 6, 9, 0.66);
+  backdrop-filter: blur(22px) saturate(140%);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  text-decoration: none;
+}
+
+.brandMark {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  flex: 0 0 auto;
+  background: var(--gradient-brand);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 14px;
+  color: var(--accent-ink);
+  box-shadow: 0 4px 14px -4px oklch(from var(--accent) l c h / 60%);
+}
+
+.brandName {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.content {
+  min-height: calc(100vh - 63px);
+  background:
+    radial-gradient(760px 420px at 50% -120px, oklch(from var(--accent) l c h / 10%), transparent 70%),
+    var(--bg);
+}

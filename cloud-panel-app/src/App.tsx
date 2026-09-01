@@ -5,13 +5,15 @@ import { Overview } from "@/pages/Overview";
 import { Approval } from "@/pages/Approval";
 import { CalendarPage } from "@/pages/Calendar";
 import { Company } from "@/pages/Company";
-import { OffersAndPillars } from "@/pages/OffersAndPillars";
+import { Offers } from "@/pages/Offers";
+import { Pillars } from "@/pages/Pillars";
 import { References } from "@/pages/References";
 import { SegmentLearning } from "@/pages/SegmentLearning";
 import { OfferTypeLearning } from "@/pages/OfferTypeLearning";
 import { SegmentTemplates } from "@/pages/SegmentTemplates";
 import { Account } from "@/pages/Account";
-import { AppShell } from "@/components/AppShell";
+import { RootLayout } from "@/layouts/RootLayout";
+import { ProjectWorkspaceLayout } from "@/layouts/ProjectWorkspaceLayout";
 import { RequireAuth } from "@/components/RequireAuth";
 
 export function App() {
@@ -21,21 +23,24 @@ export function App() {
       <Route
         element={
           <RequireAuth>
-            <AppShell />
+            <RootLayout />
           </RequireAuth>
         }
       >
         <Route path="/" element={<Dashboard />} />
         <Route path="/conta" element={<Account />} />
-        <Route path="/projects/:projectId/visao-geral" element={<Overview />} />
-        <Route path="/projects/:projectId/aprovacao" element={<Approval />} />
-        <Route path="/projects/:projectId/calendario" element={<CalendarPage />} />
-        <Route path="/projects/:projectId/empresa" element={<Company />} />
-        <Route path="/projects/:projectId/ofertas" element={<OffersAndPillars />} />
-        <Route path="/projects/:projectId/referencias" element={<References />} />
-        <Route path="/projects/:projectId/aprendizado" element={<SegmentLearning />} />
         <Route path="/aprendizado/tipos-de-oferta" element={<OfferTypeLearning />} />
         <Route path="/aprendizado/templates" element={<SegmentTemplates />} />
+        <Route path="/projects/:projectId" element={<ProjectWorkspaceLayout />}>
+          <Route path="visao-geral" element={<Overview />} />
+          <Route path="empresa" element={<Company />} />
+          <Route path="referencias" element={<References />} />
+          <Route path="ofertas" element={<Offers />} />
+          <Route path="pilares" element={<Pillars />} />
+          <Route path="aguardando" element={<Approval />} />
+          <Route path="calendario" element={<CalendarPage />} />
+          <Route path="aprendizado" element={<SegmentLearning />} />
+        </Route>
       </Route>
     </Routes>
   );
