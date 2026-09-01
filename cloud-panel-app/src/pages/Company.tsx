@@ -184,8 +184,8 @@ export function Company() {
     setBusy(false);
   }
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!loaded || !brandXray || !brandBriefing) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!loaded || !brandXray || !brandBriefing) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   return (
     <div>
