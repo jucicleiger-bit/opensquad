@@ -167,7 +167,7 @@ export function OffersAndPillars() {
       <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <h2 style={{ margin: 0 }}>Grupos de ofertas</h2>
         {strategy.offerGroups.map((group) => (
-          <div key={group.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={group.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>{group.name} — combo {group.comboChance}%</span>
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" onClick={() => setGroupDraft(group)}>Editar</button>
@@ -195,7 +195,7 @@ export function OffersAndPillars() {
       <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <h2 style={{ margin: 0 }}>Ofertas</h2>
         {strategy.offers.map((offer) => (
-          <div key={offer.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={offer.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>{offer.name} ({offer.type}) {offer.active ? "" : "— inativa"}</span>
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" onClick={() => setOfferDraft(offer)}>Editar</button>
@@ -237,7 +237,7 @@ export function OffersAndPillars() {
       <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <h2 style={{ margin: 0 }}>Pilares</h2>
         {strategy.pillars.map((pillar) => (
-          <div key={pillar.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={pillar.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span>
               <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: pillar.color, marginRight: 6 }} />
               {pillar.name} ({pillar.role}) {pillar.active ? "" : "— inativo"}

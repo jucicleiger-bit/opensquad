@@ -191,52 +191,54 @@ export function Company() {
         <span className="step">coleta rápida</span>
       </div>
 
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <h2 style={{ margin: 0 }}>Perfil</h2>
-        <div>
+        <div className="field-card">
           <label>Foco comercial</label>
-          <select
-            value={profile.audienceType}
-            onChange={(e) => updateField("audienceType", e.target.value)}
-            style={{ width: "100%" }}
-          >
+          <select value={profile.audienceType} onChange={(e) => updateField("audienceType", e.target.value)}>
             {AUDIENCE_TYPE_OPTIONS.map((opt) => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
           </select>
         </div>
-        {PROFILE_FIELDS.map(({ key, label, multiline }) => (
-          <div key={key}>
-            <label htmlFor={`field-${key}`}>{label}</label>
-            {multiline ? (
-              <textarea
-                id={`field-${key}`}
-                rows={3}
-                value={profile[key] as string}
-                onChange={(e) => updateField(key, e.target.value)}
-              />
-            ) : (
+        <div className="grid">
+          {PROFILE_FIELDS.filter(({ multiline }) => !multiline).map(({ key, label }) => (
+            <div key={key} className="field-card">
+              <label htmlFor={`field-${key}`}>{label}</label>
               <input
                 id={`field-${key}`}
                 type="text"
                 value={profile[key] as string}
                 onChange={(e) => updateField(key, e.target.value)}
               />
-            )}
+            </div>
+          ))}
+        </div>
+        {PROFILE_FIELDS.filter(({ multiline }) => multiline).map(({ key, label }) => (
+          <div key={key} className="field-card">
+            <label htmlFor={`field-${key}`}>{label}</label>
+            <textarea
+              id={`field-${key}`}
+              rows={3}
+              value={profile[key] as string}
+              onChange={(e) => updateField(key, e.target.value)}
+            />
           </div>
         ))}
-        <div>
-          <label htmlFor="field-tone">Tom de voz (separado por vírgula)</label>
-          <input id="field-tone" type="text" value={profile.tone.join(", ")} onChange={(e) => updateField("tone", e.target.value)} />
-        </div>
-        <div>
-          <label htmlFor="field-contentGoals">Interesses / objetivos das postagens (separado por vírgula)</label>
-          <input
-            id="field-contentGoals"
-            type="text"
-            value={profile.contentGoals.join(", ")}
-            onChange={(e) => updateField("contentGoals", e.target.value)}
-          />
+        <div className="grid">
+          <div className="field-card">
+            <label htmlFor="field-tone">Tom de voz (separado por vírgula)</label>
+            <input id="field-tone" type="text" value={profile.tone.join(", ")} onChange={(e) => updateField("tone", e.target.value)} />
+          </div>
+          <div className="field-card">
+            <label htmlFor="field-contentGoals">Interesses / objetivos das postagens (separado por vírgula)</label>
+            <input
+              id="field-contentGoals"
+              type="text"
+              value={profile.contentGoals.join(", ")}
+              onChange={(e) => updateField("contentGoals", e.target.value)}
+            />
+          </div>
         </div>
         <button type="button" className="primary" onClick={saveProfile} disabled={busy}>
           Salvar perfil
