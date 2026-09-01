@@ -94,52 +94,55 @@ export function Approval() {
               const draft = drafts[item.id] ?? item.copy ?? "";
               const dirty = draft !== (item.copy || "");
               return (
-                <div key={item.id} className="card">
-                  <p>
-                    <strong>{item.channel}</strong> — {item.status}
-                  </p>
-                  {item.media_url ? (
-                    signedUrls[item.id] ? (
-                      <img
-                        src={signedUrls[item.id]}
-                        alt={item.content_id || item.id}
-                        style={{ maxWidth: "100%", borderRadius: 8 }}
-                      />
+                <div key={item.id} className="content-card">
+                  <div className={`content-preview channel-${item.channel}${!item.media_url ? " empty" : ""}`}>
+                    {item.media_url ? (
+                      signedUrls[item.id] ? (
+                        <img src={signedUrls[item.id]} alt={item.content_id || item.id} />
+                      ) : (
+                        <button type="button" onClick={() => ensureSignedUrl(item)}>
+                          Ver imagem
+                        </button>
+                      )
                     ) : (
-                      <button type="button" onClick={() => ensureSignedUrl(item)}>
-                        Ver imagem
-                      </button>
-                    )
-                  ) : null}
-                  <textarea
-                    rows={4}
-                    value={draft}
-                    onChange={(e) => setDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
-                  />
-                  <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                    {dirty ? (
-                      <button type="button" onClick={() => saveCaption(item)} disabled={busyId === item.id}>
-                        Salvar legenda
-                      </button>
-                    ) : null}
-                    {item.status !== "approved" ? (
+                      <span>Sem imagem</span>
+                    )}
+                  </div>
+                  <div>
+                    <div className="content-meta">
+                      <span className="pill">{item.channel}</span>
+                      <span className="pill">{item.status}</span>
+                    </div>
+                    <textarea
+                      rows={4}
+                      value={draft}
+                      onChange={(e) => setDrafts((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                    />
+                    <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                      {dirty ? (
+                        <button type="button" onClick={() => saveCaption(item)} disabled={busyId === item.id}>
+                          Salvar legenda
+                        </button>
+                      ) : null}
+                      {item.status !== "approved" ? (
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={() => approve(item)}
+                          disabled={busyId === item.id}
+                        >
+                          Aprovar
+                        </button>
+                      ) : null}
                       <button
                         type="button"
-                        className="primary"
-                        onClick={() => approve(item)}
+                        className="danger"
+                        onClick={() => reject(item)}
                         disabled={busyId === item.id}
                       >
-                        Aprovar
+                        Rejeitar
                       </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="danger"
-                      onClick={() => reject(item)}
-                      disabled={busyId === item.id}
-                    >
-                      Rejeitar
-                    </button>
+                    </div>
                   </div>
                 </div>
               );

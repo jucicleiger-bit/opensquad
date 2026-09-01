@@ -188,26 +188,35 @@ export function References() {
         <span className="step">identidade visual</span>
       </div>
 
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {references.map((reference) => (
-          <div key={reference.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-            {reference.mimeType.startsWith("image/") && signedUrls[reference.id] ? (
-              <img src={signedUrls[reference.id]} alt={reference.filename} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4 }} />
-            ) : (
-              <span style={{ width: 64, height: 64, display: "flex", alignItems: "center", justifyContent: "center", background: "#eee", borderRadius: 4, fontSize: 11, textAlign: "center" }}>
-                {reference.storagePath ? reference.filename : "arquivo indisponível"}
-              </span>
-            )}
-            <span style={{ flex: 1 }}>{reference.filename} — {reference.referenceCategory} — peso {reference.weight}</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={() => setEditDraft(draftFromReference(reference))}>Editar</button>
-              <button type="button" className="danger" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</button>
+      <section className="card">
+        <div className="reference-gallery">
+          {references.map((reference) => (
+            <div key={reference.id} className="reference-card">
+              <div className="reference-thumb">
+                {reference.mimeType.startsWith("image/") && signedUrls[reference.id] ? (
+                  <img src={signedUrls[reference.id]} alt={reference.filename} />
+                ) : (
+                  <span>{reference.storagePath ? reference.filename : "arquivo indisponível"}</span>
+                )}
+              </div>
+              <div className="reference-body">
+                <div className="reference-name">{reference.filename}</div>
+                <div className="reference-meta">
+                  <span className="pill">{reference.referenceCategory}</span>
+                  <span className="pill">peso {reference.weight}</span>
+                </div>
+                <p className="reference-note">{reference.instruction || "Sem observação."}</p>
+                <div className="card-actions">
+                  <button type="button" onClick={() => setEditDraft(draftFromReference(reference))}>Editar</button>
+                  <button type="button" className="danger" onClick={() => deleteReference(reference)} disabled={busy}>Apagar</button>
+                </div>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
 
         {editDraft ? (
-          <form onSubmit={saveEdit} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <form onSubmit={saveEdit} className="reference-panel" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <select value={editDraft.referenceCategory} onChange={(e) => setEditDraft({ ...editDraft, referenceCategory: e.target.value })}>
               {REFERENCE_CATEGORIES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
