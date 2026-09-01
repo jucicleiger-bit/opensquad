@@ -1,7 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import { supabase } from "@/lib/supabaseClient";
 import { upsertById, removeById } from "@/lib/contentStrategy";
+import { Card } from "@/components/Card";
+import { Button } from "@/components/Button";
 
 interface OfferGroup {
   id: string;
@@ -28,12 +31,6 @@ interface Offer {
 interface Pillar {
   id: string;
   name: string;
-  role: string;
-  objective: string;
-  visualTreatment: string;
-  color: string;
-  weight: number;
-  active: boolean;
   [key: string]: unknown;
 }
 
@@ -53,30 +50,21 @@ const OFFER_TYPES: Array<[string, string]> = [
   ["social_proof", "Prova social"],
 ];
 
-const PILLAR_ROLES: Array<[string, string]> = [
-  ["ensina", "Ensina"], ["prova", "Prova"], ["posiciona", "Posiciona"], ["convida", "Convida"],
-];
-
-const PILLAR_VISUAL_TREATMENTS: Array<[string, string]> = [
-  ["cru", "Cru"], ["leve", "Leve"], ["desenhado", "Desenhado"],
-];
-
-export function OffersAndPillars() {
-  const { projectId } = useParams<{ projectId: string }>();
+export function Offers() {
+  const { project } = useOutletContext<WorkspaceContext>();
   const [strategy, setStrategy] = useState<ContentStrategy>(EMPTY_STRATEGY);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [offerDraft, setOfferDraft] = useState<Offer | null>(null);
-  const [pillarDraft, setPillarDraft] = useState<Pillar | null>(null);
   const [groupDraft, setGroupDraft] = useState<OfferGroup | null>(null);
 
   async function load() {
     const { data, error: queryError } = await supabase
       .from("projects")
       .select("content_strategy")
-      .eq("id", projectId)
+      .eq("id", project.id)
       .single();
     if (queryError) {
       setError(queryError.message);
@@ -94,11 +82,11 @@ export function OffersAndPillars() {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId]);
+  }, [project.id]);
 
   async function persist(next: ContentStrategy): Promise<boolean> {
     setBusy(true);
-    const { error: updateError } = await supabase.from("projects").update({ content_strategy: next }).eq("id", projectId);
+    const { error: updateError } = await supabase.from("projects").update({ content_strategy: next }).eq("id", project.id);
     if (updateError) {
       setError(updateError.message);
       setBusy(false);
@@ -115,12 +103,6 @@ export function OffersAndPillars() {
       cta: "", notes: "", active: true, pillarId: null, groupId: null,
     };
   }
-  function newPillarDraft(): Pillar {
-    return {
-      id: crypto.randomUUID(), name: "", role: "ensina", objective: "",
-      visualTreatment: "leve", color: "#7C7C7C", weight: 1, active: true,
-    };
-  }
   function newGroupDraft(): OfferGroup {
     return { id: crypto.randomUUID(), name: "", comboChance: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
   }
@@ -130,12 +112,6 @@ export function OffersAndPillars() {
     if (!offerDraft || !offerDraft.name.trim()) return;
     const ok = await persist({ ...strategy, offers: upsertById(strategy.offers, offerDraft) });
     if (ok) setOfferDraft(null);
-  }
-  async function savePillar(e: FormEvent) {
-    e.preventDefault();
-    if (!pillarDraft || !pillarDraft.name.trim()) return;
-    const ok = await persist({ ...strategy, pillars: upsertById(strategy.pillars, pillarDraft) });
-    if (ok) setPillarDraft(null);
   }
   async function saveGroup(e: FormEvent) {
     e.preventDefault();
@@ -147,31 +123,25 @@ export function OffersAndPillars() {
   async function deleteOffer(id: string) {
     await persist({ ...strategy, offers: removeById(strategy.offers, id) });
   }
-  async function deletePillar(id: string) {
-    await persist({ ...strategy, pillars: removeById(strategy.pillars, id) });
-  }
   async function deleteGroup(id: string) {
     await persist({ ...strategy, offerGroups: removeById(strategy.offerGroups, id) });
   }
 
-  if (error) return <div className="card">Erro: {error}</div>;
-  if (!loaded) return <div className="card">Carregando...</div>;
+  if (error) return <Card style={{ padding: 20 }}>Erro: {error}</Card>;
+  if (!loaded) return <Card style={{ padding: 20 }}>Carregando...</Card>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
-      <div className="section-title">
-        <h2>Ofertas e Pilares</h2>
-        <span className="step">assuntos</span>
-      </div>
+    <div>
+      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Ofertas e assuntos</h2>
 
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <h2 style={{ margin: 0 }}>Grupos de ofertas</h2>
+      <Card style={{ padding: 20, marginBottom: 20 }}>
+        <h3 style={{ marginTop: 0 }}>Grupos de ofertas</h3>
         {strategy.offerGroups.map((group) => (
-          <div key={group.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={group.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span>{group.name} — combo {group.comboChance}%</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={() => setGroupDraft(group)}>Editar</button>
-              <button type="button" className="danger" onClick={() => deleteGroup(group.id)} disabled={busy}>Apagar</button>
+            <div className="button-row" style={{ margin: 0 }}>
+              <Button variant="secondary" type="button" onClick={() => setGroupDraft(group)}>Editar</Button>
+              <Button variant="ghost" type="button" onClick={() => deleteGroup(group.id)} disabled={busy}>Apagar</Button>
             </div>
           </div>
         ))}
@@ -182,24 +152,24 @@ export function OffersAndPillars() {
               Chance de combo (%)
               <input type="number" min={0} max={100} value={groupDraft.comboChance} onChange={(e) => setGroupDraft({ ...groupDraft, comboChance: Number(e.target.value) })} />
             </label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" className="primary" disabled={busy}>Salvar</button>
-              <button type="button" onClick={() => setGroupDraft(null)}>Cancelar</button>
+            <div className="button-row">
+              <Button type="submit" disabled={busy}>Salvar</Button>
+              <Button variant="ghost" type="button" onClick={() => setGroupDraft(null)}>Cancelar</Button>
             </div>
           </form>
         ) : (
-          <button type="button" onClick={() => setGroupDraft(newGroupDraft())}>+ Novo grupo</button>
+          <Button variant="secondary" type="button" onClick={() => setGroupDraft(newGroupDraft())}>+ Novo grupo</Button>
         )}
-      </section>
+      </Card>
 
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <h2 style={{ margin: 0 }}>Ofertas</h2>
+      <Card style={{ padding: 20 }}>
+        <h3 style={{ marginTop: 0 }}>Ofertas</h3>
         {strategy.offers.map((offer) => (
-          <div key={offer.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={offer.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
             <span>{offer.name} ({offer.type}) {offer.active ? "" : "— inativa"}</span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={() => setOfferDraft(offer)}>Editar</button>
-              <button type="button" className="danger" onClick={() => deleteOffer(offer.id)} disabled={busy}>Apagar</button>
+            <div className="button-row" style={{ margin: 0 }}>
+              <Button variant="secondary" type="button" onClick={() => setOfferDraft(offer)}>Editar</Button>
+              <Button variant="ghost" type="button" onClick={() => deleteOffer(offer.id)} disabled={busy}>Apagar</Button>
             </div>
           </div>
         ))}
@@ -224,60 +194,15 @@ export function OffersAndPillars() {
             <label>
               <input type="checkbox" checked={offerDraft.active} onChange={(e) => setOfferDraft({ ...offerDraft, active: e.target.checked })} /> Ativa
             </label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" className="primary" disabled={busy}>Salvar</button>
-              <button type="button" onClick={() => setOfferDraft(null)}>Cancelar</button>
+            <div className="button-row">
+              <Button type="submit" disabled={busy}>Salvar</Button>
+              <Button variant="ghost" type="button" onClick={() => setOfferDraft(null)}>Cancelar</Button>
             </div>
           </form>
         ) : (
-          <button type="button" onClick={() => setOfferDraft(newOfferDraft())}>+ Nova oferta</button>
+          <Button variant="secondary" type="button" onClick={() => setOfferDraft(newOfferDraft())}>+ Nova oferta</Button>
         )}
-      </section>
-
-      <section className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <h2 style={{ margin: 0 }}>Pilares</h2>
-        {strategy.pillars.map((pillar) => (
-          <div key={pillar.id} className="field-card" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>
-              <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: pillar.color, marginRight: 6 }} />
-              {pillar.name} ({pillar.role}) {pillar.active ? "" : "— inativo"}
-            </span>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={() => setPillarDraft(pillar)}>Editar</button>
-              <button type="button" className="danger" onClick={() => deletePillar(pillar.id)} disabled={busy}>Apagar</button>
-            </div>
-          </div>
-        ))}
-        {pillarDraft ? (
-          <form onSubmit={savePillar} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <input type="text" placeholder="Nome" value={pillarDraft.name} onChange={(e) => setPillarDraft({ ...pillarDraft, name: e.target.value })} required />
-            <select value={pillarDraft.role} onChange={(e) => setPillarDraft({ ...pillarDraft, role: e.target.value })}>
-              {PILLAR_ROLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-            <input type="text" placeholder="Objetivo" value={pillarDraft.objective} onChange={(e) => setPillarDraft({ ...pillarDraft, objective: e.target.value })} />
-            <select value={pillarDraft.visualTreatment} onChange={(e) => setPillarDraft({ ...pillarDraft, visualTreatment: e.target.value })}>
-              {PILLAR_VISUAL_TREATMENTS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-            <label>
-              Cor
-              <input type="color" value={pillarDraft.color} onChange={(e) => setPillarDraft({ ...pillarDraft, color: e.target.value })} />
-            </label>
-            <label>
-              Peso
-              <input type="number" min={1} value={pillarDraft.weight} onChange={(e) => setPillarDraft({ ...pillarDraft, weight: Math.max(1, Number(e.target.value)) })} />
-            </label>
-            <label>
-              <input type="checkbox" checked={pillarDraft.active} onChange={(e) => setPillarDraft({ ...pillarDraft, active: e.target.checked })} /> Ativo
-            </label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="submit" className="primary" disabled={busy}>Salvar</button>
-              <button type="button" onClick={() => setPillarDraft(null)}>Cancelar</button>
-            </div>
-          </form>
-        ) : (
-          <button type="button" onClick={() => setPillarDraft(newPillarDraft())}>+ Novo pilar</button>
-        )}
-      </section>
+      </Card>
     </div>
   );
 }
