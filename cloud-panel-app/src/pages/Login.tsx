@@ -102,7 +102,7 @@ export function Login() {
         onChange={(e) => setPassword(e.target.value)}
         required
       />
-      {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
+      {error ? <p style={{ color: "var(--bad)" }}>{error}</p> : null}
       <button type="submit" className="primary" disabled={busy}>
         {busy ? "Entrando..." : "Entrar"}
       </button>
