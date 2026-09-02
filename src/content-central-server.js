@@ -10,6 +10,8 @@ import { SANS_16_BLACK, SANS_16_WHITE, SANS_32_BLACK, SANS_32_WHITE, SANS_64_BLA
 import { Jimp, loadFont, measureText } from 'jimp';
 import sharp from 'sharp';
 import { uploadToImgBB } from '../skills/instagram-publisher/scripts/publish.js';
+import { runDueCloudWhatsAppPublishSweep } from './cloud-whatsapp-publish.js';
+import { createSupabaseAdminClient } from './supabase-client.js';
 import {
   CONTENT_CENTRAL_PERSONAS,
   contentCentralPersonaLine,
@@ -412,6 +414,7 @@ export async function startContentCentralServer({
   if (openBrowser) openUrl(url);
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
+  const cloudWhatsAppPublishSchedulerTimer = startCloudWhatsAppPublishScheduler(targetDir);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
   const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
   const socialSellingRadarSchedulerTimer = startSocialSellingRadarScheduler(targetDir);
@@ -423,6 +426,7 @@ export async function startContentCentralServer({
     close: () => new Promise((resolve, reject) => {
       if (publishSchedulerTimer) clearInterval(publishSchedulerTimer);
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
+      if (cloudWhatsAppPublishSchedulerTimer) clearInterval(cloudWhatsAppPublishSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
       if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
       if (socialSellingRadarSchedulerTimer) clearInterval(socialSellingRadarSchedulerTimer);
@@ -4922,6 +4926,43 @@ export function startWhatsAppPublishScheduler(targetDir) {
       metaPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
       channels: WHATSAPP_CHANNELS,
     }).catch((err) => console.error('[content-central] whatsapp publish sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// Cloud-aware counterpart to startWhatsAppPublishScheduler: that one only
+// ever sees local project.json content/schedules. Content approved from
+// the cloud panel (Approval.tsx) lives in Supabase instead, and nothing
+// local was consuming that state before this existed — a whatsapp_status
+// item approved from the cloud panel just sat there forever. Same WAHA
+// session lookup as the local flow (project.json's whatsapp.sessionName),
+// same publishContentToWhatsAppStatus call, unmodified — this only adds
+// the Supabase-side due-item lookup and result bookkeeping around it.
+export function startCloudWhatsAppPublishScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  let client;
+  try {
+    client = createSupabaseAdminClient();
+  } catch {
+    // No SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY configured — this operator
+    // hasn't set up the cloud panel; stay silent, same reasoning as
+    // startStuckMediaRetryScheduler's OPENSQUAD_GAVETA_DIR gate for an
+    // optional subsystem not every local install uses.
+    return null;
+  }
+  const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
+  // Same overlap guard as startWhatsAppPublishScheduler — a slow WAHA call
+  // can outlast intervalMs.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runDueCloudWhatsAppPublishSweep(targetDir, client, {
+      whatsappPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
+    }).catch((err) => console.error('[content-central] cloud whatsapp publish sweep failed:', err.message))
       .finally(() => { running = false; });
   };
   const timer = setInterval(sweep, intervalMs);
