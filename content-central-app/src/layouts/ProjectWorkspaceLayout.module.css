@@ -103,4 +103,13 @@
     flex-direction: row;
     flex-wrap: wrap;
   }
+
+  .navGroupLabel {
+    flex-basis: 100%;
+    padding-top: var(--space-xs);
+  }
+
+  .navGroupLabel:first-child {
+    padding-top: 0;
+  }
 }
