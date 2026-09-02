@@ -11,6 +11,8 @@ import { Jimp, loadFont, measureText } from 'jimp';
 import sharp from 'sharp';
 import { uploadToImgBB } from '../skills/instagram-publisher/scripts/publish.js';
 import { runDueCloudWhatsAppPublishSweep } from './cloud-whatsapp-publish.js';
+import { runDueArtGenerationJobSweep } from './cloud-art-generation.js';
+import { migrateContentForProject } from './migrate-to-supabase.js';
 import { createSupabaseAdminClient } from './supabase-client.js';
 import {
   CONTENT_CENTRAL_PERSONAS,
@@ -74,6 +76,7 @@ import {
   listCarousels,
   regenerateCarouselSlide,
   regenerateContentCarouselSlide,
+  enrichBatchItemsWithRealImages,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -87,6 +90,7 @@ import {
   listProjectContent,
   listSystemAlerts,
   loadOfferTypeLearning,
+  loadProject,
   OFFER_TYPES,
   sendDueAlertEmails,
   publishSingleContent,
@@ -415,6 +419,7 @@ export async function startContentCentralServer({
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
   const cloudWhatsAppPublishSchedulerTimer = startCloudWhatsAppPublishScheduler(targetDir);
+  const cloudArtGenerationSchedulerTimer = startCloudArtGenerationScheduler(targetDir, context);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
   const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
   const socialSellingRadarSchedulerTimer = startSocialSellingRadarScheduler(targetDir);
@@ -427,6 +432,7 @@ export async function startContentCentralServer({
       if (publishSchedulerTimer) clearInterval(publishSchedulerTimer);
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
       if (cloudWhatsAppPublishSchedulerTimer) clearInterval(cloudWhatsAppPublishSchedulerTimer);
+      if (cloudArtGenerationSchedulerTimer) clearInterval(cloudArtGenerationSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
       if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
       if (socialSellingRadarSchedulerTimer) clearInterval(socialSellingRadarSchedulerTimer);
@@ -4963,6 +4969,101 @@ export function startCloudWhatsAppPublishScheduler(targetDir) {
     runDueCloudWhatsAppPublishSweep(targetDir, client, {
       whatsappPublisher: (payload) => publishContentToWhatsAppStatus(payload, targetDir),
     }).catch((err) => console.error('[content-central] cloud whatsapp publish sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
+// Composes the same branching the HTTP /generate handler uses (formats
+// present -> generateContentSchedulePlan; else -> per-channel
+// generateContentBatch loop — see the 'generate' route above), then
+// AWAITS the real image generation directly
+// (enrichBatchItemsWithRealImages, the same function
+// enqueueBatchImageGeneration calls fire-and-forget) instead of firing it
+// in the background: this job must not report 'done' until the images
+// actually exist, or migrateContentForProject would sync drafts with no
+// media_url yet.
+async function runCloudArtGeneration(projectSlug, payload, context, targetDir) {
+  const paths = getCentralPaths(targetDir, projectSlug);
+  const project = await loadProject(paths);
+  const imageOptions = {
+    imageGenerator: context.imageGenerator,
+    imageReviewer: context.imageReviewer,
+    captionGenerator: context.captionGenerator,
+    videoAnimator: context.videoAnimator,
+    carouselOutlineGenerator: context.carouselOutlineGenerator,
+    resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectSlug, targetDir),
+  };
+  let itemCount = 0;
+  if (Array.isArray(payload.formats) && payload.formats.length) {
+    const batch = await generateContentSchedulePlan(projectSlug, {
+      days: Number(payload.days),
+      startDate: payload.startDate,
+      formats: payload.formats,
+      contentRules: splitRules(payload.contentRules),
+      groupIds: Array.isArray(payload.groupIds) ? payload.groupIds : undefined,
+      offersOnly: Boolean(payload.offersOnly),
+      approvedPlan: payload.approvedPlan,
+      topicIdeaGenerator: context.topicIdeaGenerator,
+      carouselsPerWeek: payload.carouselsPerWeek,
+      maxCarouselSlides: payload.maxCarouselSlides,
+    }, targetDir);
+    await enrichBatchItemsWithRealImages(batch, project, projectSlug, imageOptions, paths);
+    itemCount = batch.items?.length || 0;
+  } else {
+    const channels = normalizeChannels(payload);
+    for (const channel of channels) {
+      const batch = await generateContentBatch(projectSlug, {
+        days: Number(payload.days),
+        startDate: payload.startDate,
+        channel,
+        contentRules: splitRules(payload.contentRules),
+        groupIds: Array.isArray(payload.groupIds) ? payload.groupIds : undefined,
+        offersOnly: Boolean(payload.offersOnly),
+        topicIdeaGenerator: context.topicIdeaGenerator,
+      }, targetDir);
+      await enrichBatchItemsWithRealImages(batch, project, projectSlug, imageOptions, paths);
+      itemCount += batch.items?.length || 0;
+    }
+  }
+  return { itemCount };
+}
+
+// Cloud-driven counterpart to the local "Agenda e geração" wizard's
+// generate button — see runCloudArtGeneration above for what it runs.
+// Takes `context` (unlike the other schedulers) because it needs the same
+// imageGenerator/imageReviewer/captionGenerator/etc. the HTTP /generate
+// handler already assembles at server startup.
+export function startCloudArtGenerationScheduler(targetDir, context) {
+  if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  let client;
+  try {
+    client = createSupabaseAdminClient();
+  } catch {
+    return null;
+  }
+  // Shorter interval than the publish schedulers (180000ms default) — a
+  // human is waiting for the preview to appear on screen here, not a
+  // background cron.
+  const intervalMs = Number(process.env.OPENSQUAD_JOB_CHECK_INTERVAL_MS || 15000);
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runDueArtGenerationJobSweep(targetDir, client, {
+      previewPlan: (projectSlug, payload, dir) => previewContentSchedulePlan(projectSlug, {
+        days: Number(payload.days),
+        startDate: payload.startDate,
+        formats: Array.isArray(payload.formats) ? payload.formats : [],
+        groupIds: Array.isArray(payload.groupIds) ? payload.groupIds : undefined,
+        offersOnly: Boolean(payload.offersOnly),
+        topicIdeaGenerator: context.topicIdeaGenerator,
+      }, dir),
+      generate: (projectSlug, payload, dir) => runCloudArtGeneration(projectSlug, payload, context, dir),
+      syncProject: (projectSlug, dir, supabaseClient) => migrateContentForProject(dir, projectSlug, supabaseClient),
+    }).catch((err) => console.error('[content-central] cloud art generation sweep failed:', err.message))
       .finally(() => { running = false; });
   };
   const timer = setInterval(sweep, intervalMs);

@@ -5478,7 +5478,7 @@ async function addSegmentLearning(paths, project, bucket, line, targetDir) {
   });
 }
 
-async function loadProject(paths) {
+export async function loadProject(paths) {
   const project = await readJson(paths.projectPath, null);
   if (!project) throw new Error(`Project not found: ${paths.projectId}`);
   const normalized = {
