@@ -1,6 +1,6 @@
 {
   "project_id": "appgprj_6a98b254b4c081919918780563e8ad18",
   "static": {
-    "directory": "content-central-app/dist"
+    "directory": "dist"
   }
 }
