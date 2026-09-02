@@ -1052,6 +1052,58 @@ test('root-level segment-learnings and offer-type-learnings routes work with no 
   });
 });
 
+test('root-level creative-structure import routes list sources and copy selected structures into the target segment node', async () => {
+  await withServer(async (dir, server) => {
+    const sourceGroupKey = 'group:alimenticio/category:pizzaria';
+    const targetGroupKey = 'group:negocios-locais-e-lojas/category:casa-de-frios';
+    const saved = await saveLearningEntry({
+      scope: 'segment',
+      groupKey: sourceGroupKey,
+      bucket: 'approved',
+      kind: 'image',
+      title: 'Oferta vertical',
+      text: 'modelo de oferta',
+      imagePath: 'segment/source/oferta.png',
+      purpose: 'creative',
+      postType: 'offer',
+      shape: 'vertical',
+    }, dir);
+    await saveLearningEntry({
+      scope: 'segment',
+      groupKey: sourceGroupKey,
+      bucket: 'approved',
+      kind: 'image',
+      text: 'foto de produto',
+      imagePath: 'segment/source/produto.png',
+      purpose: 'product',
+    }, dir);
+
+    const sources = await request(server, '/api/segment-learnings/creative-structure-sources');
+    assert.equal(sources.response.status, 200);
+    assert.equal(sources.body.sources.length, 1);
+    assert.equal(sources.body.sources[0].path, sourceGroupKey);
+    assert.equal(sources.body.sources[0].count, 1);
+    assert.equal(sources.body.sources[0].entries[0].title, 'Oferta vertical');
+
+    const imported = await request(server, '/api/segment-learnings/import-creative-structures', {
+      method: 'POST',
+      body: JSON.stringify({
+        sourceGroupKey,
+        targetGroupKey,
+        entryIds: [saved[0].id],
+      }),
+    });
+
+    assert.equal(imported.response.status, 200);
+    assert.equal(imported.body.importedCount, 1);
+    assert.equal(imported.body.skippedCount, 0);
+    assert.equal(imported.body.entries.length, 1);
+    assert.equal(imported.body.entries[0].title, 'Oferta vertical');
+    assert.equal(imported.body.entries[0].imagePath, 'segment/source/oferta.png');
+    assert.notEqual(imported.body.entries[0].id, saved[0].id);
+  });
+});
+
 test('GET /api/learning-assets/:path serves an uploaded learning reference image, with missing/traversal cases rejected', async () => {
   const pngBytes = Buffer.from('89504e470d0a1a0a', 'hex');
   const dataUrl = `data:image/png;base64,${pngBytes.toString('base64')}`;

@@ -82,12 +82,14 @@ import {
   previewContentSchedulePlan,
   generateSpecialDateContent,
   isVerticalStoryChannel,
+  importCreativeStructures,
   listAdCreatives,
   listCommemorativeDates,
   getCentralPaths,
   getGlobalRules,
   listCentralProjects,
   listProjectContent,
+  listCreativeStructureSources,
   listSystemAlerts,
   loadOfferTypeLearning,
   loadProject,
@@ -518,6 +520,17 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const entries = await deleteLearningEntry({ ...body, scope: body.scope === 'offerType' ? 'offerType' : 'segment' }, targetDir);
     return sendJson(res, 200, { entries });
+  }
+
+  if (method === 'GET' && route === '/api/segment-learnings/creative-structure-sources') {
+    const sources = await listCreativeStructureSources(targetDir);
+    return sendJson(res, 200, { sources });
+  }
+
+  if (method === 'POST' && route === '/api/segment-learnings/import-creative-structures') {
+    const body = await readBody(req);
+    const result = await importCreativeStructures(body, targetDir);
+    return sendJson(res, 200, result);
   }
 
   if (method === 'GET' && route === '/api/segment-learnings/nodes') {

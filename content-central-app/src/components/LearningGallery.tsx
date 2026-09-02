@@ -3,7 +3,10 @@ import {
   analyzeLearningImage,
   deleteLearningEntry,
   fileToDataUrl,
+  getCreativeStructureSources,
+  importCreativeStructures,
   saveLearningEntry,
+  type CreativeStructureSource,
   type SegmentLearningEntry,
   type SegmentLearningNode,
 } from "@/api/client";
@@ -72,15 +75,74 @@ export function CreativeStructureGallery({
   onNodeEntriesChange: (path: string, entries: SegmentLearningEntry[]) => void;
 }) {
   const [selectedPath, setSelectedPath] = useState("");
+  const [showImport, setShowImport] = useState(false);
+  const [sources, setSources] = useState<CreativeStructureSource[]>([]);
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [sourcePath, setSourcePath] = useState("");
+  const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  const [importSummary, setImportSummary] = useState<string | null>(null);
   const defaultNode = preferredSegmentNode(nodes);
   const selectedNode = nodes.find((node) => node.path === selectedPath) || defaultNode;
+  const availableSources = sources.filter((source) => source.path !== selectedNode?.path);
+  const currentSource = availableSources.find((source) => source.path === sourcePath) || availableSources[0] || null;
 
   useEffect(() => {
     if (!nodes.length) return;
     setSelectedPath((current) => (nodes.some((node) => node.path === current) ? current : preferredSegmentNode(nodes)?.path || ""));
   }, [nodes]);
 
+  useEffect(() => {
+    if (!showImport || scope !== "segment") return;
+    setSourcesLoading(true);
+    setImportError(null);
+    getCreativeStructureSources()
+      .then((result) => {
+        setSources(result.sources);
+        const first = result.sources.find((source) => source.path !== selectedNode?.path);
+        setSourcePath((current) => result.sources.some((source) => source.path === current && source.path !== selectedNode?.path) ? current : first?.path || "");
+        setSelectedEntryIds(first?.entries.map((entry) => entry.id) || []);
+      })
+      .catch((err) => setImportError((err as Error).message))
+      .finally(() => setSourcesLoading(false));
+  }, [scope, selectedNode?.path, showImport]);
+
   if (!selectedNode) return null;
+
+  function handleSourceChange(path: string) {
+    const source = availableSources.find((item) => item.path === path);
+    setSourcePath(path);
+    setSelectedEntryIds(source?.entries.map((entry) => entry.id) || []);
+    setImportSummary(null);
+  }
+
+  function toggleEntry(entryId: string) {
+    setSelectedEntryIds((current) => current.includes(entryId)
+      ? current.filter((id) => id !== entryId)
+      : [...current, entryId]);
+    setImportSummary(null);
+  }
+
+  async function handleImportStructures() {
+    if (!currentSource || !selectedEntryIds.length) return;
+    setImportBusy(true);
+    setImportError(null);
+    setImportSummary(null);
+    try {
+      const result = await importCreativeStructures({
+        sourceGroupKey: currentSource.path,
+        targetGroupKey: selectedNode.path,
+        entryIds: selectedEntryIds,
+      });
+      onNodeEntriesChange(selectedNode.path, result.entries);
+      setImportSummary(`${result.importedCount} importada(s), ${result.skippedCount} duplicada(s) ignorada(s).`);
+    } catch (err) {
+      setImportError((err as Error).message);
+    } finally {
+      setImportBusy(false);
+    }
+  }
 
   return (
     <div className="stack-md">
@@ -97,6 +159,11 @@ export function CreativeStructureGallery({
           </p>
         </div>
       ) : null}
+      {scope === "segment" ? (
+        <div className="actions-row">
+          <Button variant="secondary" disabled={!selectedNode.path} onClick={() => setShowImport(true)}>Importar estruturas prontas</Button>
+        </div>
+      ) : null}
       <LearningGallery
         scope={scope}
         groupKey={selectedNode.path}
@@ -107,6 +174,98 @@ export function CreativeStructureGallery({
         showHeading={false}
         onlyCreativeStructures
       />
+      {showImport ? (
+        <Dialog
+          onClose={() => setShowImport(false)}
+          titleId="import-structures-title"
+          overlayStyle={{ background: "rgba(0, 0, 0, 0.72)", padding: "var(--space-lg)" }}
+          contentClassName="stack-md"
+          contentStyle={{
+            width: "min(94vw, 720px)",
+            maxHeight: "90vh",
+            overflowY: "auto",
+            background: "var(--panel-2)",
+            border: "1px solid var(--line)",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "var(--shadow-card)",
+            padding: "var(--space-md)",
+          }}
+        >
+          <div>
+            <h3 id="import-structures-title" style={{ margin: 0 }}>Importar estruturas prontas</h3>
+            <p className="muted" style={{ margin: "var(--space-2xs) 0 0", fontSize: "var(--text-sm)" }}>
+              Copie modelos de layout de outro nicho para {selectedNode.label}.
+            </p>
+          </div>
+
+          {sourcesLoading ? (
+            <p className="muted" style={{ margin: 0 }}>Carregando estruturas...</p>
+          ) : availableSources.length ? (
+            <>
+              <div>
+                <label htmlFor="creative-structure-source">Nicho de origem</label>
+                <select id="creative-structure-source" value={currentSource?.path || ""} onChange={(event) => handleSourceChange(event.target.value)}>
+                  {availableSources.map((source) => (
+                    <option key={source.path} value={source.path}>{source.label} ({source.count})</option>
+                  ))}
+                </select>
+              </div>
+
+              {currentSource ? (
+                <div className="stack-sm">
+                  {currentSource.entries.map((entry) => (
+                    <label
+                      key={entry.id}
+                      htmlFor={`import-structure-${entry.id}`}
+                      className="field-card"
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 72px minmax(0, 1fr)",
+                        gap: "var(--space-sm)",
+                        alignItems: "center",
+                        margin: 0,
+                        cursor: "pointer",
+                      }}
+                    >
+                      <input
+                        id={`import-structure-${entry.id}`}
+                        type="checkbox"
+                        checked={selectedEntryIds.includes(entry.id)}
+                        onChange={() => toggleEntry(entry.id)}
+                        style={{ width: "auto" }}
+                      />
+                      {entry.imagePath ? (
+                        <img src={previewSrc(entry)} alt={structureTitle(entry)} loading="lazy" style={{ width: 72, height: 72, objectFit: "cover", borderRadius: "var(--radius-sm)" }} />
+                      ) : (
+                        <span />
+                      )}
+                      <span className="stack-sm" style={{ minWidth: 0 }}>
+                        <strong>{structureTitle(entry)}</strong>
+                        <span className="actions-row">
+                          {entry.postType ? <span className="pill">{POST_TYPE_LABELS[entry.postType]}</span> : null}
+                          <span className="pill">{entry.shape ? SHAPE_LABELS[entry.shape] : "Vertical + Feed"}</span>
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              ) : null}
+            </>
+          ) : (
+            <p className="muted" style={{ margin: 0 }}>Nenhum outro nicho com estruturas cadastradas.</p>
+          )}
+
+          {importError ? <div className="pill bad">{importError}</div> : null}
+          {importSummary ? <div className="pill ok">{importSummary}</div> : null}
+
+          <div className="actions-row" style={{ justifyContent: "flex-end" }}>
+            <Button variant="secondary" disabled={importBusy} onClick={() => setShowImport(false)}>Fechar</Button>
+            <Button disabled={importBusy || !currentSource || selectedEntryIds.length === 0} onClick={handleImportStructures}>
+              {importBusy ? "Importando..." : "Importar selecionadas"}
+            </Button>
+          </div>
+        </Dialog>
+      ) : null}
     </div>
   );
 }

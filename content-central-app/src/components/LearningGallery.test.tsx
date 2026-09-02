@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LearningGallery } from "./LearningGallery";
+import { CreativeStructureGallery, LearningGallery } from "./LearningGallery";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -371,5 +371,109 @@ describe("LearningGallery - creative structure references", () => {
 
     expect(screen.getByText("nota geral")).toBeInTheDocument();
     expect(screen.getByLabelText("Novo aprendizado em texto")).toBeInTheDocument();
+  });
+
+  it("imports selected ready structures from another segment node into the currently selected node", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          sources: [
+            {
+              path: "group:alimenticio/category:pizzaria",
+              label: "Alimenticio / Pizzaria",
+              count: 2,
+              entries: [
+                {
+                  id: "source-1",
+                  bucket: "approved",
+                  kind: "image",
+                  title: "Oferta vertical",
+                  text: "modelo 1",
+                  imagePath: "segment/source/oferta.png",
+                  purpose: "creative",
+                  postType: "offer",
+                  shape: "vertical",
+                  source: "manual",
+                  createdAt: "2026-01-01T00:00:00.000Z",
+                },
+                {
+                  id: "source-2",
+                  bucket: "approved",
+                  kind: "image",
+                  title: "Institucional feed",
+                  text: "modelo 2",
+                  imagePath: "segment/source/institucional.png",
+                  purpose: "creative",
+                  postType: "institutional",
+                  shape: "feed",
+                  source: "manual",
+                  createdAt: "2026-01-02T00:00:00.000Z",
+                },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        body: {
+          entries: [
+            {
+              id: "imported-1",
+              bucket: "approved",
+              kind: "image",
+              title: "Oferta vertical",
+              text: "modelo 1",
+              imagePath: "segment/source/oferta.png",
+              purpose: "creative",
+              postType: "offer",
+              shape: "vertical",
+              source: "manual",
+              createdAt: "2026-01-03T00:00:00.000Z",
+            },
+          ],
+          importedCount: 1,
+          skippedCount: 0,
+        },
+      },
+    ]);
+    const user = userEvent.setup();
+    const onNodeEntriesChange = vi.fn();
+
+    render(
+      <CreativeStructureGallery
+        scope="segment"
+        nodes={[
+          { path: "group:negocios-locais-e-lojas", label: "Negocios locais e lojas", level: "setor", entries: [] },
+          { path: "group:negocios-locais-e-lojas/category:casa-de-frios", label: "Negocios locais e lojas / Casa de Frios", level: "nicho", entries: [] },
+        ]}
+        onNodeEntriesChange={onNodeEntriesChange}
+      />,
+    );
+
+    await user.click(screen.getByText("Importar estruturas prontas"));
+
+    expect(await screen.findByLabelText("Nicho de origem")).toHaveValue("group:alimenticio/category:pizzaria");
+    expect(screen.getByLabelText(/Oferta vertical/)).toBeChecked();
+    expect(screen.getByLabelText(/Institucional feed/)).toBeChecked();
+
+    await user.click(screen.getByLabelText(/Institucional feed/));
+    await user.click(screen.getByText("Importar selecionadas"));
+
+    await waitFor(() => {
+      const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+      expect(calls[0][0]).toBe("/api/segment-learnings/creative-structure-sources");
+      expect(calls[1][0]).toBe("/api/segment-learnings/import-creative-structures");
+      expect(JSON.parse(calls[1][1].body as string)).toEqual({
+        sourceGroupKey: "group:alimenticio/category:pizzaria",
+        targetGroupKey: "group:negocios-locais-e-lojas/category:casa-de-frios",
+        entryIds: ["source-1"],
+      });
+      expect(onNodeEntriesChange).toHaveBeenCalledWith(
+        "group:negocios-locais-e-lojas/category:casa-de-frios",
+        expect.arrayContaining([expect.objectContaining({ id: "imported-1" })]),
+      );
+    });
+
+    expect(screen.getByText("1 importada(s), 0 duplicada(s) ignorada(s).")).toBeInTheDocument();
   });
 });

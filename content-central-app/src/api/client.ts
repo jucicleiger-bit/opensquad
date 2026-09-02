@@ -230,6 +230,13 @@ export interface SegmentLearningNode {
   entries: SegmentLearningEntry[];
 }
 
+export interface CreativeStructureSource {
+  path: string;
+  label: string;
+  count: number;
+  entries: SegmentLearningEntry[];
+}
+
 export interface ProjectBrand {
   logoPath?: string;
   references?: ProjectReference[];
@@ -996,6 +1003,19 @@ export function deleteLearningEntry(
   input: { scope: "segment" | "offerType"; groupKey: string; entryId: string },
 ): Promise<{ entries: SegmentLearningEntry[] }> {
   return api(`/api/segment-learnings/entries-delete`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getCreativeStructureSources(): Promise<{ sources: CreativeStructureSource[] }> {
+  return api(`/api/segment-learnings/creative-structure-sources`);
+}
+
+export function importCreativeStructures(
+  input: { sourceGroupKey: string; targetGroupKey: string; entryIds: string[] },
+): Promise<{ entries: SegmentLearningEntry[]; importedCount: number; skippedCount: number }> {
+  return api(`/api/segment-learnings/import-creative-structures`, {
     method: "POST",
     body: JSON.stringify(input),
   });

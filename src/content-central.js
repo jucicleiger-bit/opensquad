@@ -5064,6 +5064,39 @@ function normalizeLearnings(input) {
 
 const SEGMENT_LEVELS = ['setor', 'nicho', 'especialidade'];
 
+function isCreativeStructureLearningEntry(entry) {
+  return entry?.bucket === 'approved'
+    && entry?.kind === 'image'
+    && entry?.purpose === 'creative'
+    && Boolean(entry?.imagePath);
+}
+
+function creativeStructureDuplicateKey(entry) {
+  return [
+    cleanText(entry?.title || '').toLowerCase(),
+    cleanText(entry?.imagePath || '').toLowerCase(),
+    cleanText(entry?.postType || '').toLowerCase(),
+    cleanText(entry?.shape || '').toLowerCase(),
+  ].join('|');
+}
+
+function labelPartFromSegmentNodePathPart(part) {
+  const [, rawValue = part] = String(part || '').split(':');
+  return rawValue
+    .split('-')
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+function segmentNodeLabelFromPath(path) {
+  return String(path || '')
+    .split('/')
+    .filter(Boolean)
+    .map(labelPartFromSegmentNodePathPart)
+    .join(' / ');
+}
+
 export function normalizeSegmentLearningEntry(input = {}) {
   const kind = input.kind === 'image' ? 'image' : 'text';
   const purpose = kind === 'image' && ['product', 'creative'].includes(input.purpose) ? input.purpose : undefined;
@@ -5329,6 +5362,25 @@ export async function loadSegmentLearningNodesForSelection(paths, { segmentGroup
   }));
 }
 
+export async function listCreativeStructureSources(targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const store = await readSegmentLearningStore(paths);
+  return Object.entries(store.nodes || {})
+    .map(([path, node]) => {
+      const entries = (node?.entries || [])
+        .map(normalizeSegmentLearningEntry)
+        .filter(isCreativeStructureLearningEntry);
+      return {
+        path,
+        label: cleanText(node?.label) && cleanText(node?.label) !== path ? cleanText(node.label) : segmentNodeLabelFromPath(path),
+        count: entries.length,
+        entries,
+      };
+    })
+    .filter((source) => source.count > 0)
+    .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR'));
+}
+
 function learningStorePath(paths, scope) {
   return scope === 'offerType' ? paths.offerTypeLearningsPath : paths.segmentLearningsPath;
 }
@@ -5454,6 +5506,65 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
     store.schemaVersion = scope === 'segment' ? 2 : 1;
     await writeLearningStore(paths, scope, store);
     return node.entries;
+  });
+}
+
+export async function importCreativeStructures(input, targetDir = process.cwd(), now = new Date()) {
+  const sourceGroupKey = String(input?.sourceGroupKey || '').trim();
+  const targetGroupKey = String(input?.targetGroupKey || '').trim();
+  if (!sourceGroupKey) throw new Error('Informe o nicho de origem.');
+  if (!targetGroupKey) throw new Error('Informe o nicho de destino.');
+  if (sourceGroupKey === targetGroupKey) throw new Error('Escolha um nicho de origem diferente do destino.');
+
+  const selectedIds = Array.isArray(input?.entryIds)
+    ? new Set(input.entryIds.map((id) => String(id || '').trim()).filter(Boolean))
+    : null;
+  const paths = getCentralPaths(targetDir);
+
+  return withProjectLock(targetDir, GLOBAL_LEARNING_LOCK_ID, async () => {
+    const store = await readSegmentLearningStore(paths);
+    const sourceNode = store.nodes[sourceGroupKey];
+    const targetNode = store.nodes[targetGroupKey] || { label: targetGroupKey, entries: [] };
+    const sourceEntries = (sourceNode?.entries || [])
+      .map(normalizeSegmentLearningEntry)
+      .filter((entry) => isCreativeStructureLearningEntry(entry) && (!selectedIds || selectedIds.has(entry.id)));
+
+    const existingKeys = new Set((targetNode.entries || []).map((entry) => creativeStructureDuplicateKey(normalizeSegmentLearningEntry(entry))));
+    const imported = [];
+    let skippedCount = 0;
+
+    for (const entry of sourceEntries) {
+      const duplicateKey = creativeStructureDuplicateKey(entry);
+      if (existingKeys.has(duplicateKey)) {
+        skippedCount += 1;
+        continue;
+      }
+      const copy = normalizeSegmentLearningEntry({
+        bucket: 'approved',
+        kind: 'image',
+        title: entry.title,
+        text: entry.text,
+        imagePath: entry.imagePath,
+        purpose: 'creative',
+        postType: entry.postType,
+        shape: entry.shape,
+        source: 'manual',
+        createdAt: now.toISOString(),
+      });
+      imported.push(copy);
+      existingKeys.add(duplicateKey);
+    }
+
+    targetNode.entries = [...imported, ...(targetNode.entries || []).map(normalizeSegmentLearningEntry)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+    store.nodes = { ...store.nodes, [targetGroupKey]: targetNode };
+    store.schemaVersion = 2;
+    await writeLearningStore(paths, 'segment', store);
+
+    return {
+      entries: targetNode.entries,
+      importedCount: imported.length,
+      skippedCount: skippedCount + Math.max(0, sourceEntries.length - imported.length - skippedCount),
+    };
   });
 }
 

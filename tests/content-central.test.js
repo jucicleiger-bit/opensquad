@@ -56,6 +56,7 @@ import {
   generateSpecialDateContent,
   getCentralPaths,
   listCentralProjects,
+  listCreativeStructureSources,
   listCommemorativeDates,
   listSegmentTemplates,
   listSystemAlerts,
@@ -64,6 +65,7 @@ import {
   loadSegmentLearningNodes,
   loadSegmentLearningNodesForSelection,
   loadSegmentTemplate,
+  importCreativeStructures,
   migrateSegmentLearningStoreV1ToV2,
   registerSegmentTemplate,
   reconcileInterruptedGenerations,
@@ -1182,6 +1184,83 @@ test('saveLearningEntry tags a creative-purpose image entry with postType and sh
     const junk = junkEntries.find((entry) => entry.text === 'lixo');
     assert.equal(junk.postType, '');
     assert.equal(junk.shape, '');
+  });
+});
+
+test('importCreativeStructures copies approved creative images between segment nodes without duplicating product/text entries', async () => {
+  await withTempProject(async (dir) => {
+    const sourceGroupKey = 'group:alimenticio/category:pizzaria';
+    const targetGroupKey = 'group:negocios-locais-e-lojas/category:casa-de-frios';
+
+    const creativeEntries = await saveLearningEntry({
+      scope: 'segment',
+      groupKey: sourceGroupKey,
+      bucket: 'approved',
+      kind: 'image',
+      title: 'Oferta vertical',
+      text: 'modelo de oferta',
+      imagePath: 'segment/source/oferta.png',
+      purpose: 'creative',
+      postType: 'offer',
+      shape: 'vertical',
+    }, dir, new Date('2026-01-01T00:00:00.000Z'));
+    await saveLearningEntry({
+      scope: 'segment',
+      groupKey: sourceGroupKey,
+      bucket: 'approved',
+      kind: 'image',
+      text: 'foto de produto',
+      imagePath: 'segment/source/produto.png',
+      purpose: 'product',
+    }, dir);
+    await saveLearningEntry({
+      scope: 'segment',
+      groupKey: sourceGroupKey,
+      bucket: 'approved',
+      kind: 'text',
+      text: 'texto aprovado',
+    }, dir);
+    await saveLearningEntry({
+      scope: 'segment',
+      groupKey: sourceGroupKey,
+      bucket: 'avoid',
+      kind: 'image',
+      text: 'estrutura ruim',
+      imagePath: 'segment/source/ruim.png',
+      purpose: 'creative',
+      postType: 'offer',
+      shape: 'vertical',
+    }, dir);
+
+    const sources = await listCreativeStructureSources(dir);
+    const source = sources.find((item) => item.path === sourceGroupKey);
+    assert.equal(source.count, 1);
+    assert.equal(source.entries[0].title, 'Oferta vertical');
+
+    const firstImport = await importCreativeStructures({
+      sourceGroupKey,
+      targetGroupKey,
+      entryIds: [creativeEntries[0].id, 'entry-inexistente'],
+    }, dir, new Date('2026-01-02T00:00:00.000Z'));
+
+    assert.equal(firstImport.importedCount, 1);
+    assert.equal(firstImport.skippedCount, 0);
+    assert.equal(firstImport.entries.length, 1);
+    assert.notEqual(firstImport.entries[0].id, creativeEntries[0].id);
+    assert.equal(firstImport.entries[0].imagePath, 'segment/source/oferta.png');
+    assert.equal(firstImport.entries[0].purpose, 'creative');
+    assert.equal(firstImport.entries[0].postType, 'offer');
+    assert.equal(firstImport.entries[0].shape, 'vertical');
+
+    const duplicateImport = await importCreativeStructures({
+      sourceGroupKey,
+      targetGroupKey,
+      entryIds: [creativeEntries[0].id],
+    }, dir, new Date('2026-01-03T00:00:00.000Z'));
+
+    assert.equal(duplicateImport.importedCount, 0);
+    assert.equal(duplicateImport.skippedCount, 1);
+    assert.equal(duplicateImport.entries.length, 1);
   });
 });
 
