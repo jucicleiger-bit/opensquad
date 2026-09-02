@@ -45,7 +45,15 @@ async function runPublishPass(client, manualContentItemId) {
     .from('content_items')
     .select('id, project_id, channel, copy, media_url, metadata, schedules!inner(id, run_at, status)')
     .eq('status', 'approved')
-    .eq('schedules.status', 'pending');
+    .eq('schedules.status', 'pending')
+    // whatsapp_status has its own local-WAHA-aware sweep
+    // (startCloudWhatsAppPublishScheduler, content-central-server.js) —
+    // this Edge Function only knows how to call publishToMeta
+    // (Instagram/Facebook), which throws "Unsupported publish channel"
+    // for whatsapp_status. Without this filter every whatsapp_status item
+    // approved from the cloud panel gets captured and marked 'error' by
+    // this sweep before the WhatsApp-aware one ever sees it.
+    .neq('channel', 'whatsapp_status');
 
   query = manualContentItemId
     ? query.eq('id', manualContentItemId)
