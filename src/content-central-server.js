@@ -4976,6 +4976,43 @@ export function startCloudWhatsAppPublishScheduler(targetDir) {
   return timer;
 }
 
+// Mirrors content-central-app's createCommemorativeExtrasFromPlan
+// (content-central-app/src/pages/workspace/GenerateContent.tsx:333-352):
+// groups approvedPlan's extras by (date, label), merging channels for the
+// same commemorative date into one generateSpecialDateContent call (same
+// creative shared across channels, not one wasted AI call per channel).
+async function generateCommemorativeExtras(projectSlug, approvedPlan, context, targetDir, paths, project) {
+  if (!approvedPlan?.dayPlans) return 0;
+  const byDateAndLabel = new Map();
+  for (const day of approvedPlan.dayPlans) {
+    for (const extra of day.extras || []) {
+      const label = (extra.label || '').replace(/^Extra —\s*/, '') || extra.specialDateLabel || 'Data comemorativa';
+      const key = `${extra.date}__${label}`;
+      const entry = byDateAndLabel.get(key) || { date: extra.date, label, channels: new Set(), postTime: extra.scheduledTime };
+      entry.channels.add(extra.channel);
+      byDateAndLabel.set(key, entry);
+    }
+  }
+  const imageOptions = {
+    imageGenerator: context.imageGenerator,
+    imageReviewer: context.imageReviewer,
+    captionGenerator: context.captionGenerator,
+    videoAnimator: context.videoAnimator,
+  };
+  let itemCount = 0;
+  for (const extra of byDateAndLabel.values()) {
+    const batch = await generateSpecialDateContent(projectSlug, {
+      date: extra.date,
+      label: extra.label,
+      channels: Array.from(extra.channels),
+      postTime: extra.postTime,
+    }, targetDir);
+    await enrichBatchItemsWithRealImages(batch, project, projectSlug, imageOptions, paths);
+    itemCount += batch.items?.length || 0;
+  }
+  return itemCount;
+}
+
 // Composes the same branching the HTTP /generate handler uses (formats
 // present -> generateContentSchedulePlan; else -> per-channel
 // generateContentBatch loop — see the 'generate' route above), then
@@ -5012,6 +5049,7 @@ async function runCloudArtGeneration(projectSlug, payload, context, targetDir) {
     }, targetDir);
     await enrichBatchItemsWithRealImages(batch, project, projectSlug, imageOptions, paths);
     itemCount = batch.items?.length || 0;
+    itemCount += await generateCommemorativeExtras(projectSlug, payload.approvedPlan, context, targetDir, paths, project);
   } else {
     const channels = normalizeChannels(payload);
     for (const channel of channels) {

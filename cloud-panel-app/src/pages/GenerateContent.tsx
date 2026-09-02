@@ -114,6 +114,7 @@ export function GenerateContent() {
   const [editedSlots, setEditedSlots] = useState<Record<string, { label: string; reason: string }>>({});
   const [result, setResult] = useState<JobResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     supabase.from("projects").select("content_strategy").eq("id", project.id).single().then(({ data }) => {
@@ -137,7 +138,7 @@ export function GenerateContent() {
       formats: formats.filter((format) => format.enabled).map(({ channel, postsPerDay, everyDays, startTime, intervalMinutes }) => ({ channel, postsPerDay, everyDays, startTime, intervalMinutes })),
       contentRules,
       groupIds: selectedGroupIds,
-      offersOnly,
+      offersOnly: selectedGroupIds.length > 0 && offersOnly,
       carouselsPerWeek,
       maxCarouselSlides,
     };
@@ -164,15 +165,19 @@ export function GenerateContent() {
 
   async function submitPreview(event: FormEvent) {
     event.preventDefault();
+    if (submitting) return;
+    setSubmitting(true);
     setError(null);
     const payload = { mode: "preview", ...requestFields() };
     const { data, error: insertError } = await supabase.from("jobs").insert([{ type: "art_generation", payload }]).select("id").single();
     if (insertError) {
       setError(insertError.message);
       setStage("error");
+      setSubmitting(false);
       return;
     }
     setStage("waiting-preview");
+    setSubmitting(false);
     pollJob(data.id, (donePayload) => {
       setPlan(donePayload.plan as PlannedContentSchedule);
       setEditedSlots({});
@@ -181,7 +186,8 @@ export function GenerateContent() {
   }
 
   async function approvePlan() {
-    if (!plan) return;
+    if (!plan || submitting) return;
+    setSubmitting(true);
     setError(null);
     const approvedPlan = {
       ...plan,
@@ -195,9 +201,11 @@ export function GenerateContent() {
     if (insertError) {
       setError(insertError.message);
       setStage("error");
+      setSubmitting(false);
       return;
     }
     setStage("waiting-generate");
+    setSubmitting(false);
     pollJob(data.id, (donePayload) => {
       setResult(donePayload.result as JobResult);
       setStage("done");
@@ -266,7 +274,7 @@ export function GenerateContent() {
           </Card>
         ))}
         <div className="button-row">
-          <Button onClick={approvePlan}>Aprovar e gerar</Button>
+          <Button onClick={approvePlan} disabled={submitting}>Aprovar e gerar</Button>
           <Button variant="secondary" onClick={() => setStage("form")}>Cancelar</Button>
         </div>
       </div>
@@ -344,7 +352,7 @@ export function GenerateContent() {
             </label>
           </div>
 
-          <Button type="submit">Ver prévia</Button>
+          <Button type="submit" disabled={submitting}>Ver prévia</Button>
         </form>
       </Card>
     </div>
