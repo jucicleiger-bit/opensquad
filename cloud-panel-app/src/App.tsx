@@ -12,6 +12,7 @@ import { SegmentLearning } from "@/pages/SegmentLearning";
 import { OfferTypeLearning } from "@/pages/OfferTypeLearning";
 import { SegmentTemplates } from "@/pages/SegmentTemplates";
 import { Account } from "@/pages/Account";
+import { GenerateContent } from "@/pages/GenerateContent";
 import { RootLayout } from "@/layouts/RootLayout";
 import { ProjectWorkspaceLayout } from "@/layouts/ProjectWorkspaceLayout";
 import { RequireAuth } from "@/components/RequireAuth";
@@ -38,6 +39,7 @@ export function App() {
           <Route path="referencias" element={<References />} />
           <Route path="ofertas" element={<Offers />} />
           <Route path="pilares" element={<Pillars />} />
+          <Route path="gerar" element={<GenerateContent />} />
           <Route path="aguardando" element={<Approval />} />
           <Route path="calendario" element={<CalendarPage />} />
           <Route path="aprendizado" element={<SegmentLearning />} />

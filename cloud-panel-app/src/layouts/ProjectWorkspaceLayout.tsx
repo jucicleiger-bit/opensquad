@@ -26,6 +26,7 @@ const SECTIONS = [
   { to: "referencias", label: "Imagem e identidade visual", group: "Configuração" },
   { to: "ofertas", label: "Ofertas e assuntos", group: "Configuração" },
   { to: "pilares", label: "Pilares", group: "Configuração" },
+  { to: "gerar", label: "Gerar conteúdo", group: "Conteúdo" },
   { to: "aguardando", label: "Aguardando aprovação", group: "Conteúdo" },
   { to: "calendario", label: "Calendário", group: "Conteúdo" },
   { to: "aprendizado", label: "Aprendizado", group: "Conteúdo" },
