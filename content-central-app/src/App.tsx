@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { RootLayout } from "@/layouts/RootLayout";
 import { ProjectWorkspaceLayout } from "@/layouts/ProjectWorkspaceLayout";
 import { Dashboard } from "@/pages/Dashboard";
+import { KingLanding } from "@/pages/KingLanding";
 import { Overview } from "@/pages/workspace/Overview";
 import { Company } from "@/pages/workspace/Company";
 import { References } from "@/pages/workspace/References";
@@ -29,6 +30,7 @@ import { ComercialPropostas } from "@/pages/ComercialPropostas";
 export function App() {
   return (
     <Routes>
+      <Route path="/king" element={<KingLanding />} />
       <Route path="/comercial/propostas/:id/imprimir" element={<ComercialPropostaImprimir />} />
       <Route path="/comercial/propostas/:id/apresentar" element={<ComercialPropostaApresentar />} />
       <Route element={<RootLayout />}>
