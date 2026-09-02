@@ -66,6 +66,10 @@ export async function runDueCloudWhatsAppPublishSweep(targetDir, client, options
       const { error: itemErrorUpdateError } = await client.from('content_items').update({
         status: 'error',
         metadata: { ...item.metadata, publishError: err.message },
+        // content_items has no auto-update trigger for this column — set it
+        // explicitly, same as publish-sweep/index.ts, so the alert pass's
+        // "recently failed" window measures from the actual failure time.
+        updated_at: new Date().toISOString(),
       }).eq('id', item.id);
       if (itemErrorUpdateError) {
         result.errors.push({ contentItemId: item.id, error: `failed to record error status on content_items: ${itemErrorUpdateError.message}` });

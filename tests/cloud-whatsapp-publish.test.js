@@ -144,6 +144,7 @@ test('runDueCloudWhatsAppPublishSweep records error status when the publisher th
   assert.match(result.errors[0].error, /WAHA respondeu 500/);
   assert.equal(client.state.contentItemUpdates[0].patch.status, 'error');
   assert.equal(client.state.contentItemUpdates[0].patch.metadata.publishError, 'WAHA respondeu 500');
+  assert.ok(client.state.contentItemUpdates[0].patch.updated_at);
   assert.equal(client.state.scheduleUpdates[0].patch.status, 'error');
 
   await rm(targetDir, { recursive: true, force: true });
