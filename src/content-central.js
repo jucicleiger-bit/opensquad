@@ -4437,6 +4437,10 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
         item.status === 'aprovado'
         && !item.publish?.realPublished
         && !(item.contentId && alreadyPublishedContentIds.has(item.contentId))
+        // migrate-to-supabase.js stamps this once the item is copied into
+        // Supabase content_items/schedules — the cloud sweep owns publishing
+        // it from there on; publishing it locally too would double-post.
+        && !item.migratedToCloud
         && isPublishDue(item, now)
       )
       .sort((a, b) => {

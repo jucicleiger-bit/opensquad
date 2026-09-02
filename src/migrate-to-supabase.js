@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -166,6 +166,22 @@ export async function migrateContentForProject(targetDir, slug, client) {
             .select()
             .single();
           if (itemError) throw new Error(itemError.message || String(itemError));
+
+          // Once Supabase has the item, its own sweep (runDueCloudWhatsAppPublishSweep
+          // et al) owns publishing it. Without this flag the local file stays
+          // "aprovado" + unpublished forever, so the LOCAL sweep (runDuePublishSweep)
+          // would independently find it due too — both fire on the next server
+          // boot and the same post goes out twice. Re-read the live file (not
+          // the batch.json snapshot `item` came from, which can be stale after
+          // approval) so this patch never clobbers real approval/publish state.
+          if (item.filePath) {
+            try {
+              const live = await readJsonIfExists(item.filePath);
+              if (live) await writeFile(item.filePath, JSON.stringify({ ...live, migratedToCloud: true }));
+            } catch (err) {
+              console.warn(`failed to stamp migratedToCloud on ${item.filePath}: ${err.message}`);
+            }
+          }
 
           const runAt = scheduledRunAt(item);
           if (runAt) {

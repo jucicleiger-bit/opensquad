@@ -6944,6 +6944,33 @@ test('runDuePublishSweep does not publish approved content scheduled in the futu
   });
 });
 
+test('runDuePublishSweep skips a due item already migrated to Supabase — the cloud sweep owns it now, publishing it locally too would double-post', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'publish-migrated',
+      name: 'Publish Migrated',
+      handle: '@publishmigrated',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('publish-migrated', { days: 1, startDate: '2026-07-20', postTime: '09:00', channel: 'whatsapp_status' }, dir);
+    await approveContent('publish-migrated', batch.items[0].contentId, dir, batch.batchId);
+
+    // migrate-to-supabase.js stamps this flag onto the local file once the
+    // item is copied into Supabase content_items/schedules.
+    const raw = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    raw.migratedToCloud = true;
+    await writeFile(batch.items[0].filePath, JSON.stringify(raw));
+
+    const result = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-20T12:00:00.000Z'),
+      metaPublisher: async () => { throw new Error('should never be called for a migrated item'); },
+    });
+
+    assert.deepEqual(result.published, []);
+    assert.equal(result.failed.length, 0);
+  });
+});
+
 test('runDuePublishSweep records the error and keeps the item unpublished when the publisher fails', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

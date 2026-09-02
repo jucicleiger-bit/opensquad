@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrateProjects, migrateContentForProject } from '../src/migrate-to-supabase.js';
@@ -95,7 +95,7 @@ function fakeClientWithStorage() {
               single: async () => ({ data: { id: `project-uuid-for-${value}` }, error: null }),
             }),
           }),
-          update: (_patch) => ({ eq: async () => ({ error: null }) }),
+          update: () => ({ eq: async () => ({ error: null }) }),
         };
       }
       if (table === 'content_items') {
@@ -169,6 +169,44 @@ test('migrateContentForProject upserts a content item, its schedule, and uploads
   assert.equal(client.upserts.schedules[0].run_at, expectedRunAt);
   assert.equal(client.uploads.length, 1);
   assert.equal(client.uploads[0].bucket, 'content-media');
+
+  await rm(targetDir, { recursive: true, force: true });
+});
+
+test('migrateContentForProject stamps migratedToCloud on the local item file so the local publish sweep stops scheduling it once Supabase owns it', async () => {
+  const targetDir = await mkdtemp(join(tmpdir(), 'osq-migrate-flag-'));
+  const batchDir = join(
+    targetDir, '_opensquad', 'content-central', 'projects', 'acme-pizza',
+    'content', 'drafts', '2026-08-04-01d',
+  );
+  await mkdir(join(batchDir, 'images'), { recursive: true });
+  await writeFile(join(batchDir, 'images', 'day-01.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  const itemFilePath = join(batchDir, 'day-01.json');
+  const item = {
+    contentId: 'acme-pizza-2026-08-04-01d-01',
+    channel: 'whatsapp_status',
+    status: 'aprovado',
+    scheduledDate: '2026-08-04',
+    scheduledTime: '12:00',
+    caption: { text: 'Pizza hoje!' },
+    image: { localPath: 'content/drafts/2026-08-04-01d/images/day-01.png', mimeType: 'image/png' },
+    approval: { required: true, approvedAt: '2026-08-01T00:00:00.000Z' },
+    publish: { publishedAt: null, error: null },
+    filePath: itemFilePath,
+  };
+  await writeFile(itemFilePath, JSON.stringify(item));
+  await writeFile(join(batchDir, 'batch.json'), JSON.stringify({ items: [item] }));
+
+  const client = fakeClientWithStorage();
+  const result = await migrateContentForProject(targetDir, 'acme-pizza', client);
+
+  assert.equal(result.migrated, 1);
+  assert.equal(result.errors.length, 0);
+  const updated = JSON.parse(await readFile(itemFilePath, 'utf-8'));
+  assert.equal(updated.migratedToCloud, true);
+  // The write must patch the live file, not overwrite it with the (possibly
+  // stale) batch.json snapshot — real approval state must survive.
+  assert.equal(updated.status, 'aprovado');
 
   await rm(targetDir, { recursive: true, force: true });
 });
