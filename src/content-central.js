@@ -3264,6 +3264,36 @@ function contentRulesWithApprovedPlan(contentRules, override) {
   return planRules.length ? [...contentRules, ...planRules] : contentRules;
 }
 
+// contentId is derived from projectId+date+channel+slot alone — it carries
+// no batchId, so two batches covering the same date silently produce
+// identical contentIds for the same channel. That collision is invisible at
+// generation time (each batch writes into its own folder) but corrupts
+// publish tracking later: the gaveta queue is keyed by contentId only, so
+// once one of the duplicates is genuinely posted, syncGavetePublishedContent
+// stamps that same "published" result onto every local file sharing the
+// id — including the one whose own image was never actually sent to
+// Instagram. (Real incident: two 7-day plans generated a day apart for
+// king-assessoria-mkt both covered 2026-08-29..09-03; the losing copies
+// showed "published" locally with nothing posted on Instagram.) Refusing to
+// generate over dates the project already has drafted content for closes
+// this at the source instead of relying on the operator to notice.
+async function assertNoScheduleOverlap(projectId, targetDir, startDate, days, formats) {
+  const targetChannels = new Set(formats.map((format) => format.channel));
+  if (!targetChannels.size) return;
+  const endDateExclusive = addDays(startDate, days);
+  const existingContent = await listProjectContent(projectId, targetDir);
+  const conflicts = existingContent.filter((item) =>
+    targetChannels.has(item.channel)
+    && item.scheduledDate >= startDate
+    && item.scheduledDate < endDateExclusive
+  );
+  if (!conflicts.length) return;
+  const dates = [...new Set(conflicts.map((item) => item.scheduledDate))].sort();
+  throw new Error(
+    `Já existe conteúdo agendado para ${dates.join(', ')} nesse projeto. Apague ou arquive o lote antigo antes de gerar um novo plano pra esse período — gerar por cima cria posts duplicados que disputam o mesmo horário de publicação.`
+  );
+}
+
 export async function generateContentSchedulePlan(projectId, options = {}, targetDir = process.cwd()) {
   const paths = getCentralPaths(targetDir, projectId);
   return withProjectLock(targetDir, projectId, async () => {
@@ -3281,6 +3311,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
 
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
+  await assertNoScheduleOverlap(projectId, targetDir, startDate, days, formats);
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
   const approvedPlanOverrides = buildApprovedPlanOverrideMap(options.approvedPlan);
   await refreshProjectTopicIdeasInPlace(project, paths, { topicIdeaGenerator: options.topicIdeaGenerator }, new Date());
@@ -4094,14 +4125,17 @@ async function applyContentRegeneration(content, project, projectId, options, pa
       content.image.prompt = `${content.image.prompt}\n\nAjuste solicitado: ${options.note || 'gerar nova abordagem visual.'}`;
     }
   }
-  if (regenerate === 'caption' || regenerate === 'all') {
-    content.caption.version += 1;
+  const captionLooksUnfinished = isUnresolvedCaptionDraft(content.caption?.text) && !content.caption?.generatedSource;
+  if (regenerate === 'caption' || regenerate === 'all' || (regenerate === 'creative' && captionLooksUnfinished)) {
     if (typeof options.captionGenerator === 'function') {
+      content.caption.version += 1;
       try {
         const text = await options.captionGenerator({
           content,
           project,
-          note: options.note || 'Reescrever com uma abordagem nova, diferente da anterior.',
+          note: regenerate === 'creative' && captionLooksUnfinished
+            ? ['A legenda atual ainda está no rascunho técnico. Escrever a copy final pronta para publicar.', options.note ? `Pedido visual do operador: ${options.note}` : ''].filter(Boolean).join(' ')
+            : options.note || 'Reescrever com uma abordagem nova, diferente da anterior.',
         });
         if (text) {
           content.caption.text = text;
@@ -4114,13 +4148,25 @@ async function applyContentRegeneration(content, project, projectId, options, pa
         content.captionGenerationError = err.message;
       }
     } else {
-      content.caption.text = `${content.caption.text}\n\n[Revisão solicitada: ${options.note || 'ajustar legenda.'}]`;
+      if (regenerate === 'creative' && captionLooksUnfinished) {
+        content.captionGenerationError = 'A legenda ainda está no rascunho técnico. Use "Regenerar dia" para gerar a copy final.';
+      } else {
+        content.caption.version += 1;
+        content.caption.text = `${content.caption.text}\n\n[Revisão solicitada: ${options.note || 'ajustar legenda.'}]`;
+      }
     }
   }
 
   content.status = 'regenerated';
   content.updatedAt = new Date().toISOString();
   return { creativeRegenerated };
+}
+
+function isUnresolvedCaptionDraft(value) {
+  const text = String(value || '');
+  return /Gancho:\s*\[/.test(text)
+    || /Corpo:\s*\[/.test(text)
+    || /CTA:\s*\[(?:IA deve|chamada|criar)/.test(text);
 }
 
 export async function regenerateContentDay(projectId, contentId, options = {}, targetDir = process.cwd()) {
@@ -4380,9 +4426,32 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
     const projectId = projectSummary.projectId;
     let content = await listProjectContent(projectId, targetDir);
     if (options.channels) content = content.filter((item) => options.channels.has(item.channel));
+    const alreadyPublishedContentIds = new Set(
+      content
+        .filter((item) => item.contentId && item.publish?.realPublished)
+        .map((item) => item.contentId)
+    );
+    const seenDueContentIds = new Set();
     const due = content
-      .filter((item) => item.status === 'aprovado' && !item.publish?.realPublished && isPublishDue(item, now))
-      .sort((a, b) => (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime));
+      .filter((item) =>
+        item.status === 'aprovado'
+        && !item.publish?.realPublished
+        && !(item.contentId && alreadyPublishedContentIds.has(item.contentId))
+        && isPublishDue(item, now)
+      )
+      .sort((a, b) => {
+        const slotOrder = (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime);
+        if (slotOrder) return slotOrder;
+        const contentOrder = String(a.contentId || '').localeCompare(String(b.contentId || ''));
+        if (contentOrder) return contentOrder;
+        return Date.parse(b.updatedAt || b.createdAt || 0) - Date.parse(a.updatedAt || a.createdAt || 0);
+      })
+      .filter((item) => {
+        if (!item.contentId) return true;
+        if (seenDueContentIds.has(item.contentId)) return false;
+        seenDueContentIds.add(item.contentId);
+        return true;
+      });
 
     const earliestSlotKey = due.length ? due[0].scheduledDate + due[0].scheduledTime : null;
     const dueInEarliestSlot = due.filter((item) => item.scheduledDate + item.scheduledTime === earliestSlotKey);
@@ -4713,6 +4782,9 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
         if (item.image?.generating) {
           item.image.generating = false;
           item.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar só a imagem" para tentar de novo.';
+          if (isUnresolvedCaptionDraft(item.caption?.text) && !item.caption?.generatedSource) {
+            item.captionGenerationError = 'Redação interrompida antes de substituir o rascunho técnico pela copy final. Clique em "Regenerar dia" ou regenere a imagem para tentar de novo.';
+          }
           item.updatedAt = new Date().toISOString();
           await writeJson(item.filePath, item);
           fixed.push({ projectId: entry.name, contentId: item.contentId });

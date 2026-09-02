@@ -17,7 +17,11 @@ function sortNewestFirst(items: ContentItem[]): ContentItem[] {
 
 export function TestPost() {
   const { project } = useOutletContext<WorkspaceContext>();
-  const activeOffers = (project.contentStrategy?.offers || []).filter((offer) => offer.active !== false);
+  // Only real "Oferta direta" entries — not institutional/prova social/
+  // orientação/desejo/urgência etc, which aren't a product to test with.
+  const activeOffers = (project.contentStrategy?.offers || []).filter(
+    (offer) => offer.active !== false && offer.type === "offer",
+  );
   const [channel, setChannel] = useState("instagram_story");
   const [note, setNote] = useState("");
   const [offerId, setOfferId] = useState("");

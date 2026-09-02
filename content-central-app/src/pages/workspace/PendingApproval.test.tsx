@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -37,6 +37,14 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
       });
     }),
   );
+}
+
+function deferredResponse(body: unknown) {
+  let resolve!: () => void;
+  const promise = new Promise<{ ok: boolean; text: () => Promise<string> }>((done) => {
+    resolve = () => done({ ok: true, text: async () => JSON.stringify(body) });
+  });
+  return { promise, resolve };
 }
 
 function renderPendingApproval() {
@@ -226,6 +234,92 @@ describe("PendingApproval", () => {
     expect(await screen.findByText("Nada aguardando aprovação")).toBeInTheDocument();
   });
 
+  it("keeps one approval button loading until the approval finishes", async () => {
+    const item = baseItem();
+    const approval = deferredResponse({ ok: true });
+    let contentLoads = 0;
+    const response = (body: unknown) => Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/state") return response(PROJECT_STATE);
+      if (url === "/api/projects/boss-pizzaria/content" && !init?.method) {
+        contentLoads += 1;
+        return response({ content: contentLoads === 1 ? [item] : [] });
+      }
+      if (url.endsWith("/approve")) return approval.promise;
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPendingApproval();
+
+    await screen.findAllByText("Legenda aguardando aprovação");
+    await userEvent.click(screen.getByRole("button", { name: "Aprovar" }));
+
+    expect(screen.getByRole("button", { name: /Aprovando/ })).toBeDisabled();
+    expect(screen.queryByText("Nada aguardando aprovação")).not.toBeInTheDocument();
+
+    await act(async () => {
+      approval.resolve();
+      await approval.promise;
+    });
+
+    expect(await screen.findByText("Nada aguardando aprovação")).toBeInTheDocument();
+    expect(screen.getByText(/Post aprovado/)).toBeInTheDocument();
+  });
+
+  it("approves all pending items with a decreasing progress counter", async () => {
+    const story = baseItem({ contentId: "boss-pizzaria-day-1-instagram_story-01", formatLabel: "Instagram Stories" });
+    const status = baseItem({
+      contentId: "boss-pizzaria-day-1-whatsapp_status-01",
+      channel: "whatsapp_status",
+      formatLabel: "WhatsApp Status",
+      scheduledTime: "11:00",
+    });
+    const storyApproval = deferredResponse({ ok: true });
+    const statusApproval = deferredResponse({ ok: true });
+    let contentLoads = 0;
+    const response = (body: unknown) => Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/state") return response(PROJECT_STATE);
+      if (url === "/api/projects/boss-pizzaria/content" && !init?.method) {
+        contentLoads += 1;
+        return response({ content: contentLoads === 1 ? [story, status] : [] });
+      }
+      if (url.includes("instagram_story") && url.endsWith("/approve")) return storyApproval.promise;
+      if (url.includes("whatsapp_status") && url.endsWith("/approve")) return statusApproval.promise;
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPendingApproval();
+
+    await screen.findAllByText("Legenda aguardando aprovação");
+    await userEvent.click(screen.getByRole("button", { name: "Aprovar todos (2)" }));
+
+    expect(screen.getByRole("button", { name: /Aprovando todos/ })).toBeDisabled();
+    expect(screen.getByText("2 faltando")).toBeInTheDocument();
+
+    await act(async () => {
+      storyApproval.resolve();
+      await storyApproval.promise;
+    });
+
+    await waitFor(() => {
+      const approveCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/approve"));
+      expect(approveCalls).toHaveLength(2);
+    });
+    expect(screen.getByText("1 faltando")).toBeInTheDocument();
+
+    await act(async () => {
+      statusApproval.resolve();
+      await statusApproval.promise;
+    });
+
+    expect(await screen.findByText("Nada aguardando aprovação")).toBeInTheDocument();
+    expect(screen.getByText(/2 post\(s\) aprovado\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText("0 faltando")).toBeInTheDocument();
+  });
+
   it("deletes a card through the real endpoint after confirmation", async () => {
     vi.spyOn(window, "prompt").mockReturnValue("");
     stubFetchSequence([
@@ -393,6 +487,28 @@ describe("PendingApproval", () => {
     expect(body.batchId).toBe("batch-1");
   });
 
+  it("regenerates only the caption through the real endpoint", async () => {
+    const regenerated = baseItem({ caption: { text: "Copy final gerada pela IA." } });
+    stubFetchSequence([
+      { body: PROJECT_STATE },
+      { body: { content: [baseItem()] } },
+      { body: { content: regenerated } },
+      { body: { content: [regenerated] } },
+    ]);
+
+    renderPendingApproval();
+
+    await screen.findByText("Legenda aguardando aprovação");
+    await userEvent.click(screen.getByRole("button", { name: "Regenerar legenda" }));
+
+    expect(await screen.findByText("Legenda regenerada.")).toBeInTheDocument();
+    const regenerateCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    expect(regenerateCall[0]).toContain(`/content/${baseItem().contentId}/regenerate`);
+    const body = JSON.parse(regenerateCall[1].body as string);
+    expect(body.regenerate).toBe("caption");
+    expect(body.batchId).toBe("batch-1");
+  });
+
   it("does not show \"Animar para Reels\" on a non-Reels card", async () => {
     stubFetchSequence([{ body: PROJECT_STATE }, { body: { content: [baseItem()] } }]);
     renderPendingApproval();
@@ -516,6 +632,59 @@ describe("PendingApproval", () => {
     ]);
   });
 
+  it("starts every grouped approval request before waiting for the slowest format", async () => {
+    const groupKey = "2026-07-24::vertical::slot0";
+    const story = baseItem({
+      contentId: "boss-pizzaria-day-1-instagram_story-01",
+      channel: "instagram_story",
+      formatLabel: "Instagram Stories",
+      creativeGroupKey: groupKey,
+      creativeSharedWith: ["boss-pizzaria-day-1-whatsapp_status-01"],
+    });
+    const whatsappStatus = baseItem({
+      contentId: "boss-pizzaria-day-1-whatsapp_status-01",
+      channel: "whatsapp_status",
+      formatLabel: "WhatsApp Status",
+      creativeGroupKey: groupKey,
+      creativeSharedWith: ["boss-pizzaria-day-1-instagram_story-01"],
+    });
+    let contentLoads = 0;
+    let releaseStoryApproval = () => {};
+    const response = (body: unknown) => Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
+    const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/state") return response(PROJECT_STATE);
+      if (url === "/api/projects/boss-pizzaria/content" && !init?.method) {
+        contentLoads += 1;
+        return response({ content: contentLoads === 1 ? [story, whatsappStatus] : [] });
+      }
+      if (url.includes("instagram_story") && url.endsWith("/approve")) {
+        return new Promise((resolve) => {
+          releaseStoryApproval = () => resolve({ ok: true, text: async () => JSON.stringify({ ok: true }) });
+        });
+      }
+      if (url.includes("whatsapp_status") && url.endsWith("/approve")) return response({ ok: true });
+      return response({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderPendingApproval();
+
+    expect(await screen.findByText("Legenda aguardando aprovação")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Aprovar (2 formatos)" }));
+
+    await waitFor(() => {
+      const approveCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/approve"));
+      expect(approveCalls).toHaveLength(2);
+    });
+    expect(screen.getByRole("button", { name: /Aprovando/ })).toBeDisabled();
+    expect(screen.queryByText("Nada aguardando aprovação")).not.toBeInTheDocument();
+
+    await act(async () => {
+      releaseStoryApproval();
+    });
+    expect(await screen.findByText("Nada aguardando aprovação")).toBeInTheDocument();
+  });
+
   it("saves an edited shared caption to every member of a creative group", async () => {
     const groupKey = "2026-07-24::feed::slot0";
     const feed = baseItem({
@@ -602,6 +771,45 @@ describe("PendingApproval", () => {
     expect([...body.contentIds].sort()).toEqual([
       "boss-pizzaria-day-1-facebook_story-01",
       "boss-pizzaria-day-1-instagram_story-01",
+    ]);
+  });
+
+  it("regenerates a grouped caption without regenerating the shared image", async () => {
+    const groupKey = "2026-07-24::vertical::slot0";
+    const story = baseItem({
+      contentId: "boss-pizzaria-day-1-instagram_story-01",
+      channel: "instagram_story",
+      formatLabel: "Instagram Stories",
+      creativeGroupKey: groupKey,
+      creativeSharedWith: ["boss-pizzaria-day-1-whatsapp_status-01"],
+    });
+    const whatsappStatus = baseItem({
+      contentId: "boss-pizzaria-day-1-whatsapp_status-01",
+      channel: "whatsapp_status",
+      formatLabel: "WhatsApp Status",
+      creativeGroupKey: groupKey,
+      creativeSharedWith: ["boss-pizzaria-day-1-instagram_story-01"],
+    });
+    stubFetchSequence([
+      { body: PROJECT_STATE },
+      { body: { content: [story, whatsappStatus] } },
+      { body: { items: [story, whatsappStatus] } },
+      { body: { content: [story, whatsappStatus] } },
+    ]);
+
+    renderPendingApproval();
+
+    await screen.findByText("Legenda aguardando aprovação");
+    await userEvent.click(screen.getAllByRole("button", { name: "Regenerar legenda" })[0]);
+
+    expect(await screen.findByText("Legenda regenerada em todos os formatos.")).toBeInTheDocument();
+    const regenerateCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[2];
+    expect(regenerateCall[0]).toContain("/content-group-regenerate");
+    const body = JSON.parse(regenerateCall[1].body as string);
+    expect(body.regenerate).toBe("caption");
+    expect([...body.contentIds].sort()).toEqual([
+      "boss-pizzaria-day-1-instagram_story-01",
+      "boss-pizzaria-day-1-whatsapp_status-01",
     ]);
   });
 

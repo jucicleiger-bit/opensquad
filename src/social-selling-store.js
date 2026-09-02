@@ -26,6 +26,20 @@ export const DEFAULT_SOCIAL_SELLING_CONFIG = {
   // pattern Instagram flags.
   initialActionDelayMs: { min: 0, max: 1800000 },
   notifications: { wahaSessionName: null, operatorChatId: null },
+  // false = never call any LLM (no cost, no API/Ollama dependency).
+  // Qualification becomes a simple "has a caption" check and the
+  // comment/DM come from messageTemplates below instead of an
+  // AI-personalized message.
+  useAi: true,
+  // Only read when useAi is true. 'anthropic' = Claude API (paid, best
+  // quality). 'ollama' = a local model via a local Ollama server (free,
+  // runs on the operator's own machine, lower quality).
+  aiProvider: 'anthropic',
+  ollama: { baseUrl: 'http://localhost:11434', model: 'qwen2.5:1.5b', timeoutMs: 60000 },
+  messageTemplates: {
+    comment: 'Boa! Curti o que vocês postaram por aqui.',
+    dm: 'Oi! Vi seu perfil e achei que dá pra ajudar vocês a vender mais por aqui. Podemos conversar?',
+  },
 };
 
 function isPlainObject(value) {

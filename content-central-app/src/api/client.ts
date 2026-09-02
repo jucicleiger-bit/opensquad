@@ -873,7 +873,7 @@ export function publishContent(projectId: string, contentId: string, batchId?: s
 export function regenerateContent(
   projectId: string,
   contentId: string,
-  input: { regenerate: "creative" | "all"; note?: string; batchId?: string },
+  input: { regenerate: "creative" | "caption" | "all"; note?: string; batchId?: string },
 ): Promise<{ content: ContentItem }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/content/${encodeURIComponent(contentId)}/regenerate`, {
     method: "POST",
@@ -884,7 +884,7 @@ export function regenerateContent(
 export function regenerateContentGroup(
   projectId: string,
   contentIds: string[],
-  input: { regenerate: "creative" | "all"; note?: string; batchId?: string },
+  input: { regenerate: "creative" | "caption" | "all"; note?: string; batchId?: string },
 ): Promise<{ items: ContentItem[] }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/content-group-regenerate`, {
     method: "POST",

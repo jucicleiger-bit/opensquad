@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
+import { ImageLightbox } from "@/components/ImageLightbox";
 import { Skeleton } from "@/components/Skeleton";
 import styles from "./AdCreatives.module.css";
 
@@ -40,6 +41,7 @@ export function AdCreatives() {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [editNotes, setEditNotes] = useState<Record<string, string>>({});
   const [cardState, setCardState] = useState<Record<string, CardActionState>>({});
+  const [preview, setPreview] = useState<{ src: string; title: string; adCreativeId: string } | null>(null);
 
   const activeOffers = (project.contentStrategy?.offers || []).filter((offer) => offer.active !== false);
 
@@ -220,6 +222,16 @@ export function AdCreatives() {
                   ) : (
                     <span>Sem imagem de prévia ainda</span>
                   )}
+                  {src ? (
+                    <button
+                      type="button"
+                      className={styles.viewLargeButton}
+                      onClick={() => setPreview({ src, title: adCreative.title, adCreativeId: adCreative.adCreativeId })}
+                      aria-label="Visualizar imagem grande"
+                    >
+                      ⤢ Ver grande
+                    </button>
+                  ) : null}
                 </div>
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -320,6 +332,15 @@ export function AdCreatives() {
           })}
         </div>
       )}
+
+      {preview ? (
+        <ImageLightbox
+          src={preview.src}
+          alt={preview.title}
+          fileName={`${preview.adCreativeId}.png`}
+          onClose={() => setPreview(null)}
+        />
+      ) : null}
     </div>
   );
 }

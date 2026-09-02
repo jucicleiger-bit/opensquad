@@ -126,6 +126,8 @@ import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './ga
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
 import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
 import { qualifySocialSellingLead } from './social-selling-ai.js';
+import { qualifyWithTemplate } from './social-selling-templates.js';
+import { qualifyWithOllama } from './social-selling-ollama.js';
 import { notifySocialSellingOperator } from './social-selling-notify.js';
 import { loadSocialSellingConfig, randomDelayMs } from './social-selling-store.js';
 
@@ -167,6 +169,7 @@ function resolveGaveteSync(targetDir, projectId) {
 // through the same isVideoChannel branching and uploadWithRetry settle/retry
 // treatment instead of drifting apart.
 async function uploadContentMediaFresh(content, projectId, targetDir) {
+  if (WHATSAPP_CHANNELS.has(content.channel)) return null;
   const isVideoChannel = VIDEO_CHANNELS.has(content.channel);
   if (isVideoChannel) {
     if (!content.video?.localPath) return null;
@@ -4849,6 +4852,76 @@ async function getProjectWhatsAppConnectionStatus(projectId, project) {
 // is always exactly one target). Short timeout, no retry loop: re-hitting a
 // call that might hang doesn't recover from a transient blip, it just
 // triples the wait for the same failure — same reasoning as before.
+const WHATSAPP_STATUS_CAPTION_MAX_LENGTH = 140;
+
+function normalizeCaptionKey(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function cleanWhatsAppStatusCaptionLine(value) {
+  return String(value || '')
+    .replace(/^\s*[-*]\s*/, '')
+    .replace(/^(gancho|headline|chamada|cta)\s*:\s*/i, '')
+    .trim();
+}
+
+function isMetaCaptionLine(value) {
+  const key = normalizeCaptionKey(value).trim();
+  return /^(dia \d+|assunto|preco|corpo|observacao|itens\/detalhes)\s*:/.test(key)
+    || key.includes('[ia deve')
+    || key.includes('[criar ')
+    || key.includes('[explicar ')
+    || key.includes('[chamada ');
+}
+
+function findCaptionLabel(lines, labels) {
+  for (const line of lines) {
+    const key = normalizeCaptionKey(line).trim();
+    const label = labels.find((entry) => key.startsWith(`${entry}:`));
+    if (label) return cleanWhatsAppStatusCaptionLine(line);
+  }
+  return '';
+}
+
+function truncateWhatsAppStatusCaption(value, maxLength = WHATSAPP_STATUS_CAPTION_MAX_LENGTH) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (text.length <= maxLength) return text;
+  const slice = text.slice(0, Math.max(0, maxLength - 3)).trimEnd();
+  const wordBreak = slice.lastIndexOf(' ');
+  const base = wordBreak >= Math.floor(maxLength * 0.55) ? slice.slice(0, wordBreak) : slice;
+  return `${base}...`;
+}
+
+function buildWhatsAppStatusCaption(captionText) {
+  const lines = String(captionText || '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!lines.length) return '';
+
+  const hook = findCaptionLabel(lines, ['gancho', 'headline', 'chamada']);
+  const cta = findCaptionLabel(lines, ['cta']);
+  const pieces = [hook, cta].filter(Boolean);
+
+  if (!pieces.length) {
+    const meaningful = lines
+      .filter((line) => !isMetaCaptionLine(line))
+      .map(cleanWhatsAppStatusCaptionLine)
+      .filter(Boolean);
+    if (meaningful[0]) pieces.push(meaningful[0]);
+    const actionLine = [...meaningful].reverse().find((line) =>
+      /^(chame|fale|peca|pede|mande|envie|acesse|responda|salve|compartilhe|vem|venha|garanta|agende|reserve|saiba)\b/i.test(normalizeCaptionKey(line))
+    );
+    if (actionLine && actionLine !== pieces[0]) pieces.push(actionLine);
+  }
+
+  return truncateWhatsAppStatusCaption([...new Set(pieces)].join(' '));
+}
+
 export async function publishContentToWhatsAppStatus({ content, project }, targetDir) {
   const sessionName = project.whatsapp?.sessionName;
   if (!sessionName) {
@@ -4873,7 +4946,7 @@ export async function publishContentToWhatsAppStatus({ content, project }, targe
       headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
       body: JSON.stringify({
         file: { mimetype: 'image/png', url: mediaUrl },
-        caption: content.caption?.text || '',
+        caption: buildWhatsAppStatusCaption(content.caption?.text || ''),
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -5149,7 +5222,10 @@ export function startSocialSellingRadarScheduler(targetDir) {
     running = true;
     runSocialSellingRadarSweep(targetDir, {
       discover: (config) => discoverSocialSellingCandidates(config, { targetDir, dryRun }),
-      qualify: (candidate, config) => qualifySocialSellingLead(candidate, config),
+      qualify: (candidate, config) => {
+        if (config.useAi === false) return qualifyWithTemplate(candidate, config);
+        return config.aiProvider === 'ollama' ? qualifyWithOllama(candidate, config) : qualifySocialSellingLead(candidate, config);
+      },
     }).then(async (result) => {
       if (result.blocked) {
         const config = await loadSocialSellingConfig(targetDir);

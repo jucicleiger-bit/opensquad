@@ -25,7 +25,7 @@ export function Calendar() {
   const [items, setItems] = useState<ContentItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
-  const [selectedContentId, setSelectedContentId] = useState<string | null>(null);
+  const [selectedItemKey, setSelectedItemKey] = useState<string | null>(null);
   const [actionState, setActionState] = useState<ActionState>(IDLE_ACTION_STATE);
 
   const refresh = useCallback(async () => {
@@ -40,7 +40,7 @@ export function Calendar() {
 
   useEffect(() => {
     setItems(null);
-    setSelectedContentId(null);
+    setSelectedItemKey(null);
     refresh();
   }, [refresh]);
 
@@ -68,10 +68,11 @@ export function Calendar() {
 
   const gridDays = useMemo(() => buildMonthGrid(cursor), [cursor]);
   const todayKey = toDateKey(new Date());
-  const selectedItem = scheduledItems.find((item) => item.contentId === selectedContentId) ?? null;
+  const itemKey = (item: ContentItem) => `${item.batchId || "__no_batch__"}::${item.contentId}`;
+  const selectedItem = scheduledItems.find((item) => itemKey(item) === selectedItemKey) ?? null;
 
   function selectItem(item: ContentItem) {
-    setSelectedContentId(item.contentId);
+    setSelectedItemKey(itemKey(item));
     setActionState(IDLE_ACTION_STATE);
   }
 
@@ -94,7 +95,7 @@ export function Calendar() {
     setActionState({ busy: true, error: null, message: null });
     try {
       await deleteContent(project.projectId, item.contentId, item.batchId, reason || undefined);
-      setSelectedContentId(null);
+      setSelectedItemKey(null);
       await refresh();
     } catch (err) {
       setActionState({ busy: false, error: (err as Error).message, message: null });
@@ -146,9 +147,9 @@ export function Calendar() {
                   const meta = statusMeta(item);
                   return (
                     <button
-                      key={item.contentId}
+                      key={itemKey(item)}
                       type="button"
-                      className={`${styles.chip} ${meta.chipClass ? styles[meta.chipClass] : ""} ${item.contentId === selectedContentId ? styles.chipSelected : ""}`.trim()}
+                      className={`${styles.chip} ${meta.chipClass ? styles[meta.chipClass] : ""} ${itemKey(item) === selectedItemKey ? styles.chipSelected : ""}`.trim()}
                       onClick={() => selectItem(item)}
                     >
                       <span className={`${styles.dot} ${styles[meta.dotClass]}`} />

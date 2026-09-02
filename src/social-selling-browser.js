@@ -1,6 +1,13 @@
 import { chromium } from 'playwright';
 import { getCentralPaths } from './content-central.js';
 import { draftSocialSellingDm } from './social-selling-ai.js';
+import { draftDmWithTemplate } from './social-selling-templates.js';
+import { draftDmWithOllama } from './social-selling-ollama.js';
+
+async function draftDmForLead(lead, config) {
+  if (config.useAi === false) return draftDmWithTemplate(lead, config);
+  return config.aiProvider === 'ollama' ? draftDmWithOllama(lead, config) : draftSocialSellingDm(lead, config);
+}
 
 // One persistent Chromium context per server process, logged into the
 // operator's own Instagram account once by hand (same idea as the
@@ -174,7 +181,7 @@ export async function performSocialSellingAction({ lead, action, config }, { tar
     if (action === 'follow') {
       const followed = await clickByAnyLabel(page, 'button', ['Follow', 'Seguir']);
       if (!followed) return { blocked: true, reason: 'follow_button_not_found' };
-      const draftDm = await draftSocialSellingDm(lead, config);
+      const draftDm = await draftDmForLead(lead, config);
       return { ok: true, draftDm };
     }
 

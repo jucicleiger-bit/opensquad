@@ -4545,7 +4545,10 @@ test('generateContentSchedulePlan clamps carouselsPerWeek to 0-7 and maxCarousel
 
     const negative = await generateContentSchedulePlan('carrossel-clamp-config', {
       days: 7,
-      startDate: '2026-08-24',
+      // One period further out than the first call — same project/channel,
+      // so the schedule-overlap guard (see 'refuses to generate over dates
+      // ...' below) doesn't trip on back-to-back clamp-only calls.
+      startDate: '2026-08-31',
       formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
       carouselsPerWeek: -3,
       maxCarouselSlides: 999,
@@ -4555,7 +4558,7 @@ test('generateContentSchedulePlan clamps carouselsPerWeek to 0-7 and maxCarousel
 
     const defaulted = await generateContentSchedulePlan('carrossel-clamp-config', {
       days: 7,
-      startDate: '2026-08-24',
+      startDate: '2026-09-07',
       formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
     }, dir);
     assert.equal(defaulted.carouselsPerWeek, 0);
@@ -4608,6 +4611,53 @@ test('generateContentSchedulePlan skips the carousel quota entirely when the bat
       carouselsPerWeek: 5,
     }, dir);
     assert.ok(batch.items.every((item) => item.format !== 'carousel'));
+  });
+});
+
+test('generateContentSchedulePlan refuses to generate over dates the project already has drafted content for', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'agenda-sobreposta',
+      name: 'Agenda Sobreposta',
+      handle: '@agendasobreposta',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    await generateContentSchedulePlan('agenda-sobreposta', {
+      days: 7,
+      startDate: '2026-08-29',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '13:00', intervalMinutes: 0 }],
+    }, dir);
+
+    // A second plan generated a day later, one day off, still overlaps
+    // 2026-08-30..09-03 on the same channel — this is exactly the
+    // king-assessoria-mkt incident (two 7-day plans a day apart both
+    // covering the same dates, silently colliding on contentId).
+    await assert.rejects(
+      generateContentSchedulePlan('agenda-sobreposta', {
+        days: 7,
+        startDate: '2026-08-30',
+        formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      }, dir),
+      /Já existe conteúdo agendado/
+    );
+
+    // A plan for a genuinely free date range, or a different channel over
+    // the same dates, must still work — the guard should never block a
+    // real non-overlapping generation.
+    const laterBatch = await generateContentSchedulePlan('agenda-sobreposta', {
+      days: 2,
+      startDate: '2026-09-10',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+    }, dir);
+    assert.equal(laterBatch.items.length, 2);
+
+    const otherChannelBatch = await generateContentSchedulePlan('agenda-sobreposta', {
+      days: 7,
+      startDate: '2026-08-29',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+    }, dir);
+    assert.equal(otherChannelBatch.items.length, 7);
   });
 });
 
@@ -6924,6 +6974,58 @@ test('runDuePublishSweep with a channels filter only sees content on those chann
   });
 });
 
+test('runDuePublishSweep publishes only one duplicate contentId across local batches', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'publish-dedupe',
+      name: 'Publish Dedupe',
+      handle: '@publishdedupe',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    const batch = await generateContentBatch('publish-dedupe', {
+      days: 1, startDate: '2026-07-20', postTime: '09:00', channel: 'whatsapp_status',
+    }, dir);
+    await approveContent('publish-dedupe', batch.items[0].contentId, dir, batch.batchId);
+
+    const original = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    original.updatedAt = '2026-07-20T10:00:00.000Z';
+    await writeFile(batch.items[0].filePath, JSON.stringify(original, null, 2), 'utf-8');
+
+    const paths = getCentralPaths(dir, 'publish-dedupe');
+    const duplicateBatchId = 'duplicate-local-batch';
+    const duplicateDir = join(paths.draftsDir, duplicateBatchId);
+    await mkdir(duplicateDir, { recursive: true });
+    const duplicatePath = join(duplicateDir, 'day-01-whatsapp_status-01.json');
+    const duplicate = {
+      ...original,
+      batchId: duplicateBatchId,
+      filePath: duplicatePath,
+      updatedAt: '2026-07-20T11:00:00.000Z',
+      caption: { ...original.caption, text: 'Copy duplicada mais recente.' },
+      publish: { realPublished: false, publishedAt: null, metaMediaId: null, permalink: null, error: null },
+    };
+    await writeFile(duplicatePath, JSON.stringify(duplicate, null, 2), 'utf-8');
+
+    const publisherCalls = [];
+    const result = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-20T12:00:00.000Z'),
+      channels: new Set(['whatsapp_status']),
+      metaPublisher: async (payload) => {
+        publisherCalls.push(payload.content.filePath);
+        return { mediaId: 'wa-deduped' };
+      },
+    });
+
+    assert.deepEqual(result.published, [batch.items[0].contentId]);
+    assert.deepEqual(publisherCalls, [duplicatePath]);
+
+    const originalAfter = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    const duplicateAfter = JSON.parse(await readFile(duplicatePath, 'utf-8'));
+    assert.notEqual(originalAfter.publish.realPublished, true);
+    assert.equal(duplicateAfter.publish.realPublished, true);
+  });
+});
+
 test('approveContent calls queueSync with an upsert for the approved item', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sync-approve', name: 'Sync Approve', handle: '@syncapprove', approvalEmail: 'a@example.com' }, dir);
@@ -6948,6 +7050,22 @@ test('approveContent works with no queueSync provided (back-compat)', async () =
     const batch = await generateContentBatch('sync-none', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
     const content = await approveContent('sync-none', batch.items[0].contentId, dir, batch.batchId);
     assert.equal(content.status, 'aprovado');
+  });
+});
+
+test('regenerateContentDay with creative-only rescues a still-unwritten caption draft', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'caption-rescue', name: 'Caption Rescue', handle: '@captionrescue', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('caption-rescue', { days: 1, startDate: '2026-08-10', postTime: '18:00' }, dir);
+
+    const content = await regenerateContentDay('caption-rescue', batch.items[0].contentId, {
+      regenerate: 'creative',
+      captionGenerator: async () => 'Copy final pronta para publicar.',
+    }, dir, batch.batchId);
+
+    assert.equal(content.caption.text, 'Copy final pronta para publicar.');
+    assert.equal(content.caption.generatedSource, 'ai');
+    assert.equal(content.captionGenerationError, null);
   });
 });
 
@@ -7382,6 +7500,7 @@ test('reconcileInterruptedGenerations clears a card stuck "generating" from a pr
     const reloadedStuck = JSON.parse(await readFile(stuckItem.filePath, 'utf-8'));
     assert.equal(reloadedStuck.image.generating, false);
     assert.match(reloadedStuck.imageGenerationError, /servidor foi reiniciado/);
+    assert.match(reloadedStuck.captionGenerationError, /Redação interrompida/);
 
     // A card that was never mid-generation must be left untouched.
     const reloadedNormal = JSON.parse(await readFile(normalItem.filePath, 'utf-8'));
@@ -7450,6 +7569,17 @@ test('reconcileInterruptedGenerations also clears a stuck slide inside a batch-i
     assert.equal(reloaded.slides[0].image.generating, false);
     assert.match(reloaded.slides[0].imageGenerationError, /servidor foi reiniciado/);
     assert.equal(reloaded.status, 'draft_generated', 'a batch item\'s own status field must never be touched by this reconcile — only image.generating and slide-level errors');
+  });
+});
+
+test('reconcileInterruptedGenerations skips orphan project directories without project.json', async () => {
+  await withTempProject(async (dir) => {
+    const paths = getCentralPaths(dir);
+    await mkdir(join(paths.projectsDir, 'commercial'), { recursive: true });
+
+    const fixed = await reconcileInterruptedGenerations(dir);
+
+    assert.deepEqual(fixed, []);
   });
 });
 

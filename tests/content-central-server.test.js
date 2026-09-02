@@ -3688,6 +3688,50 @@ test('publishContentToWhatsAppStatus posts the generated image to the WAHA statu
   }
 });
 
+test('publishContentToWhatsAppStatus sends a compact caption for WhatsApp Status', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-whatsapp-compact-caption-'));
+  try {
+    const project = {
+      projectId: 'whatsapp-compact-caption',
+      whatsapp: { sessionName: 'opensquad-whatsapp-compact-caption' },
+    };
+    const content = {
+      contentId: 'content-1',
+      channel: 'whatsapp_status',
+      caption: {
+        text: [
+          'Gancho: Pizza gigante saindo agora',
+          'Corpo: Dois sabores, borda recheada, entrega rapida, pagamento facilitado e varias condicoes para o cliente escolher sem pressa.',
+          'CTA: Chame no WhatsApp',
+        ].join('\n'),
+      },
+      publish: { mediaUrl: 'https://cdn.example.com/whatsapp-test.png' },
+    };
+
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
+    try {
+      const calls = [];
+      await withMockedFetch(async (url, init) => {
+        calls.push({ url: String(url), init });
+        return new Response(JSON.stringify({ id: 'true_status@broadcast_WA123_123@c.us' }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }, async () => {
+        await publishContentToWhatsAppStatus({ content, project }, dir);
+      });
+
+      const body = JSON.parse(calls[0].init.body);
+      assert.equal(body.caption, 'Pizza gigante saindo agora Chame no WhatsApp');
+      assert.ok(!body.caption.includes('Dois sabores'));
+      assert.ok(body.caption.length <= 140);
+    } finally {
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('publishContentToWhatsAppStatus surfaces a clear beta-instability error when WAHA times out', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-whatsapp-timeout-'));
   try {

@@ -21,7 +21,7 @@ import { ContentPipeline } from "./ContentPipeline";
 import { bucketForItem, channelLabel, groupSameCreativeItems, imageSource, isFeedChannel, statusMeta, type ContentGroup } from "./contentDisplay";
 import styles from "./PendingApproval.module.css";
 
-type BusyAction = "approve" | "delete" | "creative" | "all" | "caption" | "animate";
+type BusyAction = "approve" | "delete" | "creative" | "all" | "caption" | "saveCaption" | "animate";
 
 interface ActionState {
   busy: boolean;
@@ -31,12 +31,31 @@ interface ActionState {
 }
 
 const IDLE_ACTION_STATE: ActionState = { busy: false, error: null, message: null };
+type RegenerateMode = "creative" | "caption" | "all";
+
+interface BulkApprovalProgress {
+  active: boolean;
+  total: number;
+  approved: number;
+  failed: number;
+  remaining: number;
+  currentLabel: string | null;
+}
+
+interface PageFeedback {
+  tone: "ok" | "error";
+  message: string;
+}
+
+function itemStateKey(item: ContentItem): string {
+  return `${item.batchId || "__no_batch__"}::${item.contentId}`;
+}
 
 // Bulk actions on a group (approve-all, shared-caption-save) get their own
 // action-state/draft key so they don't collide with the leader item's own
 // per-channel key when the leader also appears in the per-channel list below.
 function groupStateKey(group: ContentGroup): string {
-  return `group:${group.leader.contentId}`;
+  return `group:${itemStateKey(group.leader)}`;
 }
 
 export function PendingApproval() {
@@ -49,6 +68,9 @@ export function PendingApproval() {
   const [captionDrafts, setCaptionDrafts] = useState<Record<string, string>>({});
   const [slideState, setSlideState] = useState<Record<string, ActionState>>({});
   const [slideNotes, setSlideNotes] = useState<Record<string, string>>({});
+  const [optimisticApprovedKeys, setOptimisticApprovedKeys] = useState<Set<string>>(() => new Set());
+  const [bulkProgress, setBulkProgress] = useState<BulkApprovalProgress | null>(null);
+  const [pageFeedback, setPageFeedback] = useState<PageFeedback | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -72,20 +94,91 @@ export function PendingApproval() {
     return () => clearInterval(timer);
   }, [items, refresh]);
 
-  const pending = (items || []).filter((item) => bucketForItem(item) === "aguardando");
+  const pending = (items || []).filter((item) => bucketForItem(item) === "aguardando" && !optimisticApprovedKeys.has(itemStateKey(item)));
   const groups = groupSameCreativeItems(pending);
+  const isBulkApproving = Boolean(bulkProgress?.active);
 
   function stateFor(key: string): ActionState {
     return actionState[key] || IDLE_ACTION_STATE;
   }
 
+  function markOptimisticApproved(targets: ContentItem[], approved: boolean) {
+    setOptimisticApprovedKeys((current) => {
+      const next = new Set(current);
+      targets.forEach((item) => {
+        const key = itemStateKey(item);
+        if (approved) next.add(key);
+        else next.delete(key);
+      });
+      return next;
+    });
+  }
+
   async function handleApprove(item: ContentItem) {
-    setActionState((s) => ({ ...s, [item.contentId]: { busy: true, busyAction: "approve", error: null, message: null } }));
+    const key = itemStateKey(item);
+    setPageFeedback(null);
+    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "approve", error: null, message: null } }));
     try {
       await approveContent(project.projectId, item.contentId, item.batchId);
+      setPageFeedback({ tone: "ok", message: "Post aprovado. Ele foi enviado para o Calendário e, quando for Instagram/Facebook, também para a gaveta." });
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: null, message: "Aprovado com sucesso." } }));
+      markOptimisticApproved([item], true);
       await refresh();
+      markOptimisticApproved([item], false);
     } catch (err) {
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: (err as Error).message, message: null } }));
+      await refresh().catch(() => {});
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
+    }
+  }
+
+  async function handleApproveAll() {
+    const targets = groups.flatMap((group) => group.members);
+    if (!targets.length || isBulkApproving) return;
+
+    const total = targets.length;
+    const approvedItems: ContentItem[] = [];
+    const errors: string[] = [];
+    setPageFeedback(null);
+    setBulkProgress({ active: true, total, approved: 0, failed: 0, remaining: total, currentLabel: null });
+
+    for (const item of targets) {
+      const key = itemStateKey(item);
+      const label = `${item.formatLabel || channelLabel(item.channel)} · ${item.scheduledDate} ${item.scheduledTime || ""}`.trim();
+      setBulkProgress({
+        active: true,
+        total,
+        approved: approvedItems.length,
+        failed: errors.length,
+        remaining: total - approvedItems.length - errors.length,
+        currentLabel: label,
+      });
+      setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "approve", error: null, message: null } }));
+      try {
+        await approveContent(project.projectId, item.contentId, item.batchId);
+        approvedItems.push(item);
+        markOptimisticApproved([item], true);
+        setActionState((s) => ({ ...s, [key]: { busy: false, error: null, message: "Aprovado com sucesso." } }));
+      } catch (err) {
+        errors.push(`${label}: ${(err as Error).message}`);
+        setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
+      } finally {
+        const approved = approvedItems.length;
+        const failed = errors.length;
+        const remaining = total - approved - failed;
+        setBulkProgress({ active: remaining > 0, total, approved, failed, remaining, currentLabel: remaining > 0 ? label : null });
+      }
+    }
+
+    await refresh();
+    markOptimisticApproved(approvedItems, false);
+
+    if (errors.length) {
+      setPageFeedback({
+        tone: "error",
+        message: `${approvedItems.length} aprovado(s), ${errors.length} com erro. Os que falharam continuam na lista para tentar de novo.`,
+      });
+    } else {
+      setPageFeedback({ tone: "ok", message: `${approvedItems.length} post(s) aprovado(s). Eles foram para o Calendário e os de Instagram/Facebook para a gaveta.` });
     }
   }
 
@@ -106,13 +199,20 @@ export function PendingApproval() {
   // once instead of once per channel.
   async function handleApproveGroup(group: ContentGroup) {
     const key = groupStateKey(group);
+    setPageFeedback(null);
     setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "approve", error: null, message: null } }));
     try {
-      for (const member of group.members) {
-        await approveContent(project.projectId, member.contentId, member.batchId);
-      }
+      await Promise.all(group.members.map((member) => approveContent(project.projectId, member.contentId, member.batchId)));
+      setPageFeedback({
+        tone: "ok",
+        message: `${group.members.length} formato(s) aprovado(s). Eles foram para o CalendÃ¡rio e os de Instagram/Facebook para a gaveta.`,
+      });
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: null, message: "Aprovado com sucesso." } }));
+      markOptimisticApproved(group.members, true);
       await refresh();
+      markOptimisticApproved(group.members, false);
     } catch (err) {
+      await refresh().catch(() => {});
       setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
     }
   }
@@ -122,37 +222,44 @@ export function PendingApproval() {
       "Apagar este conteúdo gerado? Se quiser, diga o motivo (ajuda o sistema a evitar isso nas próximas gerações) — deixe em branco pra apagar sem motivo.",
     );
     if (reason === null) return;
-    setActionState((s) => ({ ...s, [item.contentId]: { busy: true, busyAction: "delete", error: null, message: null } }));
+    const key = itemStateKey(item);
+    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "delete", error: null, message: null } }));
     try {
       await deleteContent(project.projectId, item.contentId, item.batchId, reason || undefined);
       await refresh();
     } catch (err) {
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: (err as Error).message, message: null } }));
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
     }
   }
 
-  async function handleRegenerate(item: ContentItem, mode: "creative" | "all") {
-    setActionState((s) => ({ ...s, [item.contentId]: { busy: true, busyAction: mode, error: null, message: null } }));
+  async function handleRegenerate(item: ContentItem, mode: RegenerateMode) {
+    const key = itemStateKey(item);
+    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: mode, error: null, message: null } }));
     try {
       await regenerateContent(project.projectId, item.contentId, {
         regenerate: mode,
-        note: notes[item.contentId] || "",
+        note: notes[key] || notes[item.contentId] || "",
         batchId: item.batchId,
       });
       setActionState((s) => ({
         ...s,
-        [item.contentId]: { busy: false, error: null, message: mode === "creative" ? "Imagem regenerada." : "Dia regenerado." },
+        [key]: {
+          busy: false,
+          error: null,
+          message: mode === "creative" ? "Imagem regenerada." : mode === "caption" ? "Legenda regenerada." : "Dia regenerado.",
+        },
       }));
       // A fresh AI regeneration should win over whatever the operator was
       // mid-typing in the caption box before clicking this.
       setCaptionDrafts((d) => {
         const next = { ...d };
+        delete next[key];
         delete next[item.contentId];
         return next;
       });
       await refresh();
     } catch (err) {
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: (err as Error).message, message: null } }));
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
     }
   }
 
@@ -161,13 +268,14 @@ export function PendingApproval() {
   // the already-approved creative into a short vertical MP4 (local ffmpeg
   // zoom/pan) so the card has something the publish flow can actually send.
   async function handleAnimateForReels(item: ContentItem) {
-    setActionState((s) => ({ ...s, [item.contentId]: { busy: true, busyAction: "animate", error: null, message: null } }));
+    const key = itemStateKey(item);
+    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "animate", error: null, message: null } }));
     try {
       await animateForReels(project.projectId, item.contentId, item.batchId);
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: null, message: "Vídeo gerado." } }));
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: null, message: "Vídeo gerado." } }));
       await refresh();
     } catch (err) {
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: (err as Error).message, message: null } }));
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
     }
   }
 
@@ -175,7 +283,7 @@ export function PendingApproval() {
   // instead of one per channel — they're the same creative, so it only needs
   // to be regenerated once and stays shared with every member afterward
   // (regenerateContentGroup, unlike a per-item regenerate, never unlinks).
-  async function handleRegenerateGroup(group: ContentGroup, mode: "creative" | "all") {
+  async function handleRegenerateGroup(group: ContentGroup, mode: RegenerateMode) {
     const key = groupStateKey(group);
     setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: mode, error: null, message: null } }));
     try {
@@ -186,7 +294,15 @@ export function PendingApproval() {
       );
       setActionState((s) => ({
         ...s,
-        [key]: { busy: false, error: null, message: mode === "creative" ? "Imagem regenerada em todos os formatos." : "Dia regenerado em todos os formatos." },
+        [key]: {
+          busy: false,
+          error: null,
+          message: mode === "creative"
+            ? "Imagem regenerada em todos os formatos."
+            : mode === "caption"
+              ? "Legenda regenerada em todos os formatos."
+              : "Dia regenerado em todos os formatos.",
+        },
       }));
       setCaptionDrafts((d) => {
         const next = { ...d };
@@ -204,20 +320,22 @@ export function PendingApproval() {
   }
 
   async function handleSaveCaption(item: ContentItem) {
-    const text = captionFor(item.contentId, item).trim();
+    const key = itemStateKey(item);
+    const text = captionFor(key, item).trim();
     if (!text || text === (item.caption?.text || "")) return;
-    setActionState((s) => ({ ...s, [item.contentId]: { busy: true, busyAction: "caption", error: null, message: null } }));
+    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "saveCaption", error: null, message: null } }));
     try {
       await updateCaption(project.projectId, item.contentId, text, item.batchId);
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: null, message: "Legenda salva." } }));
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: null, message: "Legenda salva." } }));
       setCaptionDrafts((d) => {
         const next = { ...d };
+        delete next[key];
         delete next[item.contentId];
         return next;
       });
       await refresh();
     } catch (err) {
-      setActionState((s) => ({ ...s, [item.contentId]: { busy: false, error: (err as Error).message, message: null } }));
+      setActionState((s) => ({ ...s, [key]: { busy: false, error: (err as Error).message, message: null } }));
     }
   }
 
@@ -228,7 +346,7 @@ export function PendingApproval() {
     const key = groupStateKey(group);
     const text = captionFor(key, group.leader).trim();
     if (!text || text === (group.leader.caption?.text || "")) return;
-    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "caption", error: null, message: null } }));
+    setActionState((s) => ({ ...s, [key]: { busy: true, busyAction: "saveCaption", error: null, message: null } }));
     try {
       for (const member of group.members) {
         await updateCaption(project.projectId, member.contentId, text, member.batchId);
@@ -290,7 +408,7 @@ export function PendingApproval() {
   // needs a video before it can publish for real.
   function renderReelsAnimateBlock(item: ContentItem) {
     if (item.channel !== "instagram_reels") return null;
-    const state = stateFor(item.contentId);
+    const state = stateFor(itemStateKey(item));
     return (
       <div style={{ marginTop: 8 }}>
         {item.videoGenerationError && !item.video?.url ? (
@@ -304,7 +422,7 @@ export function PendingApproval() {
               style={{ width: "100%", maxWidth: 220, aspectRatio: "9 / 16", borderRadius: 12, marginBottom: 6, display: "block", background: "#000" }}
             />
             <div className={styles.actions}>
-              <Button variant="secondary" disabled={state.busy} onClick={() => handleAnimateForReels(item)}>
+              <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleAnimateForReels(item)}>
                 {state.busy && state.busyAction === "animate" ? "Gerando vídeo..." : "Gerar vídeo de novo"}
               </Button>
               <a href={item.video.url} download>
@@ -315,7 +433,7 @@ export function PendingApproval() {
             </div>
           </>
         ) : (
-          <Button variant="secondary" disabled={state.busy} onClick={() => handleAnimateForReels(item)}>
+          <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleAnimateForReels(item)}>
             {state.busy && state.busyAction === "animate" ? "Gerando vídeo..." : "Animar para Reels"}
           </Button>
         )}
@@ -324,9 +442,9 @@ export function PendingApproval() {
   }
 
   function renderRegenerateAndDelete(item: ContentItem) {
-    const state = stateFor(item.contentId);
+    const state = stateFor(itemStateKey(item));
     return (
-      <div key={item.contentId} className={styles.channelRow}>
+      <div key={itemStateKey(item)} className={styles.channelRow}>
         <div className={styles.channelRowHead}>
           <span className="pill">{item.formatLabel || channelLabel(item.channel)}</span>
           <span className="pill">{statusMeta(item).label}</span>
@@ -339,13 +457,13 @@ export function PendingApproval() {
         ) : null}
         {renderReelsAnimateBlock(item)}
         <div className={styles.actions}>
-          <Button variant="secondary" disabled={state.busy} onClick={() => handleRegenerate(item, "creative")}>
+          <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerate(item, "creative")}>
             {state.busy && state.busyAction === "creative" ? "Gerando imagem..." : "Regenerar só a imagem"}
           </Button>
-          <Button variant="secondary" disabled={state.busy} onClick={() => handleRegenerate(item, "all")}>
+          <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerate(item, "all")}>
             {state.busy && state.busyAction === "all" ? "Regenerando..." : "Regenerar dia"}
           </Button>
-          <Button variant="ghost" disabled={state.busy} onClick={() => handleDelete(item)}>
+          <Button variant="ghost" disabled={state.busy || isBulkApproving} onClick={() => handleDelete(item)}>
             Apagar
           </Button>
         </div>
@@ -388,7 +506,7 @@ export function PendingApproval() {
               {renderPillarPill(leader)}
               {renderCreativeReferencePills(leader)}
               {group.members.map((member) => (
-                <span key={member.contentId} className="pill">
+                <span key={itemStateKey(member)} className="pill">
                   {member.formatLabel || channelLabel(member.channel)}
                 </span>
               ))}
@@ -409,13 +527,13 @@ export function PendingApproval() {
           />
           {draft.trim() && draft.trim() !== (leader.caption?.text || "") ? (
             <div className={styles.actions} style={{ marginTop: 8 }}>
-              <Button variant="secondary" disabled={state.busy} onClick={() => handleSaveGroupCaption(group)}>
-                {state.busy && state.busyAction === "caption" ? "Salvando..." : "Salvar legenda em todos"}
+              <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleSaveGroupCaption(group)}>
+                {state.busy && state.busyAction === "saveCaption" ? "Salvando..." : "Salvar legenda em todos"}
               </Button>
               <Button
                 type="button"
                 variant="ghost"
-                disabled={state.busy}
+                disabled={state.busy || isBulkApproving}
                 onClick={() =>
                   setCaptionDrafts((d) => {
                     const next = { ...d };
@@ -438,14 +556,17 @@ export function PendingApproval() {
             onChange={(e) => setNotes((n) => ({ ...n, [key]: e.target.value }))}
           />
           <div className={styles.actions}>
-            <Button variant="secondary" disabled={state.busy} onClick={() => handleRegenerateGroup(group, "creative")}>
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerateGroup(group, "creative")}>
               {state.busy && state.busyAction === "creative" ? "Gerando imagem..." : "Regenerar só a imagem"}
             </Button>
-            <Button variant="secondary" disabled={state.busy} onClick={() => handleRegenerateGroup(group, "all")}>
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerateGroup(group, "caption")}>
+              {state.busy && state.busyAction === "caption" ? "Gerando legenda..." : "Regenerar legenda"}
+            </Button>
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerateGroup(group, "all")}>
               {state.busy && state.busyAction === "all" ? "Regenerando..." : "Regenerar dia"}
             </Button>
-            <Button disabled={state.busy} onClick={() => handleApproveGroup(group)}>
-              {state.busy && state.busyAction === "approve" ? "Aprovando..." : `Aprovar (${group.members.length} formatos)`}
+            <Button disabled={state.busy || isBulkApproving} onClick={() => handleApproveGroup(group)}>
+              {state.busy && state.busyAction === "approve" ? <span className={styles.inlineBusy}><span className={styles.spinner} />Aprovando...</span> : `Aprovar (${group.members.length} formatos)`}
             </Button>
           </div>
           {state.error ? <div className={`${styles.feedback} ${styles.feedbackError}`}>{state.error}</div> : null}
@@ -463,10 +584,11 @@ export function PendingApproval() {
   }
 
   function renderSoloCard(item: ContentItem) {
-    const state = stateFor(item.contentId);
-    const draft = captionFor(item.contentId, item);
+    const key = itemStateKey(item);
+    const state = stateFor(key);
+    const draft = captionFor(key, item);
     return (
-      <Card key={item.contentId} className={styles.card}>
+      <Card key={key} className={styles.card}>
         <div className={`${styles.phone} ${isFeedChannel(item.channel) ? styles.phoneFeed : styles.phoneTall}`}>
           {imageSource(item) ? (
             <>
@@ -500,26 +622,26 @@ export function PendingApproval() {
           {item.captionGenerationError ? (
             <div className={`${styles.feedback} ${styles.feedbackError}`} style={{ marginTop: 8 }}>⚠ {item.captionGenerationError}</div>
           ) : null}
-          <label htmlFor={`caption-${item.contentId}`}>Legenda</label>
+          <label htmlFor={`caption-${key}`}>Legenda</label>
           <textarea
-            id={`caption-${item.contentId}`}
+            id={`caption-${key}`}
             className={styles.caption}
             value={draft}
-            onChange={(e) => setCaptionDrafts((d) => ({ ...d, [item.contentId]: e.target.value }))}
+            onChange={(e) => setCaptionDrafts((d) => ({ ...d, [key]: e.target.value }))}
           />
           {draft.trim() && draft.trim() !== (item.caption?.text || "") ? (
             <div className={styles.actions} style={{ marginTop: 8 }}>
-              <Button variant="secondary" disabled={state.busy} onClick={() => handleSaveCaption(item)}>
-                {state.busy && state.busyAction === "caption" ? "Salvando..." : "Salvar legenda"}
+              <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleSaveCaption(item)}>
+                {state.busy && state.busyAction === "saveCaption" ? "Salvando..." : "Salvar legenda"}
               </Button>
               <Button
                 type="button"
                 variant="ghost"
-                disabled={state.busy}
+                disabled={state.busy || isBulkApproving}
                 onClick={() =>
                   setCaptionDrafts((d) => {
                     const next = { ...d };
-                    delete next[item.contentId];
+                    delete next[key];
                     return next;
                   })
                 }
@@ -528,27 +650,30 @@ export function PendingApproval() {
               </Button>
             </div>
           ) : null}
-          <label htmlFor={`note-${item.contentId}`} style={{ marginTop: 12 }}>
+          <label htmlFor={`note-${key}`} style={{ marginTop: 12 }}>
             Pedido de alteração (opcional)
           </label>
           <textarea
-            id={`note-${item.contentId}`}
+            id={`note-${key}`}
             placeholder="Ex: preço maior, trocar o fundo, tom mais alegre..."
-            value={notes[item.contentId] || ""}
-            onChange={(e) => setNotes((n) => ({ ...n, [item.contentId]: e.target.value }))}
+            value={notes[key] || ""}
+            onChange={(e) => setNotes((n) => ({ ...n, [key]: e.target.value }))}
           />
           {renderReelsAnimateBlock(item)}
           <div className={styles.actions}>
-            <Button variant="secondary" disabled={state.busy} onClick={() => handleRegenerate(item, "creative")}>
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerate(item, "creative")}>
               {state.busy && state.busyAction === "creative" ? "Gerando imagem..." : "Regenerar só a imagem"}
             </Button>
-            <Button variant="secondary" disabled={state.busy} onClick={() => handleRegenerate(item, "all")}>
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerate(item, "caption")}>
+              {state.busy && state.busyAction === "caption" ? "Gerando legenda..." : "Regenerar legenda"}
+            </Button>
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleRegenerate(item, "all")}>
               {state.busy && state.busyAction === "all" ? "Regenerando..." : "Regenerar dia"}
             </Button>
-            <Button disabled={state.busy} onClick={() => handleApprove(item)}>
-              {state.busy && state.busyAction === "approve" ? "Aprovando..." : "Aprovar"}
+            <Button disabled={state.busy || isBulkApproving} onClick={() => handleApprove(item)}>
+              {state.busy && state.busyAction === "approve" ? <span className={styles.inlineBusy}><span className={styles.spinner} />Aprovando...</span> : "Aprovar"}
             </Button>
-            <Button variant="ghost" disabled={state.busy} onClick={() => handleDelete(item)}>
+            <Button variant="ghost" disabled={state.busy || isBulkApproving} onClick={() => handleDelete(item)}>
               Apagar
             </Button>
           </div>
@@ -563,10 +688,11 @@ export function PendingApproval() {
   // preview + independent "Regenerar esse slide" action instead of the
   // single-image .phone block renderSoloCard uses.
   function renderCarouselCard(item: ContentItem) {
-    const state = stateFor(item.contentId);
-    const draft = captionFor(item.contentId, item);
+    const key = itemStateKey(item);
+    const state = stateFor(key);
+    const draft = captionFor(key, item);
     return (
-      <Card key={item.contentId} className={styles.card}>
+      <Card key={key} className={styles.card}>
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
             <h3 style={{ margin: 0 }}>
@@ -609,23 +735,23 @@ export function PendingApproval() {
               );
             })}
           </div>
-          <label htmlFor={`caption-${item.contentId}`} style={{ marginTop: 12 }}>Legenda</label>
+          <label htmlFor={`caption-${key}`} style={{ marginTop: 12 }}>Legenda</label>
           <textarea
-            id={`caption-${item.contentId}`}
+            id={`caption-${key}`}
             className={styles.caption}
             value={draft}
-            onChange={(e) => setCaptionDrafts((d) => ({ ...d, [item.contentId]: e.target.value }))}
+            onChange={(e) => setCaptionDrafts((d) => ({ ...d, [key]: e.target.value }))}
           />
           {draft.trim() && draft.trim() !== (item.caption?.text || "") ? (
-            <Button variant="secondary" disabled={state.busy} onClick={() => handleSaveCaption(item)} style={{ marginTop: 8 }}>
-              {state.busy && state.busyAction === "caption" ? "Salvando..." : "Salvar legenda"}
+            <Button variant="secondary" disabled={state.busy || isBulkApproving} onClick={() => handleSaveCaption(item)} style={{ marginTop: 8 }}>
+              {state.busy && state.busyAction === "saveCaption" ? "Salvando..." : "Salvar legenda"}
             </Button>
           ) : null}
           <div className={styles.actions} style={{ marginTop: 12 }}>
-            <Button disabled={state.busy} onClick={() => handleApprove(item)}>
-              {state.busy && state.busyAction === "approve" ? "Aprovando..." : "Aprovar"}
+            <Button disabled={state.busy || isBulkApproving} onClick={() => handleApprove(item)}>
+              {state.busy && state.busyAction === "approve" ? <span className={styles.inlineBusy}><span className={styles.spinner} />Aprovando...</span> : "Aprovar"}
             </Button>
-            <Button variant="ghost" disabled={state.busy} onClick={() => handleDelete(item)}>
+            <Button variant="ghost" disabled={state.busy || isBulkApproving} onClick={() => handleDelete(item)}>
               Apagar
             </Button>
           </div>
@@ -638,8 +764,49 @@ export function PendingApproval() {
 
   return (
     <div>
-      <h2 style={{ margin: "0 0 var(--space-lg)" }}>Aguardando aprovação</h2>
+      <div className={styles.pageHead}>
+        <div>
+          <h2 className={styles.title}>Aguardando aprovação</h2>
+          {pending.length > 0 ? (
+            <p className={styles.subtitle}>
+              {pending.length} post(s) aguardando. Ao aprovar, o sistema processa a mídia, envia para a gaveta quando for Instagram/Facebook e move para o Calendário.
+            </p>
+          ) : null}
+        </div>
+        {pending.length > 0 ? (
+          <Button disabled={isBulkApproving} onClick={handleApproveAll}>
+            {isBulkApproving ? <span className={styles.inlineBusy}><span className={styles.spinner} />Aprovando todos...</span> : `Aprovar todos (${pending.length})`}
+          </Button>
+        ) : null}
+      </div>
 
+      {bulkProgress ? (
+        <div className={styles.bulkStatus} role="status" aria-live="polite">
+          <div className={styles.bulkStatusHead}>
+            <span className={styles.inlineBusy}>
+              {bulkProgress.active ? <span className={styles.spinner} /> : null}
+              {bulkProgress.active ? "Aprovação em andamento" : "Aprovação finalizada"}
+            </span>
+            <span className="pill">{bulkProgress.remaining} faltando</span>
+          </div>
+          <progress className={styles.bulkProgressBar} max={bulkProgress.total} value={bulkProgress.approved + bulkProgress.failed} />
+          <div className={styles.bulkMeta}>
+            <span>{bulkProgress.approved} aprovado(s)</span>
+            <span>{bulkProgress.failed} erro(s)</span>
+            <span>{bulkProgress.total} no total</span>
+          </div>
+          {bulkProgress.currentLabel && bulkProgress.active ? <div className={styles.bulkCurrent}>Processando agora: {bulkProgress.currentLabel}</div> : null}
+        </div>
+      ) : null}
+
+      {pageFeedback ? (
+        <div
+          className={`${styles.pageFeedback} ${pageFeedback.tone === "error" ? styles.pageFeedbackError : styles.pageFeedbackOk}`}
+          role={pageFeedback.tone === "error" ? "alert" : "status"}
+        >
+          {pageFeedback.message}
+        </div>
+      ) : null}
       {pending.length > 0 ? (
         <div className="notice" style={{ marginBottom: 16 }}>
           <b>Mostrar para o cliente:</b>
