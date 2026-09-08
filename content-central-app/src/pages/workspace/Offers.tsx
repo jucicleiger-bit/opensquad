@@ -39,6 +39,7 @@ const thumbStyle = {
 } as const;
 const thumbImgStyle = { width: "100%", height: "100%", objectFit: "cover" } as const;
 type ProductTreatment = "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset";
+type BackgroundStyle = "elaborate" | "simple_brand";
 
 const EMPTY_FORM = {
   name: "",
@@ -58,6 +59,7 @@ const EMPTY_FORM = {
   photoReferenceIds: [] as string[],
   productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
+  backgroundStyle: "simple_brand" as BackgroundStyle,
 };
 
 function suggestProductDirection(name: string, items: string, isCatalog: boolean) {
@@ -389,6 +391,7 @@ export function Offers() {
         ? offer.productTreatment
         : "faithful_enhance",
       layoutStrength: offer.layoutStrength === "balanced" || offer.layoutStrength === "free" ? offer.layoutStrength : "strict",
+      backgroundStyle: offer.backgroundStyle === "elaborate" ? offer.backgroundStyle : "simple_brand",
     });
     setError(null);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -696,6 +699,17 @@ export function Offers() {
                     <option value="strict">Estrita</option>
                     <option value="balanced">Equilibrada</option>
                     <option value="free">Livre/inspiração</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="offer-background-style">Fundo do criativo</label>
+                  <select
+                    id="offer-background-style"
+                    value={form.backgroundStyle}
+                    onChange={(e) => setForm({ ...form, backgroundStyle: e.target.value as BackgroundStyle })}
+                  >
+                    <option value="simple_brand">Simples (cores da marca)</option>
+                    <option value="elaborate">Elaborado (cenário/ambientação)</option>
                   </select>
                 </div>
               </div>

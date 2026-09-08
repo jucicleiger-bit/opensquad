@@ -102,6 +102,7 @@ export interface ProjectOffer {
   daysOfWeek?: string[];
   photoReferenceIds?: string[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
+  backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
   priceUnit?: string;
 }
@@ -1111,6 +1112,7 @@ export interface SaveOfferInput {
   uniqueProposal?: boolean;
   photoReferenceIds?: string[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
+  backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
   priceUnit?: string;
 }

@@ -6547,6 +6547,7 @@ async function offerToContentTopic(offer, targetDir) {
     autoGenerateCta: offer.autoGenerateCta,
     notes: offer.notes,
     productTreatment: offer.productTreatment,
+    backgroundStyle: offer.backgroundStyle,
     layoutStrength: offer.layoutStrength,
     objective: await offerObjective(offer, targetDir),
     pillarId: offer.pillarId || null,
@@ -6606,6 +6607,7 @@ async function buildComboOfferTopic(a, b, targetDir) {
       b.notes,
     ].filter(Boolean).join('\n'),
     productTreatment: a.productTreatment || b.productTreatment,
+    backgroundStyle: a.backgroundStyle || b.backgroundStyle,
     layoutStrength: a.layoutStrength,
     pillarId: a.pillarId,
     photoReferenceIds: [(a.photoReferenceIds || [])[0], (b.photoReferenceIds || [])[0]].filter(Boolean),
@@ -7134,6 +7136,14 @@ function normalizeLayoutStrength(value, hasLayoutReference = false) {
   return hasLayoutReference ? 'strict' : 'free';
 }
 
+// Only 'elaborate' is a real opt-in; every other value (missing, invalid,
+// or already 'simple_brand') defaults to simple_brand per spec — no need
+// for a synonym list like normalizeProductTreatment's, this field has no
+// legacy data to map from.
+function normalizeBackgroundStyle(value) {
+  return String(value || '').trim().toLowerCase() === 'elaborate' ? 'elaborate' : 'simple_brand';
+}
+
 function creativeLayoutZones(channel) {
   if (isVerticalStoryChannel(channel)) {
     return [
@@ -7163,6 +7173,13 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   // CTA — every generation that reaches here has an operator-authored
   // template it must follow exactly.
   const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference));
+  // Scoped to offer-sourced topics only (plain offers and combo offers both
+  // set source: 'offer' via offerToContentTopic) — every other source (goal/
+  // authority/institutional, special-date, carousel, segment-template,
+  // ad-creative) never opted into the background lock and has no UI to turn
+  // it off, so it must keep today's pre-feature free background regardless
+  // of what topic.backgroundStyle happens to contain.
+  const backgroundStyle = topic.source === 'offer' ? normalizeBackgroundStyle(topic.backgroundStyle) : 'elaborate';
   return {
     schemaVersion: 1,
     project: {
@@ -7201,6 +7218,9 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       referenceId: layoutReference?.id || '',
       referencePath: layoutReference?.relativePath || '',
       zones: creativeLayoutZones(targetChannel),
+    },
+    background: {
+      style: backgroundStyle,
     },
     references: selectedReferences.map((reference) => ({
       id: reference.id || '',
@@ -7505,16 +7525,23 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
     section('LIBERDADE CRIATIVA', [
+      creativeSpec.background?.style === 'simple_brand'
+        ? 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.'
+        : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
         ? 'Pode variar fundo, luz, tipografia e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
         : productLockedToPhoto
           ? 'Pode variar enquadramento, fundo, luz e tipografia apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.'
         : layoutReference && creativeSpec.layout.strength === 'strict'
         ? 'Pode variar fundo, luz, tipografia e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
-        : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
+        : creativeSpec.background?.style === 'simple_brand'
+          ? 'Pode variar enquadramento, luz, tipografia e elementos coerentes com o segmento.'
+          : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
       variation.length
         ? `Variação desejada: ${variation.join(' ')}`
-        : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe visual sem contrariar a estrutura obrigatória.',
+        : creativeSpec.background?.style === 'simple_brand'
+          ? 'Composição distinta da anterior: mudar ângulo ou detalhe visual sem contrariar a estrutura obrigatória.'
+          : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe visual sem contrariar a estrutura obrigatória.',
     ]),
     section('RESTRIÇÕES FINAIS', [
       isVerticalStory ? 'Não criar composição com aparência de flyer quadrado centralizado.' : '',
@@ -7525,6 +7552,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       !isVerticalStory ? 'Não adicionar faixas, ribbons, selos secundários ou fileira de ícones com texto além dos elementos definidos em HIERARQUIA — texto em fonte muito pequena sai ilegível/embaralhado na geração final.' : '',
       exactPrice ? 'Não posicionar o preço no centro cobrindo o produto principal.' : '',
       productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
+      creativeSpec.background?.style === 'simple_brand'
+        ? 'Não criar cenário, ambientação ou objetos de contexto no fundo — fundo deve ser liso, só com cor da marca.'
+        : '',
       ...productFocus.restrictionLines,
       ...quantityRules.restrictionLines,
       'Não inserir textos aleatórios, marcas concorrentes, telefone, endereço ou informações não fornecidas.',
@@ -9019,6 +9049,9 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
       : '',
     layoutStrength: ['strict', 'balanced', 'free'].includes(String(input?.layoutStrength || '').trim())
       ? String(input.layoutStrength).trim()
+      : '',
+    backgroundStyle: ['elaborate', 'simple_brand'].includes(String(input?.backgroundStyle || '').trim())
+      ? String(input.backgroundStyle).trim()
       : '',
     active: input?.active === false ? false : true,
     // A unique/flagship product the operator never wants blended into a

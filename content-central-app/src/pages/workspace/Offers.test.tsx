@@ -131,6 +131,27 @@ describe("Offers", () => {
     expect(payload.productTreatment).toBe("faithful_enhance_photo_integration");
   });
 
+  it("defaults the background style field to simple_brand and sends the elaborate option when selected", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {}, offer: { ...RODIZIO_OFFER, backgroundStyle: "elaborate" } } },
+      { body: projectState([{ ...RODIZIO_OFFER, backgroundStyle: "elaborate" }]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    expect(screen.getByLabelText("Fundo do criativo")).toHaveValue("simple_brand");
+
+    await userEvent.type(screen.getByLabelText("Nome"), "Mussarela fatiada");
+    await userEvent.selectOptions(screen.getByLabelText("Fundo do criativo"), "elaborate");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const payload = JSON.parse(saveCall[1].body as string);
+    expect(payload.backgroundStyle).toBe("elaborate");
+  });
+
   it("saves an offer flagged as a unique proposal (never combined into a combo) and shows a pill for it", async () => {
     const uniqueOffer = { ...RODIZIO_OFFER, name: "Pizza Exclusiva", uniqueProposal: true };
     stubFetchSequence([
