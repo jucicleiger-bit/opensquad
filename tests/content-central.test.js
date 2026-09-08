@@ -9191,3 +9191,45 @@ test('carouselWeekdaysForRange returns an empty set for a range shorter than a w
   const result = carouselWeekdaysForRange(2, 1);
   assert.deepEqual(result, new Set([0]));
 });
+
+test('background style defaults to simple_brand when missing and is validated on save', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-simples-produto',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const { offer } = await saveProjectOffer('fundo-simples-produto', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      backgroundStyle: 'not-a-real-value',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+
+    // Invalid input is stored as '' (same pattern as productTreatment), the
+    // 'simple_brand' default is applied at generation time, not at storage.
+    assert.equal(offer.backgroundStyle, '');
+  });
+});
+
+test('offer with explicit elaborate background style is stored and read back unchanged', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-elaborado-produto',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const { offer } = await saveProjectOffer('fundo-elaborado-produto', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      backgroundStyle: 'elaborate',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+
+    assert.equal(offer.backgroundStyle, 'elaborate');
+  });
+});

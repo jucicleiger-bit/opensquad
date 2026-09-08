@@ -6927,6 +6927,14 @@ function normalizeLayoutStrength(value, hasLayoutReference = false) {
   return hasLayoutReference ? 'strict' : 'free';
 }
 
+// Only 'elaborate' is a real opt-in; every other value (missing, invalid,
+// or already 'simple_brand') defaults to simple_brand per spec — no need
+// for a synonym list like normalizeProductTreatment's, this field has no
+// legacy data to map from.
+function normalizeBackgroundStyle(value) {
+  return String(value || '').trim().toLowerCase() === 'elaborate' ? 'elaborate' : 'simple_brand';
+}
+
 function creativeLayoutZones(channel) {
   if (isVerticalStoryChannel(channel)) {
     return [
@@ -6956,6 +6964,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   // CTA — every generation that reaches here has an operator-authored
   // template it must follow exactly.
   const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference));
+  const backgroundStyle = normalizeBackgroundStyle(topic.backgroundStyle);
   return {
     schemaVersion: 1,
     project: {
@@ -6994,6 +7003,9 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       referenceId: layoutReference?.id || '',
       referencePath: layoutReference?.relativePath || '',
       zones: creativeLayoutZones(targetChannel),
+    },
+    background: {
+      style: backgroundStyle,
     },
     references: selectedReferences.map((reference) => ({
       id: reference.id || '',
@@ -8702,6 +8714,9 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
       : '',
     layoutStrength: ['strict', 'balanced', 'free'].includes(String(input?.layoutStrength || '').trim())
       ? String(input.layoutStrength).trim()
+      : '',
+    backgroundStyle: ['elaborate', 'simple_brand'].includes(String(input?.backgroundStyle || '').trim())
+      ? String(input.backgroundStyle).trim()
       : '',
     active: input?.active === false ? false : true,
     // A unique/flagship product the operator never wants blended into a
