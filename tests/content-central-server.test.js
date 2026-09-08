@@ -1984,6 +1984,15 @@ test('content central API saves project image rules and applies them to generate
       body: JSON.stringify({
         visualStyle: 'fotografia realista de rodízio de pizza',
         imageRules: 'Queijo derretendo\nPreço grande e legível\nNão repetir palavras',
+        visualSystem: {
+          typography: 'commercial_condensed',
+          titleWeight: 'extra_bold',
+          bodyWeight: 'medium',
+          priceWeight: 'black',
+          colorUsage: 'vermelho para destaque e branco para texto',
+          cornerStyle: 'sharp',
+          shadowStyle: 'subtle',
+        },
       }),
     });
 
@@ -1994,6 +2003,8 @@ test('content central API saves project image rules and applies them to generate
       'Preço grande e legível',
       'Não repetir palavras',
     ]);
+    assert.equal(saved.body.project.brand.visualSystem.typography, 'commercial_condensed');
+    assert.equal(saved.body.project.brand.visualSystem.cornerStyle, 'sharp');
 
     const generated = await request(server, '/api/projects/pizza-rules-web/generate', {
       method: 'POST',
@@ -2002,6 +2013,15 @@ test('content central API saves project image rules and applies them to generate
 
     assert.match(generated.body.batch.items[0].image.prompt, /fotografia realista de rodízio de pizza/);
     assert.match(generated.body.batch.items[0].image.prompt, /Preço grande e legível/);
+    assert.match(generated.body.batch.items[0].image.prompt, /Sistema visual fixo da marca: Tipografia fixa: condensada comercial/);
+
+    const suggestion = await request(server, '/api/projects/pizza-rules-web/visual-system-suggest', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert.equal(suggestion.response.status, 200);
+    assert.equal(suggestion.body.source, 'structured_fallback');
+    assert.ok(suggestion.body.visualSystem.typography);
   });
 });
 
@@ -4605,6 +4625,7 @@ test('carousels-delete removes it from the listing, and carousels-regenerate-sli
 });
 
 test('carousel-regenerate-slide on a batch-item carousel regenerates only the target slide', async () => {
+  let targetSlideId;
   await withServer(
     async (_dir, server) => {
       await request(server, '/api/projects', {
@@ -4632,7 +4653,7 @@ test('carousel-regenerate-slide on a batch-item carousel regenerates only the ta
       }
 
       const contentId = item.contentId;
-      const targetSlideId = item.slides[0].slideId;
+      targetSlideId = item.slides[0].slideId;
       const otherSlideId = item.slides[1].slideId;
 
       const regenerated = await request(server, `/api/projects/carrossel-item-regen/content/${contentId}/carousel-regenerate-slide/${targetSlideId}`, {
@@ -4653,19 +4674,10 @@ test('carousel-regenerate-slide on a batch-item carousel regenerates only the ta
       assert.equal(final.slides.find((s) => s.slideId === otherSlideId).image.url, 'https://cdn.example.com/original.png');
     },
     {
-      // Same call-order trick as the standalone-carousel version of this
-      // test above: the 2 slides from the initial /generate are calls 1-2,
-      // the later carousel-regenerate-slide call is always call 3.
-      imageGenerator: (() => {
-        let call = 0;
-        return async () => {
-          call += 1;
-          return {
-            url: call <= 2 ? 'https://cdn.example.com/original.png' : 'https://cdn.example.com/regen.png',
-            mimeType: 'image/png',
-          };
-        };
-      })(),
+      imageGenerator: async ({ content }) => ({
+        url: content.slideId === targetSlideId ? 'https://cdn.example.com/regen.png' : 'https://cdn.example.com/original.png',
+        mimeType: 'image/png',
+      }),
       carouselOutlineGenerator: async ({ slideCount }) => ({
         format: 'listicle',
         slides: Array.from({ length: slideCount }, (_, index) => ({ role: 'content', slideText: `Slide ${index + 1}` })),

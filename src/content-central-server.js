@@ -114,6 +114,7 @@ import {
   saveProjectToken,
   saveProjectWhatsAppInstance,
   suggestProjectPillars,
+  suggestProjectVisualSystem,
   updateCatalogSettings,
   updateContentCaption,
   updateProjectBrandInput,
@@ -373,6 +374,7 @@ export async function startContentCentralServer({
   carouselOutlineGenerator = null,
   brandAnalyzer = null,
   pillarSuggester = null,
+  visualSystemSuggester = null,
   logoColorAnalyzer = null,
   siteAnalyzer = null,
   webResearcher = null,
@@ -394,6 +396,7 @@ export async function startContentCentralServer({
     carouselOutlineGenerator: carouselOutlineGenerator || (enableAiImages ? (payload) => writeCarouselOutlineWithHermes({ ...payload, targetDir }) : null),
     brandAnalyzer: brandAnalyzer || (enableAiImages ? generateBrandXrayWithAi : null),
     pillarSuggester: pillarSuggester || (enableAiImages ? generatePillarSuggestionsWithAi : null),
+    visualSystemSuggester: visualSystemSuggester || (enableAiImages ? generateVisualSystemSuggestionWithAi : null),
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
@@ -948,8 +951,16 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const project = await updateProjectImageRules(projectId, {
       visualStyle: body.visualStyle || '',
       imageRules: body.imageRules || [],
+      visualSystem: body.visualSystem,
     }, targetDir);
     return sendJson(res, 200, { project });
+  }
+
+  if (parts.length === 4 && parts[3] === 'visual-system-suggest') {
+    const result = await suggestProjectVisualSystem(projectId, {
+      visualSystemSuggester: context.visualSystemSuggester,
+    }, targetDir);
+    return sendJson(res, 200, result);
   }
 
   if (parts.length === 4 && parts[3] === 'catalog-settings') {
@@ -2135,6 +2146,76 @@ export async function generatePillarSuggestionsWithAi({ project, extraContext = 
       pillars: result.pillars,
       clarifyingQuestions: Array.isArray(result.clarifyingQuestions) ? result.clarifyingQuestions : [],
     };
+  } catch {
+    return null;
+  }
+}
+
+// Suggests the brand's fixed visual system (typography, weights, corners,
+// shadows, title case, color usage) reading real brand context — approved
+// Raio-X, logo colors, segment/audience — instead of the structured
+// fallback's segment-only heuristic (buildSuggestedBrandVisualSystem).
+// Returns null on any failure so the caller (suggestProjectVisualSystem)
+// falls back to that heuristic; normalizeBrandVisualSystem discards any
+// value outside the allowed option sets, so a malformed AI answer degrades
+// safely instead of corrupting the saved system.
+export async function generateVisualSystemSuggestionWithAi({ project }) {
+  const input = project?.brandInput || {};
+  if (!input.brandName && !input.segment) return null;
+  const apiKey = await resolveXaiAccessToken();
+  if (!apiKey) return null;
+
+  const xray = project.brandXray?.status === 'approved' ? project.brandXray.blocks : null;
+  const identity = project.brandIdentity || {};
+  const colors = [...(identity.editedColors || []), ...(identity.extractedColors || [])];
+
+  const prompt = [
+    'Você é um diretor de arte definindo o sistema visual fixo (tipografia, pesos, cantos, sombras, caixa do título e cores) de uma marca, usado em artes de anúncio geradas por IA.',
+    'Com base SOMENTE nas informações abaixo, sugira o sistema visual completo.',
+    '',
+    `Nome: ${input.brandName || project.name || ''}`,
+    `Segmento: ${input.segment || 'não informado'}`,
+    `Público: ${input.audienceType || 'não informado'}`,
+    `O que vende/oferece: ${input.productsOrServices || 'não informado'}`,
+    colors.length ? `Cores identificadas na logo: ${colors.join(', ')}` : 'Nenhuma cor de logo identificada ainda.',
+    xray ? `Resumo da marca (Raio-X aprovado): ${xray.summary?.text || ''}` : '',
+    xray ? `Identidade visual aprovada: ${xray.visualIdentity?.text || ''}` : '',
+    '',
+    'Regras obrigatórias:',
+    '- "typography" só pode ser um destes valores: modern_grotesk, commercial_condensed, clean_geometric, editorial_serif, friendly_rounded, neutral_system.',
+    '- "titleWeight", "bodyWeight" e "priceWeight" só podem ser: regular, medium, semibold, bold, extra_bold, black.',
+    '- "cornerStyle" só pode ser: sharp, slightly_rounded, rounded.',
+    '- "shadowStyle" só pode ser: none, subtle, defined.',
+    '- "titleCase" só pode ser: normal, uppercase, capitalized.',
+    '- "colorUsage" é uma frase curta em português dizendo qual cor usar em cada função (fundo, texto, preço/destaque), citando as cores reais da logo se houver.',
+    '- Não invente cor que não foi informada acima.',
+    '',
+    'Responda APENAS com um JSON válido neste formato exato, sem markdown e sem texto fora do JSON:',
+    '{"typography":"...","titleWeight":"...","bodyWeight":"...","priceWeight":"...","cornerStyle":"...","shadowStyle":"...","titleCase":"...","colorUsage":"..."}',
+  ].filter(Boolean).join('\n');
+
+  const model = process.env.OPENSQUAD_XAI_TEXT_MODEL || 'grok-4.5';
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${apiKey}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.5,
+    }),
+  });
+  if (!response.ok) return null;
+  const parsed = await response.json();
+  const text = parsed?.choices?.[0]?.message?.content;
+  if (!text) return null;
+
+  const jsonText = String(text).match(/\{[\s\S]*\}/)?.[0];
+  if (!jsonText) return null;
+  try {
+    return JSON.parse(jsonText);
   } catch {
     return null;
   }
@@ -3587,7 +3668,7 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     `Preço autorizado: ${expected.price || 'não definido'}`,
     `Itens autorizados: ${expected.items || 'não definidos'}`,
     `Observações/restrições obrigatórias: ${expected.notes || 'nenhuma'}`,
-    `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — post de conteúdo, não deve ter botão/selo de CTA na arte'}`,
+    `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — não deve ter botão/selo de CTA na arte'}`,
     `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
     `Força do modelo estrutural: ${spec.layout?.strength || 'livre'}`,
     spec.layout?.zones?.length ? `Zonas obrigatórias do layout:\n${spec.layout.zones.map((zone) => `- ${zone}`).join('\n')}` : '',
@@ -3607,7 +3688,7 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     '- preço em box/moldura grande demais, simples demais, desalinhado ou cobrindo o produto principal;',
     '- se o selo de preço cobrir mais destaque que o produto, esconder parte importante do produto ou ficar dominante demais no centro;',
     '- se o produto final pertencer a outra categoria, versão incompatível ou quantidade diferente da referência/oferta;',
-    '- em produto fiel melhorado ou foto exata, se cenário, comida, objetos de fundo ou elementos do segmento tiverem mais destaque que o produto real;',
+    '- em produto fiel melhorado, integração fotográfica ou foto exata, se cenário, comida, objetos de fundo ou elementos do segmento tiverem mais destaque que o produto real;',
     '- se houver layout_model e a ordem de leitura, zonas ou hierarquia principais não forem obedecidas;',
     '',
     'Para Story/Reels, aprove somente se a peça parecer nativa de Story vertical: topo, centro e base usados com hierarquia clara, sem flyer quadrado centralizado.',
@@ -3617,6 +3698,9 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
       : '',
     spec.product?.treatment === 'faithful_enhance'
       ? 'No modo faithful_enhance, aceite melhorias de recorte, luz, sombra e limpeza, mas bloqueie se a embalagem/produto mudar ou se o cenário virar protagonista.'
+      : '',
+    spec.product?.treatment === 'faithful_enhance_photo_integration'
+      ? 'No modo faithful_enhance_photo_integration, aceite suporte fotográfico gerado apenas quando perspectiva, luz, temperatura, sombra de contato/projetada e granulação unificarem o produto real ao cenário; bloqueie se parecer colagem, cenário clichê de IA ou se o produto mudar.'
       : '',
     spec.product?.treatment === 'exact_asset'
       ? 'No modo exact_asset, compare rigorosamente embalagem, rótulo, marca, cores e proporções com a foto de produto anexada.'

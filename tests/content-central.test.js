@@ -49,6 +49,7 @@ import {
   regenerateCarouselSlide,
   enqueueCarouselSlideRegeneration,
   generateCatalogSchedulePlan,
+  chooseCreativeCta,
   creativeShapeGroupForChannel,
   generateContentBatch,
   generateContentSchedulePlan,
@@ -93,6 +94,7 @@ import {
   saveProjectToken,
   saveProjectWhatsAppInstance,
   simulateTestPost,
+  suggestProjectVisualSystem,
   updateContentCaption,
   animateContentForReels,
   analyzeProjectBrandXray,
@@ -134,6 +136,13 @@ async function registerCreativeTemplate(groupKey, postType, shape, dir, filename
   }, dir);
   return template;
 }
+
+test('chooseCreativeCta respects empty CTA as no CTA unless automatic CTA is enabled', () => {
+  assert.equal(chooseCreativeCta({ source: 'offer', type: 'combo', cta: '', autoGenerateCta: false }), '');
+  assert.equal(chooseCreativeCta({ source: 'offer', type: 'combo', cta: 'Peça pelo WhatsApp', autoGenerateCta: false }), 'Peça pelo WhatsApp');
+  assert.equal(chooseCreativeCta({ source: 'offer', type: 'combo', cta: '', autoGenerateCta: true }), 'Peça agora');
+  assert.equal(chooseCreativeCta({ source: 'offer', type: 'rodizio', cta: '', autoGenerateCta: true }), 'Reserve agora');
+});
 
 test('createCentralProject creates isolated project files with global and project rules', async () => {
   await withTempProject(async (dir) => {
@@ -696,6 +705,16 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     await updateProjectImageRules('boss-xray', {
       visualStyle: 'Direção da aba Imagem: fundo claro, fotografia realista e detalhes vermelhos.',
       imageRules: ['Preservar a aparência real dos produtos.'],
+      visualSystem: {
+        typography: 'commercial_condensed',
+        titleWeight: 'extra_bold',
+        bodyWeight: 'medium',
+        priceWeight: 'black',
+        colorUsage: 'vermelho para destaque, branco para texto e dourado apenas em detalhes',
+        cornerStyle: 'sharp',
+        shadowStyle: 'subtle',
+        titleCase: 'uppercase',
+      },
     }, dir);
 
     const analyzed = await analyzeProjectBrandXray('boss-xray', {}, dir, new Date('2026-07-20T12:00:00.000Z'));
@@ -739,9 +758,51 @@ test('brand xray input uses simple user facts and approved four-block analysis i
     assert.match(prompt, /tom próximo, convidativo/);
     assert.match(prompt, /Receber pedidos no WhatsApp/);
     assert.match(prompt, /Direção da aba Imagem: fundo claro, fotografia realista e detalhes vermelhos/);
+    assert.match(prompt, /Sistema visual fixo da marca: Tipografia fixa: condensada comercial/);
+    assert.match(prompt, /Sistema visual fixo da marca: Pesos tipograficos: titulo extra bold; texto medio; preco black\/pesado/);
+    assert.match(prompt, /Sistema visual fixo da marca: Cores por funcao: vermelho para destaque, branco para texto e dourado apenas em detalhes/);
+    assert.match(prompt, /Sistema visual fixo da marca: Cantos: quase retos/);
+    assert.match(prompt, /Sistema visual fixo da marca: Sombras: muito sutis/);
+    assert.match(prompt, /Sistema visual fixo da marca: Caixa do titulo: caixa alta/);
     assert.doesNotMatch(prompt, /preto, vermelho, branco e dourado/);
     assert.match(prompt, /Instagram: @bossconteudo/i);
     assert.match(prompt, /Referência visual nunca pode alterar preço, logo, produto, nome, promoção ou informação factual/i);
+  });
+});
+
+test('suggestProjectVisualSystem returns an editable visual-system draft without saving it', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'visual-system-draft',
+      name: 'Visual System Draft',
+      brandInput: {
+        segment: 'Frios e laticínios',
+        productsOrServices: 'mussarela fatiada e queijos',
+        brandColors: 'vermelho, branco e dourado',
+        audienceType: 'b2c',
+      },
+    }, dir);
+
+    const result = await suggestProjectVisualSystem('visual-system-draft', {}, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(result.source, 'structured_fallback');
+    assert.equal(result.visualSystem.typography, 'commercial_condensed');
+    assert.equal(result.visualSystem.titleWeight, 'bold');
+    assert.equal(result.visualSystem.priceWeight, 'black');
+    assert.match(result.visualSystem.colorUsage, /vermelho, branco e dourado/);
+
+    const project = await loadProjectForTest('visual-system-draft', dir);
+    assert.deepEqual(project.brand.visualSystem, {
+      typography: '',
+      titleWeight: '',
+      bodyWeight: '',
+      priceWeight: '',
+      colorUsage: '',
+      cornerStyle: '',
+      shadowStyle: '',
+      titleCase: '',
+      updatedAt: null,
+    });
   });
 });
 
@@ -1582,6 +1643,83 @@ test('a registered product reference rides along as an additional reference when
     assert.equal(content.imageGenerationError, null);
     const kinds = content.image.references.map((r) => r.referenceKind).filter(Boolean);
     assert.deepEqual(kinds.sort(), ['segment_product', 'segment_structure']);
+  });
+});
+
+test('the matched structure\'s own zone-by-zone description reaches the image prompt, on top of (not instead of) the generic channel zones', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'estrutura-texto', name: 'Estrutura Texto', handle: '@estruturatexto', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('estrutura-texto', {
+      brandName: 'Estrutura Texto', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await saveProjectOffer('estrutura-texto', { name: 'Pizza Grande', type: 'offer', price: 'R$ 49,90' }, dir);
+    const groupKey = 'group:alimenticio/category:pizzaria';
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const template = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'oferta-lado-esquerdo.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+    await saveLearningEntry({
+      scope: 'segment', groupKey, bucket: 'approved', kind: 'image', purpose: 'creative', postType: 'offer', shape: 'vertical',
+      title: 'PRODUTO NO CANTO ESQUERDO',
+      text: 'Produto grande no canto inferior esquerdo da arte, com benefícios em coluna vertical do lado direito e preço em box isolado no topo direito.\nDistribuição sugerida\n10% — Logo\n40% a 50% — Produto\nPreço\nDeve ocupar cerca de 15% da arte',
+      imagePath: template.imagePath,
+    }, dir);
+
+    const content = await simulateTestPost('estrutura-texto', {
+      channel: 'instagram_story',
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+    }, dir, new Date('2026-07-20T12:00:00.000Z'));
+
+    assert.equal(content.imageGenerationError, null);
+    assert.match(content.image.prompt, /Produto grande no canto inferior esquerdo/);
+    assert.match(content.image.prompt, /Topo \(0-18%\)/i);
+    // The percentage lines get restated on their own, as a short checklist,
+    // instead of only existing buried inside the long paragraph above —
+    // including the "Deve ocupar..." line paired back with its own label
+    // line ("Preço") since it doesn't name its element on the same line.
+    assert.match(content.image.prompt, /Distribuição de espaço obrigatória desta estrutura/);
+    assert.match(content.image.prompt, /10% — Logo/);
+    assert.match(content.image.prompt, /40% a 50% — Produto/);
+    assert.match(content.image.prompt, /Preço — Deve ocupar cerca de 15% da arte/);
+  });
+});
+
+test('a structure titled "DE / POR (DESCONTO REAL)" is never picked for an offer with a single price, but stays eligible once the price reads as a real discount', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'de-por-guard', name: 'De Por Guard', handle: '@deporguard', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('de-por-guard', {
+      brandName: 'De Por Guard', segmentGroup: 'Alimenticio', segmentCategory: 'Frios', segment: 'frios', productsOrServices: 'bacon',
+    }, dir);
+    const groupKey = 'group:alimenticio/category:frios';
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+
+    // Two registered structures for the same postType/shape: one that
+    // demands a real discount by name, one that doesn't — mirrors a real
+    // segment's template pool (see buildPrimaryAiImageReferences).
+    const discountTemplate = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'de-por.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', title: 'DE / POR (DESCONTO REAL)', text: 'estrutura com preço antigo e novo', imagePath: discountTemplate.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
+    const plainTemplate = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'oferta-direta.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'modelo' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', title: 'OFERTA DIRETA', text: 'estrutura com preço único', imagePath: plainTemplate.imagePath, purpose: 'creative', postType: 'offer', shape: 'vertical' }, dir);
+
+    await saveProjectOffer('de-por-guard', { name: 'Bacon Fatiado', type: 'offer', price: 'R$ 39,90/kg' }, dir);
+    for (let i = 0; i < 4; i += 1) {
+      const content = await simulateTestPost('de-por-guard', {
+        channel: 'instagram_story',
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      }, dir, new Date(`2026-07-2${i}T12:00:00.000Z`));
+      assert.equal(content.imageGenerationError, null);
+      assert.equal(content.creativeStructureUsed.title, 'OFERTA DIRETA');
+    }
+
+    await saveProjectOffer('de-por-guard', { name: 'Bacon Fatiado', type: 'offer', price: 'De R$ 49,90 por R$ 39,90/kg' }, dir);
+    const titlesSeen = new Set();
+    for (let i = 0; i < 6; i += 1) {
+      const content = await simulateTestPost('de-por-guard', {
+        channel: 'instagram_story',
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      }, dir, new Date(`2026-08-0${i + 1}T12:00:00.000Z`));
+      assert.equal(content.imageGenerationError, null);
+      titlesSeen.add(content.creativeStructureUsed.title);
+    }
+    assert.ok(titlesSeen.has('DE / POR (DESCONTO REAL)'), 'a real discount price keeps the DE/POR structure eligible for rotation');
   });
 });
 
@@ -3610,6 +3748,7 @@ test('Urgency offer prompt uses only the real urgency written by the operator', 
       price: '49,90',
       items: 'rodízio completo no salão',
       notes: 'Válido somente nesta sexta-feira no salão.',
+      autoGenerateCta: true,
       active: true,
     }, dir, new Date('2026-07-18T09:00:00.000Z'));
     await updateProjectBrandInput('urgencia-real-operador', { segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria' }, dir);
@@ -4224,6 +4363,65 @@ test('an offer-scoped photo (scope: "offer", stored on project.offerAssets) stil
   });
 });
 
+test('photographic integration treatment keeps product faithful and adds composition recommendations to the image prompt', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'integracao-fotografica-produto',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('integracao-fotografica-produto', {
+      kind: 'reference',
+      filename: 'mussarela-fatiada.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da mussarela fatiada, luz suave vindo da esquerda.',
+    }, dir);
+
+    await saveProjectOffer('integracao-fotografica-produto', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      items: 'Produto fatiado e embalado',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      productTreatment: 'faithful_enhance_photo_integration',
+      active: true,
+    }, dir, new Date('2026-08-01T12:00:00.000Z'));
+    await updateProjectBrandInput('integracao-fotografica-produto', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('integracao-fotografica-produto', {
+      channel: 'instagram_feed',
+      testSeed: 'integracao-fotografica-produto',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-08-01T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.creativeSpec.product.treatment, 'faithful_enhance_photo_integration');
+    assert.match(prompt, /Modo PRODUTO FIEL MELHORADO \+ INTEGRAÇÃO FOTOGRÁFICA/i);
+    assert.match(prompt, /Casar perspectiva/i);
+    assert.match(prompt, /Casar luz/i);
+    assert.match(prompt, /sombra de contato/i);
+    assert.match(prompt, /granulação final/i);
+    assert.match(prompt, /foreground foliage/i);
+    assert.match(prompt, /Regra de níveis/i);
+    assert.doesNotMatch(prompt, /Modo REDESENHO CRIATIVO/i);
+  });
+});
+
 test('a marketing offer with NO photo of its own never borrows a photo already claimed by a different offer', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -4794,7 +4992,7 @@ test('content offers drive varied schedule topics with exact prices and post typ
   });
 });
 
-test('Feed gets a direct default CTA for sales offers when the offer has no explicit CTA', async () => {
+test('sales offers with empty CTA and automatic CTA off generate creatives without CTA text', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'cta-feed-suave',
@@ -4817,21 +5015,24 @@ test('Feed gets a direct default CTA for sales offers when the offer has no expl
       channel: 'instagram_feed',
       imageGenerator: async (payload) => { feedCalls.push(payload); return { url: 'https://cdn.example.com/feed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(feedCalls[0].content.image.prompt, /CTA sutil: "Peça agora"/i);
+    assert.match(feedCalls[0].content.image.prompt, /Sem CTA nesta peça/i);
+    assert.doesNotMatch(feedCalls[0].content.image.prompt, /CTA sutil:/i);
 
     const fbFeedCalls = [];
     await simulateTestPost('cta-feed-suave', {
       channel: 'facebook_feed',
       imageGenerator: async (payload) => { fbFeedCalls.push(payload); return { url: 'https://cdn.example.com/fbfeed.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(fbFeedCalls[0].content.image.prompt, /CTA sutil: "Peça agora"/i);
+    assert.match(fbFeedCalls[0].content.image.prompt, /Sem CTA nesta peça/i);
+    assert.doesNotMatch(fbFeedCalls[0].content.image.prompt, /CTA sutil:/i);
 
     const storyCalls = [];
     await simulateTestPost('cta-feed-suave', {
       channel: 'instagram_story',
       imageGenerator: async (payload) => { storyCalls.push(payload); return { url: 'https://cdn.example.com/story.png', mimeType: 'image/png' }; },
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
-    assert.match(storyCalls[0].content.image.prompt, /CTA sutil: "Peça agora"/i);
+    assert.match(storyCalls[0].content.image.prompt, /Sem CTA nesta peça/i);
+    assert.doesNotMatch(storyCalls[0].content.image.prompt, /CTA sutil:/i);
   });
 });
 
@@ -4954,6 +5155,7 @@ test('a registered sales offer keeps its CTA and full notes even when assigned t
       pillarId: pillar.id,
       productTreatment: 'creative_redraw',
       layoutStrength: 'strict',
+      autoGenerateCta: true,
     }, dir);
     assert.equal(offer.productTreatment, 'creative_redraw');
     assert.equal(offer.layoutStrength, 'strict');
@@ -6114,7 +6316,7 @@ test('a resolved "convida" pillar drives a real sales CTA, while a non-sales pil
 
     const convida = await saveProjectPillar('cta-pilar', { name: 'Convite Direto', role: 'convida', weight: 1 }, dir);
     const ensina = await saveProjectPillar('cta-pilar', { name: 'Dica Rápida', role: 'ensina', weight: 1 }, dir);
-    await saveProjectOffer('cta-pilar', { name: 'Combo Família', type: 'institutional', pillarId: convida.pillar.id }, dir);
+    await saveProjectOffer('cta-pilar', { name: 'Combo Família', type: 'institutional', pillarId: convida.pillar.id, autoGenerateCta: true }, dir);
     await saveProjectOffer('cta-pilar', { name: 'Dica de bastidor', type: 'institutional', pillarId: ensina.pillar.id }, dir);
     await updateProjectBrandInput('cta-pilar', { segmentGroup: 'Servicos', segmentCategory: 'Geral' }, dir);
     await registerCreativeTemplate('group:servicos/category:geral', 'offer', 'vertical', dir);

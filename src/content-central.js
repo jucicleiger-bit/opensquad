@@ -509,6 +509,7 @@ export async function createCentralProject(options, targetDir = process.cwd()) {
       voice: options?.voice || '',
       visualStyle: options?.visualStyle || '',
       imageRules: normalizeRuleList(options?.imageRules || []),
+      visualSystem: normalizeBrandVisualSystem(options?.visualSystem),
     },
     token: {
       configured: false,
@@ -1579,16 +1580,39 @@ export async function updateProjectImageRules(projectId, input = {}, targetDir =
   return withProjectLock(targetDir, projectId, async () => {
   const project = await loadProject(paths);
   const imageRules = normalizeRuleList(input.imageRules ?? input.rules ?? []);
+  const visualSystem = input.visualSystem === undefined
+    ? normalizeBrandVisualSystem(project.brand?.visualSystem)
+    : normalizeBrandVisualSystem(input.visualSystem);
+  if (input.visualSystem !== undefined && hasBrandVisualSystemContent(visualSystem)) {
+    visualSystem.updatedAt = now.toISOString();
+  }
   project.brand = {
     ...project.brand,
     visualStyle: String(input.visualStyle ?? project.brand?.visualStyle ?? '').trim(),
     imageRules,
+    visualSystem,
   };
   project.updatedAt = now.toISOString();
   await writeJson(paths.projectPath, project);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
   return project;
   });
+}
+
+export async function suggestProjectVisualSystem(projectId, options = {}, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  const project = await loadProject(paths);
+  const fallback = buildSuggestedBrandVisualSystem(project, now);
+  if (typeof options.visualSystemSuggester !== 'function') {
+    return { source: 'structured_fallback', visualSystem: fallback };
+  }
+  try {
+    const suggested = await options.visualSystemSuggester({ project, fallback });
+    const visualSystem = normalizeBrandVisualSystem({ ...fallback, ...(suggested || {}) });
+    return { source: 'ai_suggestion', visualSystem: hasBrandVisualSystemContent(visualSystem) ? visualSystem : fallback };
+  } catch {
+    return { source: 'structured_fallback', visualSystem: fallback };
+  }
 }
 
 // Catalog-only settings that apply to every product's composition, edited
@@ -5690,6 +5714,7 @@ export async function loadProject(paths) {
     },
     learnings: normalizeLearnings(project.learnings),
   };
+  normalized.brand = normalizeProjectBrand(normalized);
   return {
     ...normalized,
     segmentLearnings: await loadSegmentLearningsForProject(paths, normalized),
@@ -5721,7 +5746,7 @@ async function toProjectSummary(project) {
     brandXray: normalizeBrandXray(project.brandXray),
     brandBriefing: normalizeBrandBriefing(project.brandBriefing),
     technicalBase: normalizeTechnicalBase(project.technicalBase),
-    brand: project.brand,
+    brand: normalizeProjectBrand(project),
     offerAssets: normalizeProjectOfferAssets(project),
     token: project.token,
     whatsapp: {
@@ -5823,10 +5848,11 @@ function buildManual(project) {
   const technicalBaseLines = formatTechnicalBaseLines(project.technicalBase, project.segmentLearnings);
   const approvedLearnings = normalizeLearnings(project.learnings).approved;
   const avoidLearnings = normalizeLearnings(project.learnings).avoid;
+  const brandVisualSystemLines = formatBrandVisualSystemLines(project.brand?.visualSystem);
   const projectTypeLine = project.projectType === 'catalog'
     ? 'Catálogo de produtos (venda direta) — posta o estoque ativo no Story automaticamente, sem Raio-X/pilares e sem arte gerada por IA (usa foto real do produto).'
     : 'Marketing de conteúdo (Raio-X, pilares e arte gerada por IA).';
-  return `# Manual Vivo — ${project.name}\n\n## Tipo de projeto\n- ${projectTypeLine}\n\n## Informações básicas da empresa\n${companyProfileLines.length ? companyProfileLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem informações básicas preenchidas.'}\n\n## Base técnica do segmento\n${technicalBaseLines.length ? technicalBaseLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem base técnica resumida.'}\n\n## Raio-X aprovado da marca\n${approvedXrayLines.length ? approvedXrayLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem Raio-X aprovado.'}\n\n## Identidade visual\n- Logo esperado em: assets/logo.png\n- Referências em: assets/references/\n- Estilo visual: ${project.brand?.visualStyle || 'adicione o estilo visual do projeto.'}\n\n## Referências visuais cadastradas\n${references.length ? references.map((reference) => `- ${reference.relativePath} (${referenceRoleLabel(reference.role)}, peso ${reference.weight}): ${reference.instruction || 'sem instrução específica.'}`).join('\n') : '- Ainda sem referências cadastradas.'}\n\n## Ofertas e assuntos cadastrados\n${offers.length ? offers.map((offer) => `- ${offer.name} (${offerTypeLabel(offer.type)}): ${offer.price || 'sem preço'}; itens: ${offer.items || 'não informado'}; CTA: ${offer.cta || 'não informado'}`).join('\n') : '- Ainda sem ofertas cadastradas.'}\n\n## Pilares de conteúdo\n${pillars.length ? pillars.map((pillar) => `- ${pillar.name} (${pillarRoleLabel(pillar.role)}, peso ${pillar.weight}, tratamento ${pillar.visualTreatment}): ${pillar.objective || 'sem objetivo descrito'}`).join('\n') : '- Ainda sem pilares cadastrados; rotação de conteúdo segue o padrão automático.'}\n\n## Regras de imagem\n${imageRules.length ? imageRules.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras visuais deste projeto aqui.'}\n\n## Regras do projeto\n${project.rules.project.length ? project.rules.project.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras específicas deste projeto aqui.'}\n\n## Aprendizados aprovados\n${approvedLearnings.length ? approvedLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem conteúdos aprovados.'}\n\n## Evitar\n${avoidLearnings.length ? avoidLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem rejeições registradas.'}\n`;
+  return `# Manual Vivo — ${project.name}\n\n## Tipo de projeto\n- ${projectTypeLine}\n\n## Informações básicas da empresa\n${companyProfileLines.length ? companyProfileLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem informações básicas preenchidas.'}\n\n## Base técnica do segmento\n${technicalBaseLines.length ? technicalBaseLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem base técnica resumida.'}\n\n## Raio-X aprovado da marca\n${approvedXrayLines.length ? approvedXrayLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem Raio-X aprovado.'}\n\n## Identidade visual\n- Logo esperado em: assets/logo.png\n- Referências em: assets/references/\n- Estilo visual: ${project.brand?.visualStyle || 'adicione o estilo visual do projeto.'}\n\n## Sistema visual fixo da marca\n${brandVisualSystemLines.length ? brandVisualSystemLines.map((line) => `- ${line}`).join('\n') : '- Ainda sem sistema visual definido (tipografia, pesos, cantos, sombras e cores por função).'}\n\n## Referências visuais cadastradas\n${references.length ? references.map((reference) => `- ${reference.relativePath} (${referenceRoleLabel(reference.role)}, peso ${reference.weight}): ${reference.instruction || 'sem instrução específica.'}`).join('\n') : '- Ainda sem referências cadastradas.'}\n\n## Ofertas e assuntos cadastrados\n${offers.length ? offers.map((offer) => `- ${offer.name} (${offerTypeLabel(offer.type)}): ${offer.price || 'sem preço'}; itens: ${offer.items || 'não informado'}; CTA: ${offer.cta || 'não informado'}`).join('\n') : '- Ainda sem ofertas cadastradas.'}\n\n## Pilares de conteúdo\n${pillars.length ? pillars.map((pillar) => `- ${pillar.name} (${pillarRoleLabel(pillar.role)}, peso ${pillar.weight}, tratamento ${pillar.visualTreatment}): ${pillar.objective || 'sem objetivo descrito'}`).join('\n') : '- Ainda sem pilares cadastrados; rotação de conteúdo segue o padrão automático.'}\n\n## Regras de imagem\n${imageRules.length ? imageRules.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras visuais deste projeto aqui.'}\n\n## Regras do projeto\n${project.rules.project.length ? project.rules.project.map((rule) => `- ${rule}`).join('\n') : '- Adicione regras específicas deste projeto aqui.'}\n\n## Aprendizados aprovados\n${approvedLearnings.length ? approvedLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem conteúdos aprovados.'}\n\n## Evitar\n${avoidLearnings.length ? avoidLearnings.map((line) => `- ${line}`).join('\n') : '- Ainda sem rejeições registradas.'}\n`;
 }
 
 function buildImagePrompt(project, globalRules, contentRules, dayNumber, context = {}) {
@@ -5866,6 +5892,7 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
     || (approvedXrayLines.length
       ? buildConsolidatedXrayVisualDirection(project, project.brandXray)
       : buildConsolidatedVisualDirection(project, project.brandBriefing));
+  const brandVisualSystemLines = formatBrandVisualSystemLines(project.brand?.visualSystem);
   const requiredGlobalRules = globalRules
     .map((rule) => (typeof rule === 'string' ? rule : rule?.text || ''))
     .filter(Boolean);
@@ -5936,6 +5963,7 @@ function buildImagePrompt(project, globalRules, contentRules, dayNumber, context
       ]
       : ['Nenhuma referência visual ativa cadastrada.']),
     section('DIREÇÃO VISUAL CONSOLIDADA', [
+      ...brandVisualSystemLines.map((line) => `Sistema visual fixo da marca: ${line}`),
       consolidatedVisualDirection || 'Direção visual ainda não consolidada; manter aparência limpa, profissional e coerente com os fatos cadastrados.',
       isSpecialDateInstitutional
         ? 'Esta peça é uma celebração de data comemorativa, não o conteúdo comercial padrão da marca — mesmo que a marca normalmente use elementos de dashboard, gráfico, métrica, card de resultado ou mockup de tela/software, NÃO usar nada disso aqui. Priorize uma composição mais humana, calorosa e simples, mantendo as cores e a logo da marca, mas sem parecer peça de vendas ou apresentação de negócio.'
@@ -6079,11 +6107,14 @@ function mergeTopicIdeas(primary, fallback) {
   return merged;
 }
 
+function topicIdeaBankHasEnoughIdeas(bank, goalKeys) {
+  return !!bank?.goals && goalKeys.every((goalKey) => (bank.goals?.[goalKey]?.items || []).length >= TOPIC_IDEAS_PER_GOAL);
+}
+
 function topicIdeaBankIsDue(bank, goalKeys, now) {
   if (!goalKeys.length) return false;
-  if (!bank?.goals) return true;
-  if (bank.nextRefreshAt && new Date(bank.nextRefreshAt) <= now) return true;
-  return goalKeys.some((goalKey) => (bank.goals?.[goalKey]?.items || []).length < TOPIC_IDEAS_PER_GOAL);
+  if (!topicIdeaBankHasEnoughIdeas(bank, goalKeys)) return true;
+  return !!(bank.nextRefreshAt && new Date(bank.nextRefreshAt) <= now);
 }
 
 async function buildTopicIdeaBank(project, goalKeys, options = {}, now = new Date()) {
@@ -6133,6 +6164,7 @@ async function refreshProjectTopicIdeasInPlace(project, paths, options = {}, now
   if (!goalKeys.length) return null;
   const existing = project.contentStrategy?.topicIdeas;
   if (!options.force && !topicIdeaBankIsDue(existing, goalKeys, now)) return existing;
+  if (!options.force && typeof options.topicIdeaGenerator !== 'function' && topicIdeaBankHasEnoughIdeas(existing, goalKeys)) return existing;
   const topicIdeas = await buildTopicIdeaBank(project, goalKeys, options, now);
   project.contentStrategy = {
     ...(project.contentStrategy || {}),
@@ -6500,7 +6532,16 @@ async function offerToContentTopic(offer, targetDir) {
     source: 'offer',
     offerId: offer.id,
     offerName: offer.name,
-    price: normalizeCreativePrice(offer.price),
+    // Unit (kg/g/pacote/caixa) and de/por original price folded into the
+    // price string here — the single place every downstream consumer
+    // (image prompts, checks, comparisons) reads topic.price from, so they
+    // get "De R$ 20,00 por R$ 10,00/kg" for free.
+    price: (() => {
+      const price = normalizeCreativePrice(offer.price);
+      const withUnit = price && offer.priceUnit ? `${price}/${offer.priceUnit}` : price;
+      const original = normalizeCreativePrice(offer.originalPrice);
+      return original && price ? `De ${original} por ${withUnit}` : withUnit;
+    })(),
     items: offer.items,
     cta: offer.cta,
     autoGenerateCta: offer.autoGenerateCta,
@@ -6872,6 +6913,7 @@ const FOOD_SERVICE_SEGMENT_KEYWORDS = [
   'pizzaria', 'restaurante', 'lanchonete', 'hamburgueria', 'padaria',
   'confeitaria', 'cafeteria', 'sorveteria', 'churrascaria', 'doceria',
   'buffet', 'food truck', 'delivery de comida', 'cozinha', 'marmitaria',
+  'frios', 'laticinio', 'laticinios', 'queijo', 'queijos', 'emporio',
 ];
 
 const NON_FOOD_SUPPLIER_KEYWORDS = [
@@ -6913,12 +6955,177 @@ function buildBrandColorLine(project = {}) {
   return colors.length ? `Cores da marca a respeitar: ${colors.join(', ')}.` : '';
 }
 
+const BRAND_VISUAL_TYPOGRAPHY_OPTIONS = new Set([
+  'modern_grotesk',
+  'commercial_condensed',
+  'clean_geometric',
+  'editorial_serif',
+  'friendly_rounded',
+  'neutral_system',
+]);
+const BRAND_VISUAL_WEIGHT_OPTIONS = new Set(['regular', 'medium', 'semibold', 'bold', 'extra_bold', 'black']);
+const BRAND_VISUAL_CORNER_OPTIONS = new Set(['sharp', 'slightly_rounded', 'rounded']);
+const BRAND_VISUAL_SHADOW_OPTIONS = new Set(['none', 'subtle', 'defined']);
+const BRAND_VISUAL_TITLECASE_OPTIONS = new Set(['normal', 'uppercase', 'capitalized']);
+const BRAND_VISUAL_TYPOGRAPHY_LABELS = {
+  modern_grotesk: 'grotesca moderna',
+  commercial_condensed: 'condensada comercial',
+  clean_geometric: 'geometrica limpa',
+  editorial_serif: 'serifada editorial',
+  friendly_rounded: 'arredondada amigavel',
+  neutral_system: 'neutra de sistema',
+};
+const BRAND_VISUAL_WEIGHT_LABELS = {
+  regular: 'regular',
+  medium: 'medio',
+  semibold: 'semibold',
+  bold: 'bold',
+  extra_bold: 'extra bold',
+  black: 'black/pesado',
+};
+const BRAND_VISUAL_CORNER_LABELS = {
+  sharp: 'quase retos',
+  slightly_rounded: 'levemente arredondados',
+  rounded: 'arredondados',
+};
+const BRAND_VISUAL_SHADOW_LABELS = {
+  none: 'sem sombras',
+  subtle: 'muito sutis',
+  defined: 'definidas, mas comerciais',
+};
+const BRAND_VISUAL_TITLECASE_LABELS = {
+  normal: 'normal',
+  uppercase: 'caixa alta',
+  capitalized: 'capitalizado',
+};
+
+function brandVisualKey(value) {
+  return cleanText(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function normalizeBrandVisualOption(value, allowed, aliases = {}) {
+  const key = brandVisualKey(value);
+  if (allowed.has(key)) return key;
+  return aliases[key] || '';
+}
+
+function normalizeBrandVisualSystem(input = {}) {
+  const typography = normalizeBrandVisualOption(input?.typography, BRAND_VISUAL_TYPOGRAPHY_OPTIONS, {
+    grotesca_moderna: 'modern_grotesk',
+    grotesk_moderna: 'modern_grotesk',
+    tipografia_moderna: 'modern_grotesk',
+    condensada_comercial: 'commercial_condensed',
+    geometrica_limpa: 'clean_geometric',
+    serifada_editorial: 'editorial_serif',
+    arredondada_amigavel: 'friendly_rounded',
+    neutra: 'neutral_system',
+  });
+  return {
+    typography,
+    titleWeight: normalizeBrandVisualOption(input?.titleWeight, BRAND_VISUAL_WEIGHT_OPTIONS, { extra_bold: 'extra_bold' }),
+    bodyWeight: normalizeBrandVisualOption(input?.bodyWeight, BRAND_VISUAL_WEIGHT_OPTIONS, { semi_bold: 'semibold' }),
+    priceWeight: normalizeBrandVisualOption(input?.priceWeight, BRAND_VISUAL_WEIGHT_OPTIONS, { extra_bold: 'extra_bold' }),
+    colorUsage: cleanText(input?.colorUsage),
+    cornerStyle: normalizeBrandVisualOption(input?.cornerStyle, BRAND_VISUAL_CORNER_OPTIONS, {
+      quase_retos: 'sharp',
+      levemente_arredondados: 'slightly_rounded',
+      arredondados: 'rounded',
+    }),
+    shadowStyle: normalizeBrandVisualOption(input?.shadowStyle, BRAND_VISUAL_SHADOW_OPTIONS, {
+      sem_sombras: 'none',
+      muito_sutis: 'subtle',
+      sutis: 'subtle',
+      definidas: 'defined',
+    }),
+    titleCase: normalizeBrandVisualOption(input?.titleCase, BRAND_VISUAL_TITLECASE_OPTIONS, {
+      maiusculas: 'uppercase',
+      caixa_alta: 'uppercase',
+      capitalizado: 'capitalized',
+    }),
+    updatedAt: input?.updatedAt || null,
+  };
+}
+
+function hasBrandVisualSystemContent(input = {}) {
+  const system = normalizeBrandVisualSystem(input);
+  return Boolean(
+    system.typography
+    || system.titleWeight
+    || system.bodyWeight
+    || system.priceWeight
+    || system.colorUsage
+    || system.cornerStyle
+    || system.shadowStyle
+    || system.titleCase
+  );
+}
+
+function brandVisualLabel(labels, value) {
+  return value ? (labels[value] || value) : '';
+}
+
+function formatBrandVisualSystemLines(input = {}) {
+  const system = normalizeBrandVisualSystem(input);
+  const weights = [
+    system.titleWeight ? `titulo ${brandVisualLabel(BRAND_VISUAL_WEIGHT_LABELS, system.titleWeight)}` : '',
+    system.bodyWeight ? `texto ${brandVisualLabel(BRAND_VISUAL_WEIGHT_LABELS, system.bodyWeight)}` : '',
+    system.priceWeight ? `preco ${brandVisualLabel(BRAND_VISUAL_WEIGHT_LABELS, system.priceWeight)}` : '',
+  ].filter(Boolean);
+  return [
+    system.typography ? `Tipografia fixa: ${brandVisualLabel(BRAND_VISUAL_TYPOGRAPHY_LABELS, system.typography)}.` : '',
+    weights.length ? `Pesos tipograficos: ${weights.join('; ')}.` : '',
+    system.colorUsage ? `Cores por funcao: ${system.colorUsage}.` : '',
+    system.cornerStyle ? `Cantos: ${brandVisualLabel(BRAND_VISUAL_CORNER_LABELS, system.cornerStyle)}.` : '',
+    system.shadowStyle ? `Sombras: ${brandVisualLabel(BRAND_VISUAL_SHADOW_LABELS, system.shadowStyle)}.` : '',
+    system.titleCase ? `Caixa do titulo: ${brandVisualLabel(BRAND_VISUAL_TITLECASE_LABELS, system.titleCase)}.` : '',
+  ].filter(Boolean);
+}
+
+function buildSuggestedBrandVisualSystem(project = {}, now = new Date()) {
+  const input = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name));
+  const identity = normalizeBrandIdentity(project.brandIdentity || { logoPath: project.brand?.logoPath });
+  const colors = [...identity.editedColors, ...identity.extractedColors].filter(Boolean);
+  const colorSource = input.brandColors || colors.join(', ');
+  const typography = input.audienceType === 'b2b'
+    ? 'neutral_system'
+    : isFoodBusiness(project)
+      ? 'commercial_condensed'
+      : 'modern_grotesk';
+  return normalizeBrandVisualSystem({
+    typography,
+    titleWeight: 'bold',
+    bodyWeight: 'medium',
+    priceWeight: 'black',
+    colorUsage: colorSource
+      ? `Usar ${colorSource} como paleta principal; reservar a cor mais forte para preco/destaque e manter fundo/texto com contraste alto.`
+      : 'Usar no maximo 3 cores principais, com uma cor de destaque para preco/acao e contraste alto para leitura em celular.',
+    cornerStyle: 'slightly_rounded',
+    shadowStyle: 'subtle',
+    titleCase: 'normal',
+    updatedAt: now.toISOString(),
+  });
+}
+
 function normalizeProductTreatment(value, hasProductReference = false) {
   const normalized = String(value || '').trim().toLowerCase();
   if (['exact_asset', 'exact', 'preserve_exact', 'foto_exata'].includes(normalized)) return 'exact_asset';
+  if (['faithful_enhance_photo_integration', 'photo_integration', 'integracao_fotografica', 'produto_fiel_integracao_fotografica'].includes(normalized)) return 'faithful_enhance_photo_integration';
   if (['faithful_enhance', 'faithful', 'enhance', 'produto_fiel', 'produto_fiel_melhorado', 'melhorar_fiel'].includes(normalized)) return 'faithful_enhance';
   if (['creative_redraw', 'redraw', 'reinterpret', 'recriar'].includes(normalized)) return 'creative_redraw';
   return hasProductReference ? 'faithful_enhance' : 'none';
+}
+
+function isFaithfulProductTreatment(treatment) {
+  return ['faithful_enhance', 'faithful_enhance_photo_integration'].includes(treatment);
+}
+
+function isPhotoIntegrationTreatment(treatment) {
+  return treatment === 'faithful_enhance_photo_integration';
 }
 
 function normalizeLayoutStrength(value, hasLayoutReference = false) {
@@ -6983,7 +7190,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       referenceIds: productReferences.map((reference) => reference.id).filter(Boolean),
       preserve: productTreatment === 'exact_asset'
         ? ['silhueta', 'cores', 'rótulo', 'marca', 'proporções']
-        : productTreatment === 'faithful_enhance'
+        : isFaithfulProductTreatment(productTreatment)
           ? ['embalagem', 'cor principal', 'formato', 'quantidade', 'identidade visual']
         : productTreatment === 'creative_redraw'
           ? ['categoria', 'silhueta reconhecível', 'cores principais', 'quantidade']
@@ -7064,14 +7271,17 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   const hasLinkedProductPhoto = Boolean(topic.photoReferenceIds?.length)
     && productReferences.some((reference) => topic.photoReferenceIds.includes(reference.id));
   const productFocus = detectCreativeProductFocus(topic, hasLinkedProductPhoto, creativeSpec.product.treatment);
-  const productLockedToPhoto = ['exact_asset', 'faithful_enhance'].includes(creativeSpec.product.treatment);
+  const productLockedToPhoto = creativeSpec.product.treatment === 'exact_asset' || isFaithfulProductTreatment(creativeSpec.product.treatment);
   const quantityRules = buildCreativeQuantityRules(topic, productFocus, exactTitle);
   const visualSummary = summarizeBrandForCreative(project);
+  const brandVisualSystemLines = formatBrandVisualSystemLines(project.brand?.visualSystem);
   // Which single layout/visual reference to use is already rotated upstream
   // in buildPrimaryAiImageReferences (seeded per test run), so selectedReferences
   // contains at most one of each here.
   const layoutReference = selectedReferences.find((reference) => reference.role === 'layout_model');
   const visualReference = selectedReferences.find((reference) => reference.role === 'visual_reference');
+  const structurePercentageLines = extractStructurePercentageLines(layoutReference?.structureText);
+  const structureDimensions = imageDimensionsForChannel(targetChannel);
   const variation = [
     extractPromptLine(originalPrompt, 'Conceito do teste:'),
     extractPromptLine(originalPrompt, 'Composição obrigatória desta tentativa:'),
@@ -7136,7 +7346,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? (useSubtleCta
           ? `CTA sutil: "${exactCta}" como texto pequeno, sem botão/selo.`
           : `CTA exato: ${exactCta}`)
-        : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte; é um post de conteúdo, não uma oferta.',
+        : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte.',
       topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
       projectCreativeInstagramHandle(project)
         ? `Identificação da marca: ${projectCreativeInstagramHandle(project)} — manter exatamente este @ nos criativos.`
@@ -7166,12 +7376,23 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Utilizar as fotos reais selecionadas para esta geração.',
       creativeSpec.product.treatment === 'exact_asset'
         ? 'Modo FOTO EXATA: preservar embalagem, rótulo, marca, cores, textos e proporções; pode apenas recortar e ajustar luz/sombra para integrar ao layout.'
+        : isPhotoIntegrationTreatment(creativeSpec.product.treatment)
+          ? 'Modo PRODUTO FIEL MELHORADO + INTEGRAÇÃO FOTOGRÁFICA: usar o produto real da foto como base obrigatória; pode recortar, limpar fundo, corrigir enquadramento, luz, sombra e contraste para deixar comercial, mas o cenário precisa se adaptar à fotografia real do produto.'
         : creativeSpec.product.treatment === 'faithful_enhance'
           ? 'Modo PRODUTO FIEL MELHORADO: usar o produto real da foto como base obrigatória; pode recortar, limpar fundo, corrigir enquadramento, luz, sombra e contraste para deixar comercial.'
           : 'Modo REDESENHO CRIATIVO: pode redesenhar, reiluminar e valorizar o produto para melhorar a peça, mas deve preservar categoria, silhueta reconhecível, cores principais e quantidade da oferta.',
+      ...(isPhotoIntegrationTreatment(creativeSpec.product.treatment) ? [
+        'Integração fotográfica: o suporte gerado (mesa, bancada, parede, ambiente e iluminação) deve trabalhar para o produto real, não o produto se adaptar ao cenário.',
+        'Casar perspectiva: ângulo da superfície e ponto de vista precisam ser plausíveis para a fotografia original do produto; não inventar mesa em ângulo incompatível com produto fotografado de frente.',
+        'Casar luz: respeitar direção, temperatura e intensidade da luz percebida no produto; se a luz do produto vem da esquerda, o fundo/superfície também deve sugerir luz vindo da esquerda.',
+        'Criar sombra de contato curta e definida junto ao produto e sombra projetada mais suave conforme a direção de luz; evitar sombra preta cinematográfica ou desconectada.',
+        'Aplicar granulação final extremamente sutil na peça inteira para unificar produto real e fundo gerado, sem parecer filtro pesado.',
+        'Evitar folhas desfocadas, foreground foliage, bokeh/clichê cinematográfico e estética de "Midjourney advertising shot"; buscar fotografia de encarte moderno/campanha de supermercado premium.',
+        'Usar fundo simples, superfície plausível, iluminação fotográfica, tipografia forte, preço e no máximo 1 ou 2 benefícios.',
+      ] : []),
       creativeSpec.product.treatment === 'creative_redraw'
         ? 'O redesenho não precisa reproduzir cada letra do rótulo, mas não pode transformar o item em outro produto, outra versão ou outra quantidade.'
-        : creativeSpec.product.treatment === 'faithful_enhance'
+        : isFaithfulProductTreatment(creativeSpec.product.treatment)
           ? 'Não redesenhar livremente a embalagem, rótulo, formato, cor principal ou quantidade; melhorar a apresentação sem criar uma versão nova do produto.'
         : 'Não substituir por outro produto/serviço nem deformar sua identidade real.',
       ...productFocus.assetLines,
@@ -7195,6 +7416,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       visualSummary,
       buildVisualStyleLine(project),
       buildBrandColorLine(project),
+      ...brandVisualSystemLines.map((line) => `Sistema visual fixo da marca: ${line}`),
       ...productFocus.visualLines,
       productReferences.length
         ? 'O criativo deve ter apoio visual além do produto: blocos/formas com cores da marca, sombra, textura leve, benefício curto e no máximo um detalhe contextual pequeno.'
@@ -7250,7 +7472,31 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       `Layout principal: ${layoutReference.relativePath}`,
       layoutReference.instruction ? `Direção do usuário: ${cleanPromptText(layoutReference.instruction)}` : '',
       `Força estrutural: ${creativeSpec.layout.strength.toUpperCase()}. O modelo é obrigatório para composição, hierarquia, enquadramento, distribuição dos elementos e tratamento do preço.`,
+      isPhotoIntegrationTreatment(creativeSpec.product.treatment)
+        ? 'Regra de níveis: produto vem do asset real; suporte fotográfico pode ser gerado apenas para integrar; design, hierarquia, margens, tipografia, preço, logo e CTA continuam controlados pelo template.'
+        : '',
       ...creativeSpec.layout.zones,
+      // On top of the generic channel-shaped zones above, the structure's
+      // own zone-by-zone description (left/right split, benefit list style,
+      // price box position — whatever makes THIS structure different from
+      // the other 9 registered for this postType) — previously this text
+      // was written by the operator/investigation but never left the
+      // Aprendizado de Segmento gallery, so every STRICT structure
+      // converged on the same generic vertical stack regardless of which
+      // one was matched.
+      layoutReference.structureText
+        ? `Descrição completa da estrutura "${layoutReference.title || 'sem nome'}" — seguir estas zonas e esta hierarquia específicas, além das zonas gerais acima (adaptar só o necessário para o canal/formato desta peça):\n${layoutReference.structureText}`
+        : '',
+      layoutReference.structureText && topic.source !== 'ad_creative'
+        ? 'Ignorar qualquer botão/selo de CTA mencionado na descrição da estrutura acima — este projeto não usa botão de CTA nesta peça; seguir a regra de CTA definida em ESTRUTURA VERTICAL/FEED OBRIGATÓRIA.'
+        : '',
+      // Restated on their own, right after the full description above, so
+      // the percentages aren't just one clause lost inside a long
+      // paragraph — treated as a real space budget for the final canvas,
+      // not a loose suggestion.
+      structurePercentageLines.length
+        ? `Distribuição de espaço obrigatória desta estrutura — em pixels reais do canvas final (${structureDimensions.width}x${structureDimensions.height}), não é sugestão solta:\n${structurePercentageLines.map((line) => `${line}${pixelRangeForPercentageLine(line, structureDimensions)}.`).join('\n')}\nQualquer valor máximo citado acima é teto rígido: nenhum desses elementos pode ultrapassá-lo em mais de 5 pontos percentuais de altura.`
+        : '',
       'Não copiar cores, paleta ou identidade visual da referência.',
       'Não copiar logo, nome, texto, preço, produto ou identidade da empresa presente na referência.',
       isVerticalStoryChannel(targetChannel)
@@ -7286,6 +7532,62 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'A imagem deve sair pronta como anúncio final.',
     ]),
   ].filter(Boolean).join('\n\n');
+}
+
+// True when a structure's own title marks it as requiring a real discount
+// (the segment-learning investigation names these "DE / POR (DESCONTO
+// REAL)" style) — see discountSafeLayouts in buildPrimaryAiImageReferences.
+function structureRequiresRealDiscount(title) {
+  return /desconto|\bde\s*\/\s*por\b/i.test(String(title || ''));
+}
+
+// Pulls out just the percentage-bearing lines from a structure's learned
+// description ("10% — Logo", "Deve ocupar aproximadamente 40% a 50% da
+// arte") so they can be restated as their own short, unambiguous checklist
+// instead of sitting buried inside a long prose paragraph — a wall of text
+// is easy for an image generator to treat as loose inspiration rather than
+// a hard constraint. A percentage line that doesn't already name its own
+// element (e.g. just "Deve ocupar 40% a 55% da arte") is paired with the
+// short label line right above it, matching how these templates are
+// written (element name, then its size on the next line).
+function extractStructurePercentageLines(text) {
+  const lines = String(text || '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const result = [];
+  lines.forEach((line, index) => {
+    if (!/\d{1,3}\s*%/.test(line)) return;
+    const previous = lines[index - 1];
+    const combined = previous && previous.length < 60 && !/\d{1,3}\s*%/.test(previous)
+      ? `${previous} — ${line}`
+      : line;
+    if (!result.includes(combined)) result.push(combined);
+  });
+  return result;
+}
+
+// Converts a percentage-bearing structure line's numbers into an actual
+// pixel range for this piece's real canvas height — an experiment: an
+// abstract "%" is easy for a single-shot image generator to treat as a
+// loose ballpark, a concrete pixel count is a harder anchor. Kept isolated
+// in its own function (not merged into extractStructurePercentageLines) so
+// it's a one-line revert if it doesn't measurably help — just drop the
+// call site below, this stays unused but harmless.
+function pixelRangeForPercentageLine(line, dimensions) {
+  const numbers = [...String(line || '').matchAll(/(\d{1,3})\s*%/g)].map((match) => Number(match[1]));
+  if (!numbers.length || !dimensions?.height) return '';
+  const min = Math.min(...numbers);
+  const max = Math.max(...numbers);
+  const toPx = (percent) => Math.round((percent / 100) * dimensions.height);
+  return min === max
+    ? ` [~${toPx(min)}px de altura, de ${dimensions.height}px totais]`
+    : ` [~${toPx(min)}px a ${toPx(max)}px de altura, de ${dimensions.height}px totais]`;
+}
+
+// True when an offer's price string itself already encodes a real discount
+// ("De R$ 49,90 por R$ 44,90/kg") rather than a single price — the operator
+// writes offers this way today, so no separate oldPrice field is needed to
+// detect one.
+function offerHasRealDiscount(price) {
+  return /\bde\b[\s\S]*\bpor\b/i.test(String(price || ''));
 }
 
 function normalizeCreativeTitle(value) {
@@ -7339,18 +7641,13 @@ function salesGatedCta(topicWithoutCta, ctaIfSales) {
   return isSalesTopic(topicWithoutCta) ? ctaIfSales : '';
 }
 
-// Explicit CTA wins. Otherwise real sales offers get a direct CTA on every
-// channel; Feed used to say "Saiba mais", but that was weak for conversion.
-//
-// Non-sales content (orientation/institutional/relationship posts, or a
-// pillar that isn't "convida") gets no CTA here at all — baking a "peça
-// agora"-style button into a post whose whole point is to *not* look like a
-// promotion undercuts the content. The caption still closes with its own
-// natural, contextual call to action (autoGenerateCta) — that's a separate,
-// softer mechanism from the hard button rendered inside the creative.
+// Explicit CTA wins. Otherwise, only offers explicitly marked for automatic
+// CTA get a generated sales call. An empty CTA field with autoGenerateCta off
+// means the operator intentionally wants the creative without CTA text.
 export function chooseCreativeCta(topic = {}) {
   const explicit = String(topic.cta || '').trim();
   if (explicit) return explicit;
+  if (topic.autoGenerateCta !== true) return '';
   if (!isSalesTopic(topic)) return '';
   if (topic.type === 'rodizio') return 'Reserve agora';
   return 'Peça agora';
@@ -7477,7 +7774,8 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
   // exact product instead of leaving the AI to invent/guess a generic one.
   if (hasLinkedProductPhoto && topic.offerName) {
     const exactAsset = productTreatment === 'exact_asset';
-    const faithfulEnhance = productTreatment === 'faithful_enhance';
+    const faithfulEnhance = isFaithfulProductTreatment(productTreatment);
+    const photoIntegration = isPhotoIntegrationTreatment(productTreatment);
     return {
       heroLine: `1. ${topic.offerName} real (foto anexada) em destaque como produto principal.`,
       assetLines: exactAsset ? [
@@ -7485,7 +7783,9 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
         'Preservar fielmente formato, cor, textos, logotipos, botões e proporções reais do produto fotografado.',
       ] : faithfulEnhance ? [
         `O produto principal é o item real da foto anexada: ${topic.offerName}. Melhorar apresentação sem trocar embalagem, cor, formato, quantidade ou identidade visual.`,
-        'Pode corrigir recorte, enquadramento, limpeza de fundo, luz e sombra; não redesenhar livremente nem criar uma versão nova do produto.',
+        photoIntegration
+          ? 'Pode corrigir recorte, enquadramento, limpeza de fundo, luz e sombra; integrar em suporte fotográfico plausível que respeite perspectiva, luz e sombra do produto real.'
+          : 'Pode corrigir recorte, enquadramento, limpeza de fundo, luz e sombra; não redesenhar livremente nem criar uma versão nova do produto.',
       ] : [
         `O produto principal é ${topic.offerName}, baseado na foto anexada. Pode redesenhar para melhorar a apresentação comercial.`,
         'Preservar categoria, silhueta reconhecível, cores principais e quantidade; não precisa copiar perfeitamente cada letra do rótulo.',
@@ -7742,7 +8042,19 @@ function buildPrimaryAiImageReferences(references, options = {}) {
     && reference.postType === postType
     && (!reference.shape || reference.shape === shape)
   ));
-  const matchingLayouts = exactLayouts;
+  // A structure whose own title advertises a real discount (e.g. "DE / POR
+  // (DESCONTO REAL)") is built around showing both an old and a new price —
+  // matching it to an offer with only a single price contradicts the
+  // template's own rule ("só usar DE/POR quando existir desconto real") and
+  // forces the prompt to strip the old price/CTA/benefits back out by hand.
+  // Excluded from rotation whenever the offer's price string doesn't read as
+  // a real discount; if that leaves nothing (a project that registered ONLY
+  // a discount-shaped structure for this postType), fall back to the full
+  // set rather than block generation.
+  const discountSafeLayouts = exactLayouts.filter((reference) => (
+    !structureRequiresRealDiscount(reference.title) || offerHasRealDiscount(options.topic?.price)
+  ));
+  const matchingLayouts = discountSafeLayouts.length ? discountSafeLayouts : exactLayouts;
   if (templateRequired && !matchingLayouts.length) {
     const postTypeLabel = CREATIVE_POST_TYPE_LABELS[postType] || postType;
     const shapeLabel = shape ? (CREATIVE_SHAPE_LABELS[shape] || shape) : 'formato desconhecido';
@@ -8693,11 +9005,16 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     name,
     type,
     price: normalizeCreativePrice(input?.price),
+    // "De" price for a de/por promo — optional, only meaningful together with `price`.
+    originalPrice: normalizeCreativePrice(input?.originalPrice),
+    priceUnit: ['kg', 'g', 'pacote', 'caixa'].includes(String(input?.priceUnit || '').trim())
+      ? String(input.priceUnit).trim()
+      : '',
     items: String(input?.items || '').trim(),
     cta: String(input?.cta || '').trim(),
     autoGenerateCta: input?.autoGenerateCta === true,
     notes: String(input?.notes || '').trim(),
-    productTreatment: ['exact_asset', 'faithful_enhance', 'creative_redraw'].includes(String(input?.productTreatment || '').trim())
+    productTreatment: ['exact_asset', 'faithful_enhance', 'faithful_enhance_photo_integration', 'creative_redraw'].includes(String(input?.productTreatment || '').trim())
       ? String(input.productTreatment).trim()
       : '',
     layoutStrength: ['strict', 'balanced', 'free'].includes(String(input?.layoutStrength || '').trim())
@@ -8963,6 +9280,19 @@ export function normalizeProjectReferences(project) {
   return [...byPath.values()];
 }
 
+function normalizeProjectBrand(project = {}) {
+  const brand = project.brand || {};
+  return {
+    ...brand,
+    logoPath: brand.logoPath || 'assets/logo.png',
+    referencesDir: brand.referencesDir || 'assets/references',
+    references: normalizeProjectReferences(project),
+    visualStyle: cleanText(brand.visualStyle),
+    imageRules: normalizeRuleList(brand.imageRules || []),
+    visualSystem: normalizeBrandVisualSystem(brand.visualSystem),
+  };
+}
+
 function normalizeProjectOfferAssets(project) {
   const existing = Array.isArray(project.offerAssets) ? project.offerAssets : [];
   const byPath = new Map();
@@ -9094,6 +9424,14 @@ export async function buildSegmentLayoutReferences(project, paths, options = {})
     reference.title = entry.title || '';
     reference.postType = entry.postType || '';
     reference.shape = entry.shape || '';
+    // The rich zone-by-zone breakdown the operator/investigation wrote for
+    // this specific structure (left/right split, benefit list style, price
+    // box position, etc.) — previously only stored for display in the
+    // Aprendizado de Segmento gallery and never reached the image prompt, so
+    // every STRICT structure fell back to the same generic vertical
+    // skeleton (creativeLayoutZones) regardless of which one was matched.
+    // Read by buildChatGptFinalCardPrompt's REFERÊNCIA PRINCIPAL section.
+    reference.structureText = String(entry.text || '').trim().slice(0, 2000);
     reference.referenceKind = 'segment_structure';
     references.push(reference);
   }

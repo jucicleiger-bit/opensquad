@@ -86,6 +86,7 @@ describe("Offers", () => {
     expect(screen.getByLabelText("Nome")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Serviço" })).toBeInTheDocument();
     expect(screen.getByLabelText("Tratamento do produto")).toHaveValue("faithful_enhance");
+    expect(screen.getByRole("option", { name: "Produto fiel + recomendação" })).toBeInTheDocument();
     expect(screen.getByLabelText("Obediência ao modelo")).toHaveValue("strict");
   });
 
@@ -109,6 +110,25 @@ describe("Offers", () => {
     const payload = JSON.parse(saveCall[1].body as string);
     expect(payload.productTreatment).toBe("faithful_enhance");
     expect(payload.layoutStrength).toBe("strict");
+  });
+
+  it("sends the photographic integration product treatment when selected", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {}, offer: { ...RODIZIO_OFFER, productTreatment: "faithful_enhance_photo_integration" } } },
+      { body: projectState([{ ...RODIZIO_OFFER, productTreatment: "faithful_enhance_photo_integration" }]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Mussarela fatiada");
+    await userEvent.selectOptions(screen.getByLabelText("Tratamento do produto"), "faithful_enhance_photo_integration");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const payload = JSON.parse(saveCall[1].body as string);
+    expect(payload.productTreatment).toBe("faithful_enhance_photo_integration");
   });
 
   it("saves an offer flagged as a unique proposal (never combined into a combo) and shows a pill for it", async () => {
