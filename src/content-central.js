@@ -6506,6 +6506,7 @@ async function offerToContentTopic(offer, targetDir) {
     autoGenerateCta: offer.autoGenerateCta,
     notes: offer.notes,
     productTreatment: offer.productTreatment,
+    backgroundStyle: offer.backgroundStyle,
     layoutStrength: offer.layoutStrength,
     objective: await offerObjective(offer, targetDir),
     pillarId: offer.pillarId || null,
@@ -6565,6 +6566,7 @@ async function buildComboOfferTopic(a, b, targetDir) {
       b.notes,
     ].filter(Boolean).join('\n'),
     productTreatment: a.productTreatment || b.productTreatment,
+    backgroundStyle: a.backgroundStyle || b.backgroundStyle,
     layoutStrength: a.layoutStrength,
     pillarId: a.pillarId,
     photoReferenceIds: [(a.photoReferenceIds || [])[0], (b.photoReferenceIds || [])[0]].filter(Boolean),
@@ -7271,6 +7273,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
     section('LIBERDADE CRIATIVA', [
+      creativeSpec.background.style === 'simple_brand'
+        ? 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.'
+        : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
         ? 'Pode variar fundo, luz, tipografia e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
         : productLockedToPhoto
@@ -7291,6 +7296,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       !isVerticalStory ? 'Não adicionar faixas, ribbons, selos secundários ou fileira de ícones com texto além dos elementos definidos em HIERARQUIA — texto em fonte muito pequena sai ilegível/embaralhado na geração final.' : '',
       exactPrice ? 'Não posicionar o preço no centro cobrindo o produto principal.' : '',
       productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
+      creativeSpec.background.style === 'simple_brand'
+        ? 'Não criar cenário, ambientação ou objetos de contexto no fundo — fundo deve ser liso, só com cor da marca.'
+        : '',
       ...productFocus.restrictionLines,
       ...quantityRules.restrictionLines,
       'Não inserir textos aleatórios, marcas concorrentes, telefone, endereço ou informações não fornecidas.',

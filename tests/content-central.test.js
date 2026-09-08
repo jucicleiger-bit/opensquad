@@ -9233,3 +9233,96 @@ test('offer with explicit elaborate background style is stored and read back unc
     assert.equal(offer.backgroundStyle, 'elaborate');
   });
 });
+
+test('simple_brand background style locks the prompt to brand-only background, overriding a strict layout template', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-simples-mussarela',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('fundo-simples-mussarela', {
+      kind: 'reference',
+      filename: 'mussarela-fatiada.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da mussarela fatiada.',
+    }, dir);
+
+    await saveProjectOffer('fundo-simples-mussarela', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      productTreatment: 'faithful_enhance',
+      backgroundStyle: 'simple_brand',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+    await updateProjectBrandInput('fundo-simples-mussarela', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('fundo-simples-mussarela', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-simples-mussarela',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.creativeSpec.background.style, 'simple_brand');
+    assert.match(prompt, /Fundo obrigatoriamente liso e simples, usando apenas as cores da marca/i);
+    assert.match(prompt, /vale mesmo se o modelo estrutural/i);
+    assert.match(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
+  });
+});
+
+test('elaborate background style leaves the free-form background prompt unchanged', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-elaborado-mussarela',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    await saveProjectOffer('fundo-elaborado-mussarela', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      backgroundStyle: 'elaborate',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+    await updateProjectBrandInput('fundo-elaborado-mussarela', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('fundo-elaborado-mussarela', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-elaborado-mussarela',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.creativeSpec.background.style, 'elaborate');
+    assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso e simples/i);
+    assert.doesNotMatch(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
+  });
+});
