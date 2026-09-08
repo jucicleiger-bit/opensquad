@@ -99,6 +99,7 @@ export interface ProjectOffer {
   daysOfWeek?: string[];
   photoReferenceIds?: string[];
   productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
+  backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
 }
 
@@ -1084,6 +1085,7 @@ export interface SaveOfferInput {
   uniqueProposal?: boolean;
   photoReferenceIds?: string[];
   productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
+  backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
 }
 
