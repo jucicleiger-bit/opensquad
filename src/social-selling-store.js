@@ -13,6 +13,9 @@ export const DEFAULT_SOCIAL_SELLING_CONFIG = {
     maxFollowers: 5000,
     excludeBioKeywords: ['agência', 'marketing digital', 'social media'],
   },
+  prospecting: {
+    maxPendingLeads: 30,
+  },
   businessHours: { days: [1, 2, 3, 4, 5], startHour: 9, endHour: 18 },
   dailyLimits: { like: 20, comment: 10, follow: 5, dm: 8 },
   transitionDelayMs: {

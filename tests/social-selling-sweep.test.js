@@ -78,6 +78,59 @@ test('runSocialSellingRadarSweep jitters the first action of new leads instead o
   });
 });
 
+test('runSocialSellingRadarSweep stops when the approachable lead queue is already at the daily target', async () => {
+  await withTempDir(async (dir) => {
+    await withSocialSellingState(dir, (state) => {
+      for (let i = 0; i < 30; i += 1) {
+        state.leads.push({ id: `@lead${i}`, handle: `@lead${i}`, stage: 'descoberto', nextActionAt: new Date(0).toISOString() });
+      }
+    });
+
+    let discoverCalls = 0;
+    let qualifyCalls = 0;
+    const result = await runSocialSellingRadarSweep(dir, {
+      discover: async () => { discoverCalls += 1; return [{ handle: '@extra', source: 'hashtag', foundOn: 'padariasp' }]; },
+      qualify: async () => { qualifyCalls += 1; return { approved: true }; },
+      config: DEFAULT_SOCIAL_SELLING_CONFIG,
+      now: new Date('2026-08-25T12:00:00.000Z'),
+    });
+
+    assert.equal(discoverCalls, 0);
+    assert.equal(qualifyCalls, 0);
+    assert.deepEqual(result.discovered, []);
+    assert.deepEqual(result.prospectingTarget, { pending: 30, limit: 30 });
+  });
+});
+
+test('runSocialSellingRadarSweep fills only the remaining approachable lead slots, then stops qualifying', async () => {
+  await withTempDir(async (dir) => {
+    await withSocialSellingState(dir, (state) => {
+      for (let i = 0; i < 29; i += 1) {
+        state.leads.push({ id: `@lead${i}`, handle: `@lead${i}`, stage: 'descoberto', nextActionAt: new Date(0).toISOString() });
+      }
+    });
+
+    let qualifyCalls = 0;
+    const result = await runSocialSellingRadarSweep(dir, {
+      discover: async () => [
+        { handle: '@new0', source: 'hashtag', foundOn: 'padariasp', postUrl: 'https://instagram.com/p/0' },
+        { handle: '@new1', source: 'hashtag', foundOn: 'padariasp', postUrl: 'https://instagram.com/p/1' },
+      ],
+      qualify: async () => { qualifyCalls += 1; return { approved: true, comment: 'oi' }; },
+      config: DEFAULT_SOCIAL_SELLING_CONFIG,
+      now: new Date('2026-08-25T12:00:00.000Z'),
+    });
+
+    assert.equal(qualifyCalls, 1);
+    assert.deepEqual(result.discovered, ['@new0']);
+    assert.deepEqual(result.prospectingTarget, { pending: 30, limit: 30 });
+    assert.deepEqual(result.skipped, [{ handle: '@new1', reason: 'prospecting_target_reached' }]);
+
+    const state = await loadSocialSellingState(dir);
+    assert.equal(state.leads.filter((lead) => !['dm_enviado', 'descartado'].includes(lead.stage)).length, 30);
+  });
+});
+
 test('runSocialSellingRadarSweep starts reference-mined leads at comentado, since no post of their own was ever liked or commented', async () => {
   await withTempDir(async (dir) => {
     await runSocialSellingRadarSweep(dir, {

@@ -1,4 +1,4 @@
-import { loadSocialSellingConfig, withSocialSellingState, findDueLead, nextStage, actionForStage, randomDelayMs } from './social-selling-store.js';
+import { loadSocialSellingConfig, withSocialSellingState, findDueLead, nextStage, actionForStage, randomDelayMs, TERMINAL_STAGES } from './social-selling-store.js';
 import { isWithinBusinessHours, isUnderDailyLimit, recordAction } from './social-selling-safety.js';
 
 // A lead's own profile page, derived from the handle — the only URL we can
@@ -14,6 +14,15 @@ function profileUrlFor(handle) {
 const MAX_ACTION_ATTEMPTS = 3;
 const FAILED_ACTION_RETRY_MS = { min: 1800000, max: 3600000 };
 
+function maxPendingLeadsFor(config) {
+  const value = Number(config?.prospecting?.maxPendingLeads);
+  return Number.isFinite(value) && value >= 0 ? value : Infinity;
+}
+
+function pendingApproachableLeadCount(state) {
+  return (state.leads || []).filter((lead) => !TERMINAL_STAGES.has(lead.stage)).length;
+}
+
 export async function runSocialSellingRadarSweep(targetDir, options = {}) {
   if (typeof options.discover !== 'function' || typeof options.qualify !== 'function') {
     return { discovered: [], skipped: [], blocked: null };
@@ -23,10 +32,17 @@ export async function runSocialSellingRadarSweep(targetDir, options = {}) {
   const discovered = [];
   const skipped = [];
   let blocked = null;
+  let prospectingTarget = null;
 
   await withSocialSellingState(targetDir, async (state) => {
     if (state.paused) return;
     const known = new Set(state.leads.map((lead) => lead.id));
+    const maxPendingLeads = maxPendingLeadsFor(config);
+    const currentPending = pendingApproachableLeadCount(state);
+    if (currentPending >= maxPendingLeads) {
+      prospectingTarget = { pending: currentPending, limit: maxPendingLeads };
+      return;
+    }
 
     let candidates;
     try {
@@ -42,6 +58,12 @@ export async function runSocialSellingRadarSweep(targetDir, options = {}) {
 
     for (const candidate of candidates) {
       if (known.has(candidate.handle)) { skipped.push({ handle: candidate.handle, reason: 'duplicate' }); continue; }
+      const pending = pendingApproachableLeadCount(state);
+      if (pending >= maxPendingLeads) {
+        prospectingTarget = { pending, limit: maxPendingLeads };
+        skipped.push({ handle: candidate.handle, reason: 'prospecting_target_reached' });
+        break;
+      }
       const verdict = await options.qualify(candidate, config);
       const base = {
         id: candidate.handle,
@@ -89,7 +111,7 @@ export async function runSocialSellingRadarSweep(targetDir, options = {}) {
     }
   });
 
-  return { discovered, skipped, blocked };
+  return { discovered, skipped, blocked, prospectingTarget };
 }
 
 function computeNextActionAt(stage, now, config) {
