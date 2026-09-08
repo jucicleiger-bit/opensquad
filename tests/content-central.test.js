@@ -3861,7 +3861,10 @@ test('AI final prompt is compiled into concise creative brief and limited refere
     assert.doesNotMatch(prompt, /modo de operação/i);
     assert.doesNotMatch(prompt, /Não publicar sem aprovação/i);
     assert.doesNotMatch(prompt, /Variação criativa de teste: 2026/i);
-    assert.ok(prompt.length < 6500);
+    // Budget bumped from 6500: the brand visual system section and the
+    // backgroundStyle lock line (both legitimate, separately-reviewed
+    // additions merged together) push a normal prompt to ~6840 chars.
+    assert.ok(prompt.length < 7200);
     assert.equal((prompt.match(/9:16 Vertical/g) || []).length <= 2, true);
     assert.equal(references.filter((reference) => reference.role === 'product_photo').length, 2);
     assert.equal(references.filter((reference) => reference.role === 'layout_model').length, 1);
