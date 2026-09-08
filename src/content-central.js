@@ -6966,7 +6966,13 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   // CTA — every generation that reaches here has an operator-authored
   // template it must follow exactly.
   const layoutStrength = normalizeLayoutStrength(topic.layoutStrength, Boolean(layoutReference));
-  const backgroundStyle = normalizeBackgroundStyle(topic.backgroundStyle);
+  // Scoped to offer-sourced topics only (plain offers and combo offers both
+  // set source: 'offer' via offerToContentTopic) — every other source (goal/
+  // authority/institutional, special-date, carousel, segment-template,
+  // ad-creative) never opted into the background lock and has no UI to turn
+  // it off, so it must keep today's pre-feature free background regardless
+  // of what topic.backgroundStyle happens to contain.
+  const backgroundStyle = topic.source === 'offer' ? normalizeBackgroundStyle(topic.backgroundStyle) : 'elaborate';
   return {
     schemaVersion: 1,
     project: {
@@ -7273,7 +7279,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
     section('LIBERDADE CRIATIVA', [
-      creativeSpec.background.style === 'simple_brand'
+      creativeSpec.background?.style === 'simple_brand'
         ? 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.'
         : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
@@ -7282,10 +7288,14 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
           ? 'Pode variar enquadramento, fundo, luz e tipografia apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.'
         : layoutReference && creativeSpec.layout.strength === 'strict'
         ? 'Pode variar fundo, luz, tipografia e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
-        : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
+        : creativeSpec.background?.style === 'simple_brand'
+          ? 'Pode variar enquadramento, luz, tipografia e elementos coerentes com o segmento.'
+          : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
       variation.length
         ? `Variação desejada: ${variation.join(' ')}`
-        : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe visual sem contrariar a estrutura obrigatória.',
+        : creativeSpec.background?.style === 'simple_brand'
+          ? 'Composição distinta da anterior: mudar ângulo ou detalhe visual sem contrariar a estrutura obrigatória.'
+          : 'Composição distinta da anterior: mudar ângulo, fundo ou detalhe visual sem contrariar a estrutura obrigatória.',
     ]),
     section('RESTRIÇÕES FINAIS', [
       isVerticalStory ? 'Não criar composição com aparência de flyer quadrado centralizado.' : '',
@@ -7296,7 +7306,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       !isVerticalStory ? 'Não adicionar faixas, ribbons, selos secundários ou fileira de ícones com texto além dos elementos definidos em HIERARQUIA — texto em fonte muito pequena sai ilegível/embaralhado na geração final.' : '',
       exactPrice ? 'Não posicionar o preço no centro cobrindo o produto principal.' : '',
       productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
-      creativeSpec.background.style === 'simple_brand'
+      creativeSpec.background?.style === 'simple_brand'
         ? 'Não criar cenário, ambientação ou objetos de contexto no fundo — fundo deve ser liso, só com cor da marca.'
         : '',
       ...productFocus.restrictionLines,

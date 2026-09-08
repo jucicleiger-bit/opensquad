@@ -9326,3 +9326,33 @@ test('elaborate background style leaves the free-form background prompt unchange
     assert.doesNotMatch(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
   });
 });
+
+test('non-offer generation (goal topic) never gets the simple_brand background lock, even though no backgroundStyle was ever set for it', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-livre-institucional',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await updateProjectBrandInput('fundo-livre-institucional', {
+      brandName: 'Cliente Frios', segment: 'loja', contentGoals: ['authority'],
+    }, dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('fundo-livre-institucional', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-livre-institucional',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/institucional.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.contentTopic.source, 'goal');
+    assert.equal(content.creativeSpec.background.style, 'elaborate');
+    assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso e simples/i);
+    assert.doesNotMatch(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
+  });
+});

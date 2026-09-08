@@ -3590,6 +3590,7 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — post de conteúdo, não deve ter botão/selo de CTA na arte'}`,
     `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
     `Força do modelo estrutural: ${spec.layout?.strength || 'livre'}`,
+    `Fundo obrigatório: ${spec.background?.style === 'simple_brand' ? 'liso/simples, apenas cores da marca — sem cenário' : 'livre'}`,
     spec.layout?.zones?.length ? `Zonas obrigatórias do layout:\n${spec.layout.zones.map((zone) => `- ${zone}`).join('\n')}` : '',
     note ? `Observação do usuário: ${note}` : '',
     '',
