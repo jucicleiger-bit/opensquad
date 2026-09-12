@@ -195,8 +195,7 @@ describe("Dashboard", () => {
       { body: { project: { projectId: "cliente-teste", name: "Cliente Teste" } } },
       {
         body: {
-          projects: [{ projectId: "cliente-teste", name: "Cliente Teste", brandXray: { status: "empty", blocks: {} } }],
-          globalRules: {},
+          project: { projectId: "cliente-teste", name: "Cliente Teste", brandXray: { status: "empty", blocks: {} } },
         },
       },
     ]);
@@ -222,8 +221,7 @@ describe("Dashboard", () => {
       { body: { project: { projectId: "loja-celulares", name: "Loja de Celulares", projectType: "catalog" } } },
       {
         body: {
-          projects: [{ projectId: "loja-celulares", name: "Loja de Celulares", projectType: "catalog" }],
-          globalRules: {},
+          project: { projectId: "loja-celulares", name: "Loja de Celulares", projectType: "catalog" },
         },
       },
     ]);
@@ -256,16 +254,12 @@ describe("Dashboard", () => {
       { body: { project: { projectId: "boss-pizzaria-zona-sul", name: "Boss Pizzaria Zona Sul" } } },
       {
         body: {
-          projects: [
-            { projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "approved" } },
-            {
-              projectId: "boss-pizzaria-zona-sul",
-              name: "Boss Pizzaria Zona Sul",
-              token: {},
-              brandXray: { status: "approved", blocks: {} },
-            },
-          ],
-          globalRules: {},
+          project: {
+            projectId: "boss-pizzaria-zona-sul",
+            name: "Boss Pizzaria Zona Sul",
+            token: {},
+            brandXray: { status: "approved", blocks: {} },
+          },
         },
       },
     ]);
