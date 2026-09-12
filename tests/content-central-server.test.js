@@ -2128,6 +2128,44 @@ test('content central API deletes a project and its stored token secret for good
   });
 });
 
+test('GET /api/projects/:id returns just that project, not the full state', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'boss-pizzaria', name: 'Boss Pizzaria' }, dir);
+    await createCentralProject({ projectId: 'outro-projeto', name: 'Outro Projeto' }, dir);
+
+    const { response, body } = await request(server, '/api/projects/boss-pizzaria');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.project.projectId, 'boss-pizzaria');
+    assert.equal(body.project.name, 'Boss Pizzaria');
+    // Proof of scope: the response has no trace of the other registered
+    // project and no top-level `projects`/`alerts`/`globalRules` keys.
+    assert.equal(body.projects, undefined);
+    assert.equal(body.alerts, undefined);
+    assert.equal(JSON.stringify(body).includes('outro-projeto'), false);
+  });
+});
+
+test('GET /api/projects/:id returns 404 for an id that does not exist on disk', async () => {
+  await withServer(async (_dir, server) => {
+    const { response, body } = await request(server, '/api/projects/nao-existe');
+
+    assert.equal(response.status, 404);
+    assert.deepEqual(body, { error: 'Project not found' });
+  });
+});
+
+test('GET /api/projects/:id works with only that one project registered — no dependency on other projects existing', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'projeto-solo', name: 'Projeto Solo' }, dir);
+
+    const { response, body } = await request(server, '/api/projects/projeto-solo');
+
+    assert.equal(response.status, 200);
+    assert.equal(body.project.projectId, 'projeto-solo');
+  });
+});
+
 test('content central server regenerates a shared-creative group through /content-group-regenerate, calling the AI once for the whole group', async () => {
   let imageCalls = 0;
   await withServer(

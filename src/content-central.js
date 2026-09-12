@@ -4641,6 +4641,17 @@ export async function listCentralProjects(targetDir = process.cwd()) {
   return projects.sort((a, b) => a.projectId.localeCompare(b.projectId));
 }
 
+// Single-project counterpart to listCentralProjects() — reads only the one
+// requested project.json instead of scanning every project on disk, and
+// never runs listSystemAlerts' full per-project content-history scan.
+// Used by ProjectWorkspaceLayout, which only ever needs one project's data.
+export async function getCentralProjectSummary(projectId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir);
+  const project = await readJson(join(paths.projectsDir, projectId, 'project.json'), null);
+  if (!project) return null;
+  return toProjectSummary(project, paths);
+}
+
 // Rolls up things the operator would otherwise only notice by opening each
 // project one by one: a Meta token expired/about to expire, or a scheduled
 // post that failed to publish and is still sitting there unresolved.
