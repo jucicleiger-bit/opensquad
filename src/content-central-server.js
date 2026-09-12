@@ -4878,9 +4878,25 @@ function wahaConfig() {
   return { url: url.replace(/\/$/, ''), apiKey };
 }
 
-// Creates the session on first connect, restarts it if it fell over
-// (FAILED/STOPPED), or just re-fetches its current QR otherwise — same
-// button, same route, all three cases. A session already WORKING is left
+// WAHA won't serve a QR until the session actually reaches SCAN_QR_CODE —
+// hitting /auth/qr while it's still STARTING (booting its browser engine)
+// 422s with "Session status is not as expected". Poll until it clears
+// STARTING instead of racing it.
+async function waitForWahaScanReady(url, sessionName, headers, { attempts = 10, intervalMs = 1000 } = {}) {
+  for (let i = 0; i < attempts; i += 1) {
+    await delay(intervalMs);
+    const res = await fetch(`${url}/api/sessions/${sessionName}`, { headers });
+    if (!res.ok) throw new Error(`WAHA respondeu ${res.status}: ${await res.text()}`);
+    const status = (await res.json()).status;
+    if (status === 'SCAN_QR_CODE' || status === 'WORKING') return status;
+  }
+  throw new Error('Sessão WAHA não ficou pronta para o QR code — tente novamente em alguns segundos.');
+}
+
+// Creates the session on first connect, restarts it if it's not ready to
+// scan (FAILED/STOPPED, or STARTING left over from a previous attempt that
+// never reached SCAN_QR_CODE), or just re-fetches its current QR otherwise
+// — same button, same route, all cases. A session already WORKING is left
 // alone (nothing to scan, and restarting it would drop a live connection).
 async function connectProjectWhatsAppSession(projectId, project, targetDir) {
   const { url, apiKey } = wahaConfig();
@@ -4903,6 +4919,14 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
     throw new Error(`WAHA respondeu ${statusRes.status}: ${await statusRes.text()}`);
   } else {
     status = (await statusRes.json()).status;
+    // Existing session not already ready-or-working — STARTING wedged from
+    // a prior attempt, or FAILED/STOPPED — needs a kick before it'll ever
+    // reach SCAN_QR_CODE on its own.
+    if (status !== 'WORKING' && status !== 'SCAN_QR_CODE') {
+      const restartRes = await fetch(`${url}/api/sessions/${sessionName}/restart`, { method: 'POST', headers });
+      if (!restartRes.ok) throw new Error(`WAHA respondeu ${restartRes.status}: ${await restartRes.text()}`);
+      status = 'STARTING';
+    }
   }
 
   let updatedProject = project;
@@ -4917,12 +4941,12 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
 
   if (status === 'WORKING') return { qrcode: null, project: updatedProject };
 
-  if (status === 'FAILED' || status === 'STOPPED') {
-    const restartRes = await fetch(`${url}/api/sessions/${sessionName}/restart`, { method: 'POST', headers });
-    if (!restartRes.ok) throw new Error(`WAHA respondeu ${restartRes.status}: ${await restartRes.text()}`);
+  let qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
+  if (!qrRes.ok && qrRes.status === 422) {
+    status = await waitForWahaScanReady(url, sessionName, headers);
+    if (status === 'WORKING') return { qrcode: null, project: updatedProject };
+    qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
   }
-
-  const qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
   if (!qrRes.ok) throw new Error(`WAHA respondeu ${qrRes.status}: ${await qrRes.text()}`);
   const qrBuffer = Buffer.from(await qrRes.arrayBuffer());
   const qrcode = `data:image/png;base64,${qrBuffer.toString('base64')}`;
