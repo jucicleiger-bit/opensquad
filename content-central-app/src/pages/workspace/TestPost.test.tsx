@@ -24,8 +24,7 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 }
 
 const PROJECT_STATE = {
-  projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria" }],
-  globalRules: {},
+  project: { projectId: "boss-pizzaria", name: "Boss Pizzaria" },
 };
 
 function renderTestPost() {

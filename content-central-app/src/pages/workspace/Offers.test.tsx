@@ -25,8 +25,7 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 
 function projectState(offers: unknown[] = []) {
   return {
-    projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", contentStrategy: { offers } }],
-    globalRules: {},
+    project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", contentStrategy: { offers } },
   };
 }
 
@@ -250,13 +249,12 @@ describe("Offers", () => {
   it("renders catalog (venda direta) projects as Produtos, hiding Tipo/CTA/Pilar and requiring a photo upload field", async () => {
     stubFetchSequence([{
       body: {
-        projects: [{
+        project: {
           projectId: "boss-pizzaria",
           name: "Boss Pizzaria",
           projectType: "catalog",
           contentStrategy: { offers: [] },
-        }],
-        globalRules: {},
+        },
       },
     }]);
     renderOffers();
@@ -275,16 +273,14 @@ describe("Offers", () => {
     stubFetchSequence([
       {
         body: {
-          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } }],
-          globalRules: {},
+          project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } },
         },
       },
       { body: { asset: { kind: "reference", metadata: { id: "foto-iphone" } } } },
       { body: { project: {}, offer: savedProduct } },
       {
         body: {
-          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [savedProduct] } }],
-          globalRules: {},
+          project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [savedProduct] } },
         },
       },
     ]);
@@ -312,8 +308,7 @@ describe("Offers", () => {
     stubFetchSequence([
       {
         body: {
-          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } }],
-          globalRules: {},
+          project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } },
         },
       },
       { body: { notes: "Direcionamento: produto visto na foto. Chamada sugerida: Proteção prática para embalar melhor. Benefícios permitidos: protege, organiza e facilita o preparo." } },
@@ -321,8 +316,7 @@ describe("Offers", () => {
       { body: { project: {}, offer: savedProduct } },
       {
         body: {
-          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [savedProduct] } }],
-          globalRules: {},
+          project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [savedProduct] } },
         },
       },
     ]);
@@ -375,12 +369,11 @@ describe("Offers", () => {
     const explicitOffer = { ...RODIZIO_OFFER, id: "explicit-offer", name: "Combo Explícito", pillarId: "convite" };
     stubFetchSequence([{
       body: {
-        projects: [{
+        project: {
           projectId: "boss-pizzaria",
           name: "Boss Pizzaria",
           contentStrategy: { offers: [autoOffer, explicitOffer], pillars: [convidaPillar] },
-        }],
-        globalRules: {},
+        },
       },
     }]);
     renderOffers();
@@ -396,21 +389,19 @@ describe("Offers", () => {
     stubFetchSequence([
       {
         body: {
-          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } }],
-          globalRules: {},
+          project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers: [] } },
         },
       },
       { body: { project: { contentSettings: { catalogGeneralInfo: "Entrada facilitada · Parcelamos em até 48x" } } } },
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             projectType: "catalog",
             contentSettings: { catalogGeneralInfo: "Entrada facilitada · Parcelamos em até 48x" },
             contentStrategy: { offers: [] },
-          }],
-          globalRules: {},
+          },
         },
       },
     ]);
@@ -434,12 +425,11 @@ describe("Offers", () => {
     const ungrouped = { ...RODIZIO_OFFER, id: "o3", name: "Produto Solto", groupId: null };
     stubFetchSequence([{
       body: {
-        projects: [{
+        project: {
           projectId: "boss-pizzaria",
           name: "Boss Pizzaria",
           contentStrategy: { offers: [grouped1, grouped2, ungrouped], offerGroups: [geral, blackFriday] },
-        }],
-        globalRules: {},
+        },
       },
     }]);
     renderOffers();
@@ -477,23 +467,21 @@ describe("Offers", () => {
       { body: { project: {}, group: blackFridayGroup } },
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: { offers: [RODIZIO_OFFER], offerGroups: [blackFridayGroup] },
-          }],
-          globalRules: {},
+          },
         },
       },
       { body: { project: {}, offer: offerWithGroup } },
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: { offers: [offerWithGroup], offerGroups: [blackFridayGroup] },
-          }],
-          globalRules: {},
+          },
         },
       },
     ]);
@@ -530,23 +518,21 @@ describe("Offers", () => {
     stubFetchSequence([
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: { offers: [], offerGroups: [pizzasGroup] },
-          }],
-          globalRules: {},
+          },
         },
       },
       { body: { project: {}, group: { ...pizzasGroup, comboChance: 30 } } },
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: { offers: [], offerGroups: [{ ...pizzasGroup, comboChance: 30 }] },
-          }],
-          globalRules: {},
+          },
         },
       },
     ]);
@@ -597,12 +583,11 @@ describe("Offers", () => {
     const geral = { id: "geral", name: "Geral" };
     stubFetchSequence([{
       body: {
-        projects: [{
+        project: {
           projectId: "boss-pizzaria",
           name: "Boss Pizzaria",
           contentStrategy: { offers: [], offerGroups: [geral] },
-        }],
-        globalRules: {},
+        },
       },
     }]);
     renderOffers();
@@ -618,24 +603,22 @@ describe("Offers", () => {
     stubFetchSequence([
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: { offers: [], offerGroups: [geral] },
-          }],
-          globalRules: {},
+          },
         },
       },
       { body: { offers: [{ name: "iPhone 13 128GB", price: "R$ 2.499,00", items: "novo, lacrado" }] } },
       { body: { project: {}, offer: importedOffer } },
       {
         body: {
-          projects: [{
+          project: {
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: { offers: [importedOffer], offerGroups: [geral] },
-          }],
-          globalRules: {},
+          },
         },
       },
     ]);

@@ -86,6 +86,7 @@ import {
   listAdCreatives,
   listCommemorativeDates,
   getCentralPaths,
+  getCentralProjectSummary,
   getGlobalRules,
   listCentralProjects,
   listProjectContent,
@@ -732,6 +733,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
   }
 
   const projectId = parts[2];
+  if (method === 'GET' && parts.length === 3) {
+    const project = await getCentralProjectSummary(projectId, targetDir);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    return sendJson(res, 200, { project });
+  }
+
   if (method === 'GET' && parts.length === 4 && parts[3] === 'content') {
     const content = await listProjectContent(projectId, targetDir);
     return sendJson(res, 200, { content: await syncGavetePublishedContent(projectId, targetDir, content) });
