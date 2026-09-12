@@ -440,6 +440,10 @@ export function getState(): Promise<StateResponse> {
   return api<StateResponse>("/api/state");
 }
 
+export function getProject(projectId: string): Promise<{ project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}`);
+}
+
 export function getProjectContent(projectId: string): Promise<{ content: ContentItem[] }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/content`);
 }
