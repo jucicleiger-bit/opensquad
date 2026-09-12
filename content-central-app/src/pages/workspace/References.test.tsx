@@ -25,16 +25,13 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 
 function projectState(overrides: Record<string, unknown> = {}) {
   return {
-    projects: [
-      {
-        projectId: "boss-pizzaria",
-        name: "Boss Pizzaria",
-        brand: { references: [], visualStyle: "", imageRules: [], visualSystem: {} },
-        brandIdentity: {},
-        ...overrides,
-      },
-    ],
-    globalRules: {},
+    project: {
+      projectId: "boss-pizzaria",
+      name: "Boss Pizzaria",
+      brand: { references: [], visualStyle: "", imageRules: [], visualSystem: {} },
+      brandIdentity: {},
+      ...overrides,
+    },
   };
 }
 

@@ -56,8 +56,7 @@ function renderPendingApproval() {
 }
 
 const PROJECT_STATE = {
-  projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria" }],
-  globalRules: {},
+  project: { projectId: "boss-pizzaria", name: "Boss Pizzaria" },
 };
 
 describe("PendingApproval", () => {
@@ -240,7 +239,7 @@ describe("PendingApproval", () => {
     let contentLoads = 0;
     const response = (body: unknown) => Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/state") return response(PROJECT_STATE);
+      if (url === "/api/projects/boss-pizzaria") return response(PROJECT_STATE);
       if (url === "/api/projects/boss-pizzaria/content" && !init?.method) {
         contentLoads += 1;
         return response({ content: contentLoads === 1 ? [item] : [] });
@@ -280,7 +279,7 @@ describe("PendingApproval", () => {
     let contentLoads = 0;
     const response = (body: unknown) => Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/state") return response(PROJECT_STATE);
+      if (url === "/api/projects/boss-pizzaria") return response(PROJECT_STATE);
       if (url === "/api/projects/boss-pizzaria/content" && !init?.method) {
         contentLoads += 1;
         return response({ content: contentLoads === 1 ? [story, status] : [] });
@@ -652,7 +651,7 @@ describe("PendingApproval", () => {
     let releaseStoryApproval = () => {};
     const response = (body: unknown) => Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
     const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/state") return response(PROJECT_STATE);
+      if (url === "/api/projects/boss-pizzaria") return response(PROJECT_STATE);
       if (url === "/api/projects/boss-pizzaria/content" && !init?.method) {
         contentLoads += 1;
         return response({ content: contentLoads === 1 ? [story, whatsappStatus] : [] });
