@@ -44,3 +44,14 @@ content-central-app/.hallmark/
 /RECOVERY.md
 /.git-private/
 .impeccable/
+
+# Agent/tool scratch + build staging -- local only, never publish
+.agent-browser-screens/
+.belt/
+.hallmark/
+.openai/*.tar.gz
+.openai/site-package-stage*/
+visual-system-*.png
+content-central-app/test-output.txt
+# PNG sources already shipped as the tracked .webp versions
+content-central-app/src/assets/king-portfolio-*.png
