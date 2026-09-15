@@ -39,15 +39,19 @@ function parseArgs(argv) {
   return args;
 }
 
-// Meta's own crawler intermittently fails to fetch a perfectly valid,
-// publicly reachable image_url (error code 9004 / subcode 2207052, "Falha
-// ao baixar mídia") — confirmed by hand: the exact same URL that failed
-// once succeeded a few seconds later with no code or hosting change on our
-// side. Meta reports it as "is_transient: false", but it isn't in practice,
-// so /media container creation gets a few automatic retries instead of
-// failing the whole publish on a hiccup that would've passed on its own.
-const RETRYABLE_ERROR_CODE = 9004;
-const RETRYABLE_ERROR_SUBCODES = new Set([2207052]);
+// Meta's own crawler intermittently fails to fetch or process a perfectly
+// valid, publicly reachable image_url — confirmed by hand: the exact same
+// URL that failed once succeeded a few seconds later with no code or hosting
+// change on our side. Meta reports these as "is_transient: false", but they
+// aren't in practice, so /media container creation gets a few automatic
+// retries instead of failing the whole publish on a hiccup that would've
+// passed on its own.
+// - 9004/2207052: "Falha ao baixar mídia" (generic media fetch failure)
+// - -2/2207003: crawler timed out fetching image_url
+const RETRYABLE_ERRORS = [
+  { code: 9004, subcode: 2207052 },
+  { code: -2, subcode: 2207003 },
+];
 
 async function graph(path, params = {}, method = 'GET', { retries = 0, retryDelayMs = 4000 } = {}) {
   const url = new URL(`${GRAPH_BASE}${path}`);
@@ -64,7 +68,9 @@ async function graph(path, params = {}, method = 'GET', { retries = 0, retryDela
     if (res.ok) return json;
 
     const error = json?.error;
-    const isRetryableMediaFetchFailure = error?.code === RETRYABLE_ERROR_CODE && RETRYABLE_ERROR_SUBCODES.has(error?.error_subcode);
+    const isRetryableMediaFetchFailure = RETRYABLE_ERRORS.some(
+      (r) => r.code === error?.code && r.subcode === error?.error_subcode,
+    );
     if (isRetryableMediaFetchFailure && attempt < retries) {
       await sleep(retryDelayMs);
       continue;
@@ -80,6 +86,32 @@ async function graph(path, params = {}, method = 'GET', { retries = 0, retryDela
       throw new Error(`Meta API ${method} ${path} failed [${res.status}]: ${error.message}${details ? ` (${details})` : ''}`);
     }
     throw new Error(`Meta API ${method} ${path} failed [${res.status}]: ${JSON.stringify(json).slice(0, 500)}`);
+  }
+}
+
+// media_publish has been observed returning 200 with a real-looking id for
+// content that never actually reaches the account (production incident:
+// king-assessoria-mkt, 2026-09-15 — id came back fine, a GET on it minutes
+// later 404'd with "does not exist", root cause unconfirmed on Meta's side).
+// Confirming the id actually resolves before declaring success is the only
+// way to catch that instead of silently marking a ghost post as published.
+// The retry budget absorbs ordinary read-after-write lag without masking a
+// real phantom.
+// Overridable only so tests can skip the real delay (see GRAPH_BASE above).
+const VERIFY_RETRIES = Number(process.env.META_VERIFY_RETRIES ?? 2);
+const VERIFY_RETRY_DELAY_MS = Number(process.env.META_VERIFY_RETRY_DELAY_MS ?? 3000);
+
+async function verifyPublishedExists(id, token, { retries = VERIFY_RETRIES, retryDelayMs = VERIFY_RETRY_DELAY_MS } = {}) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await graph(`/${id}`, { fields: 'id', access_token: token });
+      return;
+    } catch (err) {
+      if (attempt >= retries) {
+        throw new Error(`media_publish returned id ${id} but it does not exist on Meta's API (phantom publish): ${err.message}`);
+      }
+      await sleep(retryDelayMs);
+    }
   }
 }
 
@@ -211,6 +243,7 @@ async function publishInstagramFeed(target) {
     creation_id: container.id,
     access_token: token,
   }, 'POST');
+  await verifyPublishedExists(published.id, token);
 
   let permalink = null;
   try {
@@ -254,6 +287,7 @@ async function publishInstagramCarousel(target) {
     creation_id: container.id,
     access_token: token,
   }, 'POST');
+  await verifyPublishedExists(published.id, token);
 
   let permalink = null;
   try {
@@ -280,6 +314,7 @@ async function publishInstagramStory(target) {
     creation_id: container.id,
     access_token: token,
   }, 'POST');
+  await verifyPublishedExists(published.id, token);
 
   return { channel: target.channel, ok: true, media_id: published.id, container_id: container.id, permalink: null };
 }
@@ -302,6 +337,7 @@ async function publishInstagramReels(target) {
     creation_id: container.id,
     access_token: token,
   }, 'POST');
+  await verifyPublishedExists(published.id, token);
 
   let permalink = null;
   try {
@@ -323,6 +359,7 @@ async function publishFacebookFeed(target) {
     published: 'true',
     access_token: token,
   }, 'POST');
+  if (published.id) await verifyPublishedExists(published.id, token);
 
   return { channel: target.channel, ok: true, media_id: published.id || null, post_id: published.post_id || null };
 }
@@ -340,6 +377,7 @@ async function publishFacebookStory(target) {
     photo_id: photo.id,
     access_token: token,
   }, 'POST');
+  if (story.post_id) await verifyPublishedExists(story.post_id, token);
 
   return { channel: target.channel, ok: true, media_id: photo.id || null, post_id: story.post_id || null };
 }

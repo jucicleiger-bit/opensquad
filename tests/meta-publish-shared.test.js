@@ -29,6 +29,8 @@ test('publishToMeta instagram_feed: creates container, waits for FINISHED, publi
       res.end(JSON.stringify({ status_code: 'FINISHED' }));
     } else if (req.url.startsWith('/ig123/media_publish')) {
       res.end(JSON.stringify({ id: 'media-1' }));
+    } else if (req.url.startsWith('/media-1?fields=id')) {
+      res.end(JSON.stringify({ id: 'media-1' }));
     } else if (req.url.startsWith('/media-1?fields=permalink')) {
       res.end(JSON.stringify({ permalink: 'https://instagram.com/p/abc' }));
     } else {
@@ -67,6 +69,8 @@ test('publishToMeta retries container creation on Meta\'s transient media-fetch 
     } else if (req.url.startsWith('/container-2?fields=status_code')) {
       res.end(JSON.stringify({ status_code: 'FINISHED' }));
     } else if (req.url.startsWith('/ig123/media_publish')) {
+      res.end(JSON.stringify({ id: 'media-2' }));
+    } else if (req.url.startsWith('/media-2?fields=id')) {
       res.end(JSON.stringify({ id: 'media-2' }));
     } else if (req.url.startsWith('/media-2?fields=permalink')) {
       res.end(JSON.stringify({ permalink: null }));
@@ -111,6 +115,8 @@ test('publishToMeta facebook_story: photo (unpublished) then photo_stories', asy
       res.end(JSON.stringify({ id: 'photo-1' }));
     } else if (req.url.startsWith('/page456/photo_stories')) {
       res.end(JSON.stringify({ post_id: 'story-post-1' }));
+    } else if (req.url.startsWith('/story-post-1?fields=id')) {
+      res.end(JSON.stringify({ id: 'story-post-1' }));
     } else {
       res.statusCode = 404;
       res.end('{}');
@@ -128,7 +134,43 @@ test('publishToMeta facebook_story: photo (unpublished) then photo_stories', asy
   assert.equal(result.ok, true);
   assert.equal(result.mediaId, 'photo-1');
   assert.equal(result.postId, 'story-post-1');
-  assert.deepEqual(calls, ['/page456/photos', '/page456/photo_stories']);
+  assert.deepEqual(calls, ['/page456/photos', '/page456/photo_stories', '/story-post-1']);
+  server.close();
+});
+
+// Reproduces the 2026-09-15 king-assessoria-mkt incident: media_publish
+// returns a 200 with a real-looking id, but a GET on that id 404s — Meta
+// silently dropped the post. Without verifyPublishedExists this was
+// returned as ok:true and content_items got marked 'posted' forever.
+test('publishToMeta throws when media_publish returns an id that does not resolve (phantom publish)', async () => {
+  const server = await startStubGraphServer((req, res) => {
+    if (req.url.startsWith('/ig123/media?')) {
+      res.end(JSON.stringify({ id: 'container-ghost' }));
+    } else if (req.url.startsWith('/container-ghost?fields=status_code')) {
+      res.end(JSON.stringify({ status_code: 'FINISHED' }));
+    } else if (req.url.startsWith('/ig123/media_publish')) {
+      res.end(JSON.stringify({ id: 'ghost-media' }));
+    } else if (req.url.startsWith('/ghost-media?fields=id')) {
+      res.statusCode = 400;
+      res.end(JSON.stringify({ error: { message: 'Unsupported get request.', code: 100, error_subcode: 33 } }));
+    } else {
+      res.statusCode = 404;
+      res.end('{}');
+    }
+  });
+
+  await assert.rejects(
+    () => publishToMeta({
+      channel: 'instagram_story',
+      token: 'fake-token',
+      igId: 'ig123',
+      imageUrl: 'https://cdn.example.com/img.png',
+      graphBase: graphBaseFor(server),
+      verifyRetries: 0,
+      verifyRetryDelayMs: 0,
+    }),
+    /phantom publish/,
+  );
   server.close();
 });
 
