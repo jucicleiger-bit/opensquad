@@ -5,6 +5,7 @@ import {
   OFFER_TYPE_LABELS,
   OFFER_TYPE_TO_PILLAR_ROLE,
   PILLAR_ROLE_LABELS,
+  PRICE_UNIT_LABELS,
   WEEKDAY_LABELS,
   WEEKDAY_ORDER,
   analyzeSite,
@@ -37,12 +38,15 @@ const thumbStyle = {
   fontSize: 11,
 } as const;
 const thumbImgStyle = { width: "100%", height: "100%", objectFit: "cover" } as const;
-type ProductTreatment = "faithful_enhance" | "creative_redraw" | "exact_asset";
+type ProductTreatment = "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset";
+type BackgroundStyle = "elaborate" | "simple_brand";
 
 const EMPTY_FORM = {
   name: "",
   type: "offer",
   price: "",
+  originalPrice: "",
+  priceUnit: "",
   items: "",
   cta: "",
   autoGenerateCta: false,
@@ -55,6 +59,7 @@ const EMPTY_FORM = {
   photoReferenceIds: [] as string[],
   productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
+  backgroundStyle: "simple_brand" as BackgroundStyle,
 };
 
 function suggestProductDirection(name: string, items: string, isCatalog: boolean) {
@@ -368,6 +373,8 @@ export function Offers() {
       name: offer.name,
       type: offer.type,
       price: offer.price || "",
+      originalPrice: offer.originalPrice || "",
+      priceUnit: offer.priceUnit || "",
       items: offer.items || "",
       cta: offer.cta || "",
       autoGenerateCta: offer.autoGenerateCta || false,
@@ -378,10 +385,13 @@ export function Offers() {
       active: offer.active !== false,
       uniqueProposal: offer.uniqueProposal || false,
       photoReferenceIds: offer.photoReferenceIds || [],
-      productTreatment: offer.productTreatment === "exact_asset" || offer.productTreatment === "creative_redraw"
+      productTreatment: offer.productTreatment === "exact_asset"
+        || offer.productTreatment === "creative_redraw"
+        || offer.productTreatment === "faithful_enhance_photo_integration"
         ? offer.productTreatment
         : "faithful_enhance",
       layoutStrength: offer.layoutStrength === "balanced" || offer.layoutStrength === "free" ? offer.layoutStrength : "strict",
+      backgroundStyle: offer.backgroundStyle === "elaborate" ? offer.backgroundStyle : "simple_brand",
     });
     setError(null);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -633,8 +643,31 @@ export function Offers() {
                 </div>
               ) : null}
               <div>
-                <label htmlFor="offer-price">Preço</label>
+                <label htmlFor="offer-original-price">De (opcional)</label>
+                <input
+                  id="offer-original-price"
+                  placeholder="Preço original, se for oferta"
+                  value={form.originalPrice}
+                  onChange={(e) => setForm({ ...form, originalPrice: e.target.value })}
+                />
+              </div>
+              <div>
+                <label htmlFor="offer-price">Preço {form.originalPrice ? "(por)" : ""}</label>
                 <input id="offer-price" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="offer-price-unit">Unidade</label>
+                <select
+                  id="offer-price-unit"
+                  value={form.priceUnit}
+                  onChange={(e) => setForm({ ...form, priceUnit: e.target.value })}
+                >
+                  {Object.entries(PRICE_UNIT_LABELS).map(([value, label]) => (
+                    <option key={value} value={value}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 
@@ -651,6 +684,7 @@ export function Offers() {
                     onChange={(e) => setForm({ ...form, productTreatment: e.target.value as ProductTreatment })}
                   >
                     <option value="faithful_enhance">Produto fiel melhorado</option>
+                    <option value="faithful_enhance_photo_integration">Produto fiel + recomendação</option>
                     <option value="creative_redraw">Redesenho criativo permitido</option>
                     <option value="exact_asset">Manter foto/embalagem exata</option>
                   </select>
@@ -665,6 +699,17 @@ export function Offers() {
                     <option value="strict">Estrita</option>
                     <option value="balanced">Equilibrada</option>
                     <option value="free">Livre/inspiração</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="offer-background-style">Fundo do criativo</label>
+                  <select
+                    id="offer-background-style"
+                    value={form.backgroundStyle}
+                    onChange={(e) => setForm({ ...form, backgroundStyle: e.target.value as BackgroundStyle })}
+                  >
+                    <option value="simple_brand">Simples (cores da marca)</option>
+                    <option value="elaborate">Elaborado (cenário/ambientação)</option>
                   </select>
                 </div>
               </div>
@@ -911,7 +956,11 @@ export function Offers() {
                           <div style={{ fontWeight: 800 }}>{offer.name}</div>
                           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
                             {!isCatalog ? <span className="pill">{OFFER_TYPE_LABELS[offer.type] || offer.type}</span> : null}
-                            <span className="pill">{offer.price || "sem preço"}</span>
+                            <span className="pill">
+                              {offer.price
+                                ? `${offer.originalPrice ? `de ${offer.originalPrice} por ` : ""}${offer.price}${offer.priceUnit ? ` ${PRICE_UNIT_LABELS[offer.priceUnit] || offer.priceUnit}` : ""}`
+                                : "sem preço"}
+                            </span>
                             <span className="pill">{offer.active === false ? "inativo" : "ativo"}</span>
                             {!isCatalog && offer.pillarId ? (
                               <span className="pill">

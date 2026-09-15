@@ -88,6 +88,9 @@ export interface ProjectOffer {
   name: string;
   type: string;
   price?: string;
+  // "De" price for a de/por promo (e.g. produto normalmente R$20, na oferta R$10) —
+  // shown/prompted alongside `price` (the "por"/sale price) only when set.
+  originalPrice?: string;
   items?: string;
   cta?: string;
   autoGenerateCta?: boolean;
@@ -98,9 +101,20 @@ export interface ProjectOffer {
   groupId?: string | null;
   daysOfWeek?: string[];
   photoReferenceIds?: string[];
-  productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
+  productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
+  backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
+  priceUnit?: string;
 }
+
+// ponytail: fixed set per what was asked — add more if a project needs it
+export const PRICE_UNIT_LABELS: Record<string, string> = {
+  "": "Sem unidade",
+  kg: "Quilo",
+  g: "Grama",
+  pacote: "Pacote",
+  caixa: "Caixa",
+};
 
 export const WEEKDAY_LABELS: Record<string, string> = {
   mon: "Seg",
@@ -242,6 +256,19 @@ export interface ProjectBrand {
   references?: ProjectReference[];
   visualStyle?: string;
   imageRules?: string[];
+  visualSystem?: BrandVisualSystem;
+}
+
+export interface BrandVisualSystem {
+  typography?: string;
+  titleWeight?: string;
+  bodyWeight?: string;
+  priceWeight?: string;
+  colorUsage?: string;
+  cornerStyle?: string;
+  shadowStyle?: string;
+  titleCase?: string;
+  updatedAt?: string | null;
 }
 
 export interface BrandIdentity {
@@ -1073,6 +1100,7 @@ export interface SaveOfferInput {
   name: string;
   type: string;
   price?: string;
+  originalPrice?: string;
   items?: string;
   cta?: string;
   autoGenerateCta?: boolean;
@@ -1083,8 +1111,10 @@ export interface SaveOfferInput {
   active?: boolean;
   uniqueProposal?: boolean;
   photoReferenceIds?: string[];
-  productTreatment?: "faithful_enhance" | "creative_redraw" | "exact_asset" | "";
+  productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
+  backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
+  priceUnit?: string;
 }
 
 export function saveOffer(projectId: string, input: SaveOfferInput): Promise<{ project: ProjectSummary; offer: ProjectOffer }> {
@@ -1231,10 +1261,22 @@ export function updateReference(
   });
 }
 
-export function saveImageRules(projectId: string, visualStyle: string, imageRules: string): Promise<{ project: ProjectSummary }> {
+export function saveImageRules(
+  projectId: string,
+  visualStyle: string,
+  imageRules: string,
+  visualSystem?: BrandVisualSystem,
+): Promise<{ project: ProjectSummary }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/image-rules`, {
     method: "POST",
-    body: JSON.stringify({ visualStyle, imageRules }),
+    body: JSON.stringify({ visualStyle, imageRules, visualSystem }),
+  });
+}
+
+export function suggestBrandVisualSystem(projectId: string): Promise<{ source: string; visualSystem: BrandVisualSystem }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/visual-system-suggest`, {
+    method: "POST",
+    body: JSON.stringify({}),
   });
 }
 
