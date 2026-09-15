@@ -3646,6 +3646,10 @@ async function normalizeUploadedImageAsset(assetInput) {
 export function buildAiImageReviewPrompt({ content, project, note, attachedAsFile = false } = {}) {
   const expected = content?.contentTopic || {};
   const spec = content?.creativeSpec || {};
+  const topBrandColor = [
+    ...(project?.brandIdentity?.editedColors || []),
+    ...(project?.brandIdentity?.extractedColors || []),
+  ].filter(Boolean)[0] || '';
   const comparisonReferences = Array.isArray(content?.image?.references)
     ? selectImageReferencesForCodex(content.image.references)
       .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
@@ -3671,7 +3675,9 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — não deve ter botão/selo de CTA na arte'}`,
     `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
     `Força do modelo estrutural: ${spec.layout?.strength || 'livre'}`,
-    `Fundo obrigatório: ${spec.background?.style === 'simple_brand' ? 'liso/simples, apenas cores da marca — sem cenário' : 'livre'}`,
+    `Fundo obrigatório: ${spec.background?.style === 'simple_brand'
+      ? `liso, na cor principal da marca${topBrandColor ? ` (${topBrandColor})` : ''} — sem cenário`
+      : 'livre'}`,
     spec.layout?.zones?.length ? `Zonas obrigatórias do layout:\n${spec.layout.zones.map((zone) => `- ${zone}`).join('\n')}` : '',
     note ? `Observação do usuário: ${note}` : '',
     '',
