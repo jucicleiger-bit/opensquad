@@ -7459,7 +7459,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       ...brandVisualSystemLines.map((line) => `Sistema visual fixo da marca: ${line}`),
       ...productFocus.visualLines,
       productReferences.length
-        ? 'O criativo deve ter apoio visual além do produto: blocos/formas com cores da marca, sombra, textura leve, benefício curto e no máximo um detalhe contextual pequeno.'
+        ? (creativeSpec.background?.style === 'simple_brand'
+          ? 'O criativo deve ter apoio visual além do produto: blocos/formas com cores da marca, sombra, textura leve, benefício curto.'
+          : 'O criativo deve ter apoio visual além do produto: blocos/formas com cores da marca, sombra, textura leve, benefício curto e no máximo um detalhe contextual pequeno.')
         : '',
       productReferences.length
         ? 'Esse apoio visual nunca pode disputar atenção com o produto, ocupar mais área que ele ou virar cenário grande do segmento.'

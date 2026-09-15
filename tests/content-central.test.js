@@ -9552,6 +9552,59 @@ test('simple_brand background style names the actual extracted logo color instea
   });
 });
 
+test('simple_brand background style drops the "small contextual detail" allowance that contradicted its own no-context-object lock', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-simples-sem-ambientacao',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('fundo-simples-sem-ambientacao', {
+      kind: 'reference',
+      filename: 'mussarela-fatiada.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da mussarela fatiada.',
+    }, dir);
+
+    await saveProjectOffer('fundo-simples-sem-ambientacao', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      productTreatment: 'faithful_enhance',
+      backgroundStyle: 'simple_brand',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+    await updateProjectBrandInput('fundo-simples-sem-ambientacao', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('fundo-simples-sem-ambientacao', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-simples-sem-ambientacao',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.creativeSpec.background.style, 'simple_brand');
+    assert.doesNotMatch(prompt, /no máximo um detalhe contextual pequeno/i);
+    assert.match(prompt, /apoio visual além do produto: blocos\/formas com cores da marca, sombra, textura leve, benefício curto\./i);
+  });
+});
+
 test('elaborate background style leaves the free-form background prompt unchanged', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
