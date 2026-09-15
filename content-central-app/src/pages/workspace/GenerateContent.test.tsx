@@ -25,13 +25,14 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 
 function projectState(offers: unknown[] = []) {
   return {
-    project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", contentStrategy: { offers } },
+    projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", contentStrategy: { offers } }],
+    globalRules: {},
   };
 }
 
 function projectStateWithTopicIdeas(title = "Site bonito não vende sozinho") {
   return {
-    project: {
+    projects: [{
       projectId: "boss-pizzaria",
       name: "Boss Pizzaria",
       contentStrategy: {
@@ -42,13 +43,15 @@ function projectStateWithTopicIdeas(title = "Site bonito não vende sozinho") {
           goals: { authority: { label: "Autoridade", items: [{ id: "a1", title }] } },
         },
       },
-    },
+    }],
+    globalRules: {},
   };
 }
 
 function catalogProjectState(offers: unknown[] = []) {
   return {
-    project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers } },
+    projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers } }],
+    globalRules: {},
   };
 }
 
@@ -89,7 +92,7 @@ describe("GenerateContent", () => {
     stubFetchSequence([
       { body: projectStateWithTopicIdeas() },
       EMPTY_COMMEMORATIVE_DATES,
-      { body: { topicIdeas: projectStateWithTopicIdeas("Novo assunto de autoridade").project.contentStrategy.topicIdeas } },
+      { body: { topicIdeas: projectStateWithTopicIdeas("Novo assunto de autoridade").projects[0].contentStrategy.topicIdeas } },
       { body: projectStateWithTopicIdeas("Novo assunto de autoridade") },
     ]);
     renderGenerate();
@@ -196,14 +199,15 @@ describe("GenerateContent", () => {
     stubFetchSequence([
       {
         body: {
-          project: {
+          projects: [{
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: {
               offers: [{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }],
               offerGroups: [{ id: "black-friday", name: "Black Friday" }],
             },
-          },
+          }],
+          globalRules: {},
         },
       },
       EMPTY_COMMEMORATIVE_DATES,
@@ -225,14 +229,15 @@ describe("GenerateContent", () => {
     stubFetchSequence([
       {
         body: {
-          project: {
+          projects: [{
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: {
               offers: [{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }],
               offerGroups: [{ id: "black-friday", name: "Black Friday" }],
             },
-          },
+          }],
+          globalRules: {},
         },
       },
       EMPTY_COMMEMORATIVE_DATES,
@@ -258,14 +263,15 @@ describe("GenerateContent", () => {
     stubFetchSequence([
       {
         body: {
-          project: {
+          projects: [{
             projectId: "boss-pizzaria",
             name: "Boss Pizzaria",
             contentStrategy: {
               offers: [{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }],
               offerGroups: [{ id: "black-friday", name: "Black Friday" }],
             },
-          },
+          }],
+          globalRules: {},
         },
       },
       EMPTY_COMMEMORATIVE_DATES,

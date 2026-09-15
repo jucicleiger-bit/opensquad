@@ -25,7 +25,8 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 
 function projectState(overrides: Record<string, unknown> = {}) {
   return {
-    project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", instagram: { handle: "@boss" }, token: null, ...overrides },
+    projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", instagram: { handle: "@boss" }, token: null, ...overrides }],
+    globalRules: {},
   };
 }
 

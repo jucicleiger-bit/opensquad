@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useParams } from "react-router-dom";
-import { getProject, type ProjectSummary } from "@/api/client";
+import { getState, type ProjectSummary } from "@/api/client";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
 import styles from "./ProjectWorkspaceLayout.module.css";
@@ -41,15 +41,11 @@ export function ProjectWorkspaceLayout() {
 
   const refreshProject = useCallback(async () => {
     try {
-      const { project } = await getProject(projectId!);
-      setProject(project);
+      const state = await getState();
+      setProject(state.projects.find((p) => p.projectId === projectId) ?? null);
       setError(null);
     } catch (err) {
-      if ((err as Error).message === "Project not found") {
-        setProject(null);
-      } else {
-        setError((err as Error).message);
-      }
+      setError((err as Error).message);
     }
   }, [projectId]);
 

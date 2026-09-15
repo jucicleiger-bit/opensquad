@@ -52,11 +52,12 @@ function renderProjectCalendar() {
 }
 
 const PROJECT_STATE = {
-  project: { projectId: "boss-pizzaria", name: "Boss Pizzaria", token: { daysRemaining: 61 }, brandXray: { status: "pendente" } },
+  projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", token: { daysRemaining: 61 }, brandXray: { status: "pendente" } }],
+  globalRules: {},
 };
 
 const PROJECT_STATE_WITH_TOPICS = {
-  project: {
+  projects: [{
     projectId: "boss-pizzaria",
     name: "Boss Pizzaria",
     contentStrategy: {
@@ -66,7 +67,8 @@ const PROJECT_STATE_WITH_TOPICS = {
         goals: { education: { label: "Educação", items: [{ id: "e1", title: "Como escolher melhor antes de comprar" }] } },
       },
     },
-  },
+  }],
+  globalRules: {},
 };
 
 describe("Calendar", () => {

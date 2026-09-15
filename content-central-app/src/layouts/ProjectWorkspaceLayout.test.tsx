@@ -7,6 +7,16 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+function stubFetch(body: unknown, ok = true) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok,
+      text: async () => JSON.stringify(body),
+    }),
+  );
+}
+
 function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
   let call = 0;
   vi.stubGlobal(
@@ -28,12 +38,15 @@ describe("ProjectWorkspaceLayout", () => {
     stubFetchSequence([
       {
         body: {
-          project: {
-            projectId: "boss-pizzaria",
-            name: "Boss Pizzaria",
-            token: { configured: true, expiresAt },
-            brandXray: { status: "generated" },
-          },
+          projects: [
+            {
+              projectId: "boss-pizzaria",
+              name: "Boss Pizzaria",
+              token: { configured: true, expiresAt },
+              brandXray: { status: "generated" },
+            },
+          ],
+          globalRules: {},
         },
       },
       { body: { content: [] } },
@@ -56,12 +69,15 @@ describe("ProjectWorkspaceLayout", () => {
     stubFetchSequence([
       {
         body: {
-          project: {
-            projectId: "loja-celulares",
-            name: "Loja de Celulares",
-            projectType: "catalog",
-            token: { configured: true, expiresAt: new Date(Date.now() + 61 * 86400000).toISOString() },
-          },
+          projects: [
+            {
+              projectId: "loja-celulares",
+              name: "Loja de Celulares",
+              projectType: "catalog",
+              token: { configured: true, expiresAt: new Date(Date.now() + 61 * 86400000).toISOString() },
+            },
+          ],
+          globalRules: {},
         },
       },
       { body: { content: [] } },
@@ -81,7 +97,7 @@ describe("ProjectWorkspaceLayout", () => {
   });
 
   it("shows a not-found state for an unknown project id", async () => {
-    stubFetchSequence([{ body: { error: "Project not found" }, ok: false }]);
+    stubFetch({ projects: [], globalRules: {} });
 
     render(
       <MemoryRouter initialEntries={["/projects/does-not-exist"]}>

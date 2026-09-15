@@ -25,13 +25,16 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
 
 function projectState(overrides: Record<string, unknown> = {}) {
   return {
-    project: {
-      projectId: "boss-pizzaria",
-      name: "Boss Pizzaria",
-      brand: { references: [], visualStyle: "", imageRules: [], visualSystem: {} },
-      brandIdentity: {},
-      ...overrides,
-    },
+    projects: [
+      {
+        projectId: "boss-pizzaria",
+        name: "Boss Pizzaria",
+        brand: { references: [], visualStyle: "", imageRules: [] },
+        brandIdentity: {},
+        ...overrides,
+      },
+    ],
+    globalRules: {},
   };
 }
 
@@ -57,69 +60,6 @@ describe("References", () => {
     await userEvent.click(screen.getByRole("button", { name: "Salvar direção visual" }));
 
     expect(await screen.findByText("Direção visual salva.")).toBeInTheDocument();
-  });
-
-  it("suggests a structured visual system and saves it only after operator review", async () => {
-    stubFetchSequence([
-      { body: projectState() },
-      {
-        body: {
-          source: "structured_fallback",
-          visualSystem: {
-            typography: "commercial_condensed",
-            titleWeight: "extra_bold",
-            bodyWeight: "medium",
-            priceWeight: "black",
-            colorUsage: "vermelho para preço, branco para texto e fundo escuro",
-            cornerStyle: "sharp",
-            shadowStyle: "subtle",
-          },
-        },
-      },
-      { body: { project: {} } },
-      {
-        body: projectState({
-          brand: {
-            references: [],
-            visualStyle: "",
-            imageRules: [],
-            visualSystem: {
-              typography: "commercial_condensed",
-              titleWeight: "extra_bold",
-              bodyWeight: "medium",
-              priceWeight: "black",
-              colorUsage: "vermelho para preço, branco para texto e fundo escuro",
-              cornerStyle: "sharp",
-              shadowStyle: "subtle",
-            },
-          },
-        }),
-      },
-    ]);
-    renderReferences();
-
-    await userEvent.click(await screen.findByRole("button", { name: "Sugerir sistema visual" }));
-
-    expect(await screen.findByText("Sugestão aplicada. Revise e salve para usar nas próximas artes.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Tipografia")).toHaveValue("commercial_condensed");
-    expect(screen.getByLabelText("Cantos")).toHaveValue("sharp");
-    expect(screen.getByLabelText("Sombras")).toHaveValue("subtle");
-
-    await userEvent.click(screen.getByRole("button", { name: "Salvar sistema visual" }));
-
-    const calls = vi.mocked(fetch).mock.calls;
-    expect(String(calls[1][0])).toContain("/visual-system-suggest");
-    expect(String(calls[2][0])).toContain("/image-rules");
-    const payload = JSON.parse(String((calls[2][1] as RequestInit).body));
-    expect(payload.visualSystem).toMatchObject({
-      typography: "commercial_condensed",
-      titleWeight: "extra_bold",
-      bodyWeight: "medium",
-      priceWeight: "black",
-      cornerStyle: "sharp",
-      shadowStyle: "subtle",
-    });
-    expect(payload.visualSystem.colorUsage).toContain("vermelho para preço");
   });
 
   it("researches online visual trends through the real endpoint and shows the new findings in the rules field", async () => {

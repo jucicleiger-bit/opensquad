@@ -86,7 +86,6 @@ import {
   listAdCreatives,
   listCommemorativeDates,
   getCentralPaths,
-  getCentralProjectSummary,
   getGlobalRules,
   listCentralProjects,
   listProjectContent,
@@ -115,7 +114,6 @@ import {
   saveProjectToken,
   saveProjectWhatsAppInstance,
   suggestProjectPillars,
-  suggestProjectVisualSystem,
   updateCatalogSettings,
   updateContentCaption,
   updateProjectBrandInput,
@@ -375,7 +373,6 @@ export async function startContentCentralServer({
   carouselOutlineGenerator = null,
   brandAnalyzer = null,
   pillarSuggester = null,
-  visualSystemSuggester = null,
   logoColorAnalyzer = null,
   siteAnalyzer = null,
   webResearcher = null,
@@ -397,7 +394,6 @@ export async function startContentCentralServer({
     carouselOutlineGenerator: carouselOutlineGenerator || (enableAiImages ? (payload) => writeCarouselOutlineWithHermes({ ...payload, targetDir }) : null),
     brandAnalyzer: brandAnalyzer || (enableAiImages ? generateBrandXrayWithAi : null),
     pillarSuggester: pillarSuggester || (enableAiImages ? generatePillarSuggestionsWithAi : null),
-    visualSystemSuggester: visualSystemSuggester || (enableAiImages ? generateVisualSystemSuggestionWithAi : null),
     logoColorAnalyzer: logoColorAnalyzer || (enableAiImages ? identifyLogoColorsWithAi : null),
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
@@ -733,12 +729,6 @@ async function handleRequest(req, res, targetDir, context = {}) {
   }
 
   const projectId = parts[2];
-  if (method === 'GET' && parts.length === 3) {
-    const project = await getCentralProjectSummary(projectId, targetDir);
-    if (!project) return sendJson(res, 404, { error: 'Project not found' });
-    return sendJson(res, 200, { project });
-  }
-
   if (method === 'GET' && parts.length === 4 && parts[3] === 'content') {
     const content = await listProjectContent(projectId, targetDir);
     return sendJson(res, 200, { content: await syncGavetePublishedContent(projectId, targetDir, content) });
@@ -958,16 +948,8 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const project = await updateProjectImageRules(projectId, {
       visualStyle: body.visualStyle || '',
       imageRules: body.imageRules || [],
-      visualSystem: body.visualSystem,
     }, targetDir);
     return sendJson(res, 200, { project });
-  }
-
-  if (parts.length === 4 && parts[3] === 'visual-system-suggest') {
-    const result = await suggestProjectVisualSystem(projectId, {
-      visualSystemSuggester: context.visualSystemSuggester,
-    }, targetDir);
-    return sendJson(res, 200, result);
   }
 
   if (parts.length === 4 && parts[3] === 'catalog-settings') {
@@ -2153,76 +2135,6 @@ export async function generatePillarSuggestionsWithAi({ project, extraContext = 
       pillars: result.pillars,
       clarifyingQuestions: Array.isArray(result.clarifyingQuestions) ? result.clarifyingQuestions : [],
     };
-  } catch {
-    return null;
-  }
-}
-
-// Suggests the brand's fixed visual system (typography, weights, corners,
-// shadows, title case, color usage) reading real brand context — approved
-// Raio-X, logo colors, segment/audience — instead of the structured
-// fallback's segment-only heuristic (buildSuggestedBrandVisualSystem).
-// Returns null on any failure so the caller (suggestProjectVisualSystem)
-// falls back to that heuristic; normalizeBrandVisualSystem discards any
-// value outside the allowed option sets, so a malformed AI answer degrades
-// safely instead of corrupting the saved system.
-export async function generateVisualSystemSuggestionWithAi({ project }) {
-  const input = project?.brandInput || {};
-  if (!input.brandName && !input.segment) return null;
-  const apiKey = await resolveXaiAccessToken();
-  if (!apiKey) return null;
-
-  const xray = project.brandXray?.status === 'approved' ? project.brandXray.blocks : null;
-  const identity = project.brandIdentity || {};
-  const colors = [...(identity.editedColors || []), ...(identity.extractedColors || [])];
-
-  const prompt = [
-    'Você é um diretor de arte definindo o sistema visual fixo (tipografia, pesos, cantos, sombras, caixa do título e cores) de uma marca, usado em artes de anúncio geradas por IA.',
-    'Com base SOMENTE nas informações abaixo, sugira o sistema visual completo.',
-    '',
-    `Nome: ${input.brandName || project.name || ''}`,
-    `Segmento: ${input.segment || 'não informado'}`,
-    `Público: ${input.audienceType || 'não informado'}`,
-    `O que vende/oferece: ${input.productsOrServices || 'não informado'}`,
-    colors.length ? `Cores identificadas na logo: ${colors.join(', ')}` : 'Nenhuma cor de logo identificada ainda.',
-    xray ? `Resumo da marca (Raio-X aprovado): ${xray.summary?.text || ''}` : '',
-    xray ? `Identidade visual aprovada: ${xray.visualIdentity?.text || ''}` : '',
-    '',
-    'Regras obrigatórias:',
-    '- "typography" só pode ser um destes valores: modern_grotesk, commercial_condensed, clean_geometric, editorial_serif, friendly_rounded, neutral_system.',
-    '- "titleWeight", "bodyWeight" e "priceWeight" só podem ser: regular, medium, semibold, bold, extra_bold, black.',
-    '- "cornerStyle" só pode ser: sharp, slightly_rounded, rounded.',
-    '- "shadowStyle" só pode ser: none, subtle, defined.',
-    '- "titleCase" só pode ser: normal, uppercase, capitalized.',
-    '- "colorUsage" é uma frase curta em português dizendo qual cor usar em cada função (fundo, texto, preço/destaque), citando as cores reais da logo se houver.',
-    '- Não invente cor que não foi informada acima.',
-    '',
-    'Responda APENAS com um JSON válido neste formato exato, sem markdown e sem texto fora do JSON:',
-    '{"typography":"...","titleWeight":"...","bodyWeight":"...","priceWeight":"...","cornerStyle":"...","shadowStyle":"...","titleCase":"...","colorUsage":"..."}',
-  ].filter(Boolean).join('\n');
-
-  const model = process.env.OPENSQUAD_XAI_TEXT_MODEL || 'grok-4.5';
-  const response = await fetch('https://api.x.ai/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${apiKey}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.5,
-    }),
-  });
-  if (!response.ok) return null;
-  const parsed = await response.json();
-  const text = parsed?.choices?.[0]?.message?.content;
-  if (!text) return null;
-
-  const jsonText = String(text).match(/\{[\s\S]*\}/)?.[0];
-  if (!jsonText) return null;
-  try {
-    return JSON.parse(jsonText);
   } catch {
     return null;
   }
@@ -3653,12 +3565,6 @@ async function normalizeUploadedImageAsset(assetInput) {
 export function buildAiImageReviewPrompt({ content, project, note, attachedAsFile = false } = {}) {
   const expected = content?.contentTopic || {};
   const spec = content?.creativeSpec || {};
-  const brandColorsForReview = [
-    ...(project?.brandIdentity?.editedColors || []),
-    ...(project?.brandIdentity?.extractedColors || []),
-  ].filter(Boolean);
-  const topBrandColor = brandColorsForReview[0] || '';
-  const secondBrandColor = brandColorsForReview.find((color) => color !== topBrandColor) || '';
   const comparisonReferences = Array.isArray(content?.image?.references)
     ? selectImageReferencesForCodex(content.image.references)
       .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
@@ -3681,12 +3587,9 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     `Preço autorizado: ${expected.price || 'não definido'}`,
     `Itens autorizados: ${expected.items || 'não definidos'}`,
     `Observações/restrições obrigatórias: ${expected.notes || 'nenhuma'}`,
-    `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — não deve ter botão/selo de CTA na arte'}`,
+    `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — post de conteúdo, não deve ter botão/selo de CTA na arte'}`,
     `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
     `Força do modelo estrutural: ${spec.layout?.strength || 'livre'}`,
-    `Fundo obrigatório: ${spec.background?.style === 'simple_brand'
-      ? `cor sólida ou gradiente suave só com as cores da marca${secondBrandColor ? ` (${topBrandColor} e ${secondBrandColor})` : topBrandColor ? ` (${topBrandColor})` : ''} — sem cenário`
-      : 'livre'}`,
     spec.layout?.zones?.length ? `Zonas obrigatórias do layout:\n${spec.layout.zones.map((zone) => `- ${zone}`).join('\n')}` : '',
     note ? `Observação do usuário: ${note}` : '',
     '',
@@ -3704,7 +3607,7 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     '- preço em box/moldura grande demais, simples demais, desalinhado ou cobrindo o produto principal;',
     '- se o selo de preço cobrir mais destaque que o produto, esconder parte importante do produto ou ficar dominante demais no centro;',
     '- se o produto final pertencer a outra categoria, versão incompatível ou quantidade diferente da referência/oferta;',
-    '- em produto fiel melhorado, integração fotográfica ou foto exata, se cenário, comida, objetos de fundo ou elementos do segmento tiverem mais destaque que o produto real;',
+    '- em produto fiel melhorado ou foto exata, se cenário, comida, objetos de fundo ou elementos do segmento tiverem mais destaque que o produto real;',
     '- se houver layout_model e a ordem de leitura, zonas ou hierarquia principais não forem obedecidas;',
     '',
     'Para Story/Reels, aprove somente se a peça parecer nativa de Story vertical: topo, centro e base usados com hierarquia clara, sem flyer quadrado centralizado.',
@@ -3714,9 +3617,6 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
       : '',
     spec.product?.treatment === 'faithful_enhance'
       ? 'No modo faithful_enhance, aceite melhorias de recorte, luz, sombra e limpeza, mas bloqueie se a embalagem/produto mudar ou se o cenário virar protagonista.'
-      : '',
-    spec.product?.treatment === 'faithful_enhance_photo_integration'
-      ? 'No modo faithful_enhance_photo_integration, aceite suporte fotográfico gerado apenas quando perspectiva, luz, temperatura, sombra de contato/projetada e granulação unificarem o produto real ao cenário; bloqueie se parecer colagem, cenário clichê de IA ou se o produto mudar.'
       : '',
     spec.product?.treatment === 'exact_asset'
       ? 'No modo exact_asset, compare rigorosamente embalagem, rótulo, marca, cores e proporções com a foto de produto anexada.'
@@ -4893,25 +4793,9 @@ function wahaConfig() {
   return { url: url.replace(/\/$/, ''), apiKey };
 }
 
-// WAHA won't serve a QR until the session actually reaches SCAN_QR_CODE —
-// hitting /auth/qr while it's still STARTING (booting its browser engine)
-// 422s with "Session status is not as expected". Poll until it clears
-// STARTING instead of racing it.
-async function waitForWahaScanReady(url, sessionName, headers, { attempts = 10, intervalMs = 1000 } = {}) {
-  for (let i = 0; i < attempts; i += 1) {
-    await delay(intervalMs);
-    const res = await fetch(`${url}/api/sessions/${sessionName}`, { headers });
-    if (!res.ok) throw new Error(`WAHA respondeu ${res.status}: ${await res.text()}`);
-    const status = (await res.json()).status;
-    if (status === 'SCAN_QR_CODE' || status === 'WORKING') return status;
-  }
-  throw new Error('Sessão WAHA não ficou pronta para o QR code — tente novamente em alguns segundos.');
-}
-
-// Creates the session on first connect, restarts it if it's not ready to
-// scan (FAILED/STOPPED, or STARTING left over from a previous attempt that
-// never reached SCAN_QR_CODE), or just re-fetches its current QR otherwise
-// — same button, same route, all cases. A session already WORKING is left
+// Creates the session on first connect, restarts it if it fell over
+// (FAILED/STOPPED), or just re-fetches its current QR otherwise — same
+// button, same route, all three cases. A session already WORKING is left
 // alone (nothing to scan, and restarting it would drop a live connection).
 async function connectProjectWhatsAppSession(projectId, project, targetDir) {
   const { url, apiKey } = wahaConfig();
@@ -4934,14 +4818,6 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
     throw new Error(`WAHA respondeu ${statusRes.status}: ${await statusRes.text()}`);
   } else {
     status = (await statusRes.json()).status;
-    // Existing session not already ready-or-working — STARTING wedged from
-    // a prior attempt, or FAILED/STOPPED — needs a kick before it'll ever
-    // reach SCAN_QR_CODE on its own.
-    if (status !== 'WORKING' && status !== 'SCAN_QR_CODE') {
-      const restartRes = await fetch(`${url}/api/sessions/${sessionName}/restart`, { method: 'POST', headers });
-      if (!restartRes.ok) throw new Error(`WAHA respondeu ${restartRes.status}: ${await restartRes.text()}`);
-      status = 'STARTING';
-    }
   }
 
   let updatedProject = project;
@@ -4956,12 +4832,12 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
 
   if (status === 'WORKING') return { qrcode: null, project: updatedProject };
 
-  let qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
-  if (!qrRes.ok && qrRes.status === 422) {
-    status = await waitForWahaScanReady(url, sessionName, headers);
-    if (status === 'WORKING') return { qrcode: null, project: updatedProject };
-    qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
+  if (status === 'FAILED' || status === 'STOPPED') {
+    const restartRes = await fetch(`${url}/api/sessions/${sessionName}/restart`, { method: 'POST', headers });
+    if (!restartRes.ok) throw new Error(`WAHA respondeu ${restartRes.status}: ${await restartRes.text()}`);
   }
+
+  const qrRes = await fetch(`${url}/api/${sessionName}/auth/qr?format=image`, { headers });
   if (!qrRes.ok) throw new Error(`WAHA respondeu ${qrRes.status}: ${await qrRes.text()}`);
   const qrBuffer = Buffer.from(await qrRes.arrayBuffer());
   const qrcode = `data:image/png;base64,${qrBuffer.toString('base64')}`;

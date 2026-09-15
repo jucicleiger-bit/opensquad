@@ -11,14 +11,8 @@
 // importable as-is from a Deno Edge Function's index.ts.
 
 const DEFAULT_GRAPH_BASE = 'https://graph.facebook.com/v25.0';
-// - 9004/2207052: "Falha ao baixar mídia" (generic media fetch failure)
-// - -2/2207003: crawler timed out fetching image_url
-// Both confirmed transient by hand (same request succeeded seconds later
-// with no change on our side), despite Meta reporting them as non-transient.
-const RETRYABLE_ERRORS = [
-  { code: 9004, subcode: 2207052 },
-  { code: -2, subcode: 2207003 },
-];
+const RETRYABLE_ERROR_CODE = 9004;
+const RETRYABLE_ERROR_SUBCODES = new Set([2207052]);
 
 function sleep(ms) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
@@ -39,9 +33,7 @@ export async function graph(path, params = {}, method = 'GET', { retries = 0, re
     if (res.ok) return json;
 
     const error = json?.error;
-    const isRetryableMediaFetchFailure = RETRYABLE_ERRORS.some(
-      (r) => r.code === error?.code && r.subcode === error?.error_subcode,
-    );
+    const isRetryableMediaFetchFailure = error?.code === RETRYABLE_ERROR_CODE && RETRYABLE_ERROR_SUBCODES.has(error?.error_subcode);
     if (isRetryableMediaFetchFailure && attempt < retries) {
       await sleep(retryDelayMs);
       continue;
@@ -60,28 +52,6 @@ export async function graph(path, params = {}, method = 'GET', { retries = 0, re
   }
 }
 
-// media_publish has been observed returning 200 with a real-looking id for
-// content that never actually reaches the account (production incident:
-// king-assessoria-mkt, 2026-09-15 — id came back fine, a GET on it minutes
-// later 404'd with "does not exist", root cause unconfirmed on Meta's side).
-// Confirming the id actually resolves before declaring success is the only
-// way to catch that instead of silently marking a ghost post as published.
-// The retry budget absorbs ordinary read-after-write lag without masking a
-// real phantom.
-async function verifyPublishedExists(id, token, graphBase, { retries = 2, retryDelayMs = 3000 } = {}) {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await graph(`/${id}`, { fields: 'id', access_token: token }, 'GET', { graphBase });
-      return;
-    } catch (err) {
-      if (attempt >= retries) {
-        throw new Error(`media_publish returned id ${id} but it does not exist on Meta's API (phantom publish): ${err.message}`);
-      }
-      await sleep(retryDelayMs);
-    }
-  }
-}
-
 async function waitForInstagramContainer(containerId, token, graphBase) {
   const deadline = Date.now() + 5 * 60_000;
   while (Date.now() < deadline) {
@@ -94,11 +64,10 @@ async function waitForInstagramContainer(containerId, token, graphBase) {
 }
 
 async function publishInstagramFeed(target, graphBase) {
-  const { token, igId, imageUrl, caption, verifyRetries, verifyRetryDelayMs } = target;
+  const { token, igId, imageUrl, caption } = target;
   const container = await graph(`/${igId}/media`, { image_url: imageUrl, caption: caption || '', access_token: token }, 'POST', { retries: 2, graphBase });
   await waitForInstagramContainer(container.id, token, graphBase);
   const published = await graph(`/${igId}/media_publish`, { creation_id: container.id, access_token: token }, 'POST', { graphBase });
-  await verifyPublishedExists(published.id, token, graphBase, { retries: verifyRetries, retryDelayMs: verifyRetryDelayMs });
   let permalink = null;
   try {
     const media = await graph(`/${published.id}`, { fields: 'permalink', access_token: token }, 'GET', { graphBase });
@@ -108,26 +77,23 @@ async function publishInstagramFeed(target, graphBase) {
 }
 
 async function publishInstagramStory(target, graphBase) {
-  const { token, igId, imageUrl, verifyRetries, verifyRetryDelayMs } = target;
+  const { token, igId, imageUrl } = target;
   const container = await graph(`/${igId}/media`, { image_url: imageUrl, media_type: 'STORIES', access_token: token }, 'POST', { retries: 2, graphBase });
   await waitForInstagramContainer(container.id, token, graphBase);
   const published = await graph(`/${igId}/media_publish`, { creation_id: container.id, access_token: token }, 'POST', { graphBase });
-  await verifyPublishedExists(published.id, token, graphBase, { retries: verifyRetries, retryDelayMs: verifyRetryDelayMs });
   return { ok: true, mediaId: published.id, containerId: container.id, permalink: null };
 }
 
 async function publishFacebookFeed(target, graphBase) {
-  const { token, pageId, imageUrl, caption, verifyRetries, verifyRetryDelayMs } = target;
+  const { token, pageId, imageUrl, caption } = target;
   const published = await graph(`/${pageId}/photos`, { url: imageUrl, caption: caption || '', published: 'true', access_token: token }, 'POST', { graphBase });
-  if (published.id) await verifyPublishedExists(published.id, token, graphBase, { retries: verifyRetries, retryDelayMs: verifyRetryDelayMs });
   return { ok: true, mediaId: published.id || null, postId: published.post_id || null, permalink: null };
 }
 
 async function publishFacebookStory(target, graphBase) {
-  const { token, pageId, imageUrl, verifyRetries, verifyRetryDelayMs } = target;
+  const { token, pageId, imageUrl } = target;
   const photo = await graph(`/${pageId}/photos`, { url: imageUrl, published: 'false', access_token: token }, 'POST', { graphBase });
   const story = await graph(`/${pageId}/photo_stories`, { photo_id: photo.id, access_token: token }, 'POST', { graphBase });
-  if (story.post_id) await verifyPublishedExists(story.post_id, token, graphBase, { retries: verifyRetries, retryDelayMs: verifyRetryDelayMs });
   return { ok: true, mediaId: photo.id || null, postId: story.post_id || null, permalink: null };
 }
 

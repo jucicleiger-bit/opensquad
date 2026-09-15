@@ -38,14 +38,17 @@ function renderOverview() {
 }
 
 const PROJECT_STATE = {
-  project: {
-    projectId: "boss-pizzaria",
-    name: "Boss Pizzaria",
-    token: { configured: true, expiresAt: new Date(Date.now() + 61 * 86400000).toISOString() },
-    brandXray: { status: "approved" },
-    brand: { references: [{ id: "r1" }] },
-    contentStrategy: { offers: [{ id: "o1" }, { id: "o2" }] },
-  },
+  projects: [
+    {
+      projectId: "boss-pizzaria",
+      name: "Boss Pizzaria",
+      token: { configured: true, expiresAt: new Date(Date.now() + 61 * 86400000).toISOString() },
+      brandXray: { status: "approved" },
+      brand: { references: [{ id: "r1" }] },
+      contentStrategy: { offers: [{ id: "o1" }, { id: "o2" }] },
+    },
+  ],
+  globalRules: {},
 };
 
 function item(overrides: Record<string, unknown>) {

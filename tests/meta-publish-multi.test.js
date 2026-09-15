@@ -83,10 +83,6 @@ async function withGraphStub(run) {
     res.writeHead(200, { 'content-type': 'application/json' });
     if (url.searchParams.get('fields') === 'status_code') return res.end(JSON.stringify({ status_code: 'FINISHED' }));
     if (url.searchParams.get('fields') === 'permalink') return res.end(JSON.stringify({ permalink: 'https://instagram.com/p/abc' }));
-    // verifyPublishedExists' existence check (GET /{id}?fields=id) — echo the
-    // id back from the path instead of minting a new one, so it doesn't shift
-    // the sequential ids the assertions below depend on.
-    if (url.searchParams.get('fields') === 'id') return res.end(JSON.stringify({ id: url.pathname.slice(1) }));
     nextId += 1;
     res.end(JSON.stringify({ id: `id-${nextId}` }));
   });
@@ -143,40 +139,4 @@ test('meta-publish-multi publishes a real carousel as N is_carousel_item childre
     assert.equal(publishes.length, 1);
     assert.equal(publishes[0].params.creation_id, 'id-4');
   });
-});
-
-// Reproduces the 2026-09-15 king-assessoria-mkt incident: media_publish
-// returns a 200 with a real-looking id, but that id doesn't actually exist
-// on Meta's side (a GET on it 404s). Without verifyPublishedExists this was
-// reported as ok:true and silently marked published forever.
-test('meta-publish-multi throws when media_publish returns an id that does not resolve (phantom publish)', async () => {
-  const server = createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
-    if (url.searchParams.get('fields') === 'status_code') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ status_code: 'FINISHED' }));
-    }
-    if (url.pathname === '/ghost-id' && url.searchParams.get('fields') === 'id') {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      return res.end(JSON.stringify({ error: { message: 'Unsupported get request.', type: 'GraphMethodException', code: 100, error_subcode: 33 } }));
-    }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'ghost-id' }));
-  });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try {
-    await assert.rejects(
-      () => runScript({
-        publish_targets: [{ channel: 'instagram_story', image_url: 'https://cdn.example.com/1.png' }],
-      }, {
-        META_GRAPH_BASE: `http://127.0.0.1:${server.address().port}`,
-        META_VERIFY_RETRIES: '0',
-        INSTAGRAM_ACCESS_TOKEN: 'tok',
-        INSTAGRAM_USER_ID: '17841400000000000',
-      }),
-      /phantom publish/,
-    );
-  } finally {
-    await new Promise((resolve) => server.close(resolve));
-  }
 });
