@@ -3653,10 +3653,12 @@ async function normalizeUploadedImageAsset(assetInput) {
 export function buildAiImageReviewPrompt({ content, project, note, attachedAsFile = false } = {}) {
   const expected = content?.contentTopic || {};
   const spec = content?.creativeSpec || {};
-  const topBrandColor = [
+  const brandColorsForReview = [
     ...(project?.brandIdentity?.editedColors || []),
     ...(project?.brandIdentity?.extractedColors || []),
-  ].filter(Boolean)[0] || '';
+  ].filter(Boolean);
+  const topBrandColor = brandColorsForReview[0] || '';
+  const secondBrandColor = brandColorsForReview.find((color) => color !== topBrandColor) || '';
   const comparisonReferences = Array.isArray(content?.image?.references)
     ? selectImageReferencesForCodex(content.image.references)
       .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
@@ -3683,7 +3685,7 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
     `Força do modelo estrutural: ${spec.layout?.strength || 'livre'}`,
     `Fundo obrigatório: ${spec.background?.style === 'simple_brand'
-      ? `liso, na cor principal da marca${topBrandColor ? ` (${topBrandColor})` : ''} — sem cenário`
+      ? `cor sólida ou gradiente suave só com as cores da marca${secondBrandColor ? ` (${topBrandColor} e ${secondBrandColor})` : topBrandColor ? ` (${topBrandColor})` : ''} — sem cenário`
       : 'livre'}`,
     spec.layout?.zones?.length ? `Zonas obrigatórias do layout:\n${spec.layout.zones.map((zone) => `- ${zone}`).join('\n')}` : '',
     note ? `Observação do usuário: ${note}` : '',

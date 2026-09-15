@@ -7314,7 +7314,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // real color. Naming the actual top color right in the lock line removes
   // that gap.
   const brandIdentityForBackground = normalizeBrandIdentity(project.brandIdentity || {});
-  const topBrandColor = [...brandIdentityForBackground.editedColors, ...brandIdentityForBackground.extractedColors].filter(Boolean)[0] || '';
+  const brandColorsForBackground = [...brandIdentityForBackground.editedColors, ...brandIdentityForBackground.extractedColors].filter(Boolean);
+  const topBrandColor = brandColorsForBackground[0] || '';
+  // A brand with 2+ registered colors can take a soft gradient between them
+  // instead of a single flat fill — flat-only read as generic/AI-plain to
+  // real users even though it followed the lock correctly; a gradient still
+  // respects "só cores da marca" as long as it never leaves that palette.
+  const secondBrandColor = brandColorsForBackground.find((color) => color !== topBrandColor) || '';
   // Which single layout/visual reference to use is already rotated upstream
   // in buildPrimaryAiImageReferences (seeded per test run), so selectedReferences
   // contains at most one of each here.
@@ -7549,7 +7555,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     section('LIBERDADE CRIATIVA', [
       creativeSpec.background?.style === 'simple_brand'
         ? (topBrandColor
-          ? `Fundo obrigatoriamente liso, preenchido com a cor principal da marca (${topBrandColor} ou tom muito próximo) — sem cenário, objetos de contexto, ambientação, gradiente escuro ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`
+          ? (secondBrandColor
+            ? `Fundo obrigatório: cor sólida ou gradiente suave usando só as cores da marca (${topBrandColor} e ${secondBrandColor}, ou tons muito próximos) — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`
+            : `Fundo obrigatoriamente liso, preenchido com a cor principal da marca (${topBrandColor} ou tom muito próximo) — sem cenário, objetos de contexto, ambientação, gradiente escuro ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`)
           : 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.')
         : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
@@ -7582,7 +7590,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
       creativeSpec.background?.style === 'simple_brand'
         ? (topBrandColor
-          ? `Não criar cenário, ambientação, gradiente escuro ou objetos de contexto no fundo — fundo deve ser liso, na cor principal da marca (${topBrandColor}).`
+          ? (secondBrandColor
+            ? `Não criar cenário, ambientação ou objetos de contexto no fundo — fundo pode ser cor sólida ou gradiente suave, só com as cores da marca (${topBrandColor} e ${secondBrandColor}).`
+            : `Não criar cenário, ambientação, gradiente escuro ou objetos de contexto no fundo — fundo deve ser liso, na cor principal da marca (${topBrandColor}).`)
           : 'Não criar cenário, ambientação ou objetos de contexto no fundo — fundo deve ser liso, só com cor da marca.')
         : '',
       ...productFocus.restrictionLines,
