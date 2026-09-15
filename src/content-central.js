@@ -7553,9 +7553,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
           : 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.')
         : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
-        ? 'Pode variar fundo, luz, tipografia e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
+        ? (creativeSpec.background?.style === 'simple_brand'
+          ? 'Pode variar luz, tipografia e acabamento apenas como apoio simples; fundo continua travado pela regra de fundo acima, não a de "apoio simples" — não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
+          : 'Pode variar fundo, luz, tipografia e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.')
         : productLockedToPhoto
-          ? 'Pode variar enquadramento, fundo, luz e tipografia apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.'
+          ? (creativeSpec.background?.style === 'simple_brand'
+            ? 'Pode variar enquadramento, luz e tipografia apenas para valorizar o produto real; fundo continua travado pela regra de fundo acima, liso e na cor da marca.'
+            : 'Pode variar enquadramento, fundo, luz e tipografia apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.')
         : layoutReference && creativeSpec.layout.strength === 'strict'
         ? 'Pode variar fundo, luz, tipografia e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
         : creativeSpec.background?.style === 'simple_brand'

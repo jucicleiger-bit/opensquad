@@ -9605,6 +9605,61 @@ test('simple_brand background style drops the "small contextual detail" allowanc
   });
 });
 
+test('simple_brand + faithful_enhance + strict layout no longer tells the model it can vary the background', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-simples-estrita-fiel',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('fundo-simples-estrita-fiel', {
+      kind: 'reference',
+      filename: 'mussarela-fatiada.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da mussarela fatiada.',
+    }, dir);
+
+    await saveProjectOffer('fundo-simples-estrita-fiel', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      productTreatment: 'faithful_enhance',
+      layoutStrength: 'strict',
+      backgroundStyle: 'simple_brand',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+    await updateProjectBrandInput('fundo-simples-estrita-fiel', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('fundo-simples-estrita-fiel', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-simples-estrita-fiel',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.creativeSpec.background.style, 'simple_brand');
+    assert.equal(content.creativeSpec.layout.strength, 'strict');
+    assert.doesNotMatch(prompt, /Pode variar fundo/i);
+    assert.match(prompt, /fundo continua travado pela regra de fundo acima/i);
+  });
+});
+
 test('elaborate background style leaves the free-form background prompt unchanged', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
