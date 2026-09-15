@@ -9504,7 +9504,10 @@ test('simple_brand background style names the actual extracted logo color instea
 
     const logoDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     await saveProjectAsset('fundo-simples-cor-real', { kind: 'logo', filename: 'logo.png', dataUrl: logoDataUrl }, dir, new Date(), {
-      logoColorAnalyzer: async () => ['#F01818', '#F0D890'],
+      // Only one extracted color — the flat-fill fallback (no second color to
+      // build a gradient from), covered separately by the two-color gradient
+      // test right below this one.
+      logoColorAnalyzer: async () => ['#F01818'],
     });
 
     const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
@@ -9549,6 +9552,65 @@ test('simple_brand background style names the actual extracted logo color instea
     assert.match(prompt, /preenchido com a cor principal da marca \(#F01818 ou tom muito próximo\)/i);
     assert.match(prompt, /fundo deve ser liso, na cor principal da marca \(#F01818\)/i);
     assert.doesNotMatch(prompt, /usando apenas as cores da marca — sem cenário/i);
+  });
+});
+
+test('simple_brand background style allows a soft gradient between two registered brand colors instead of forcing a flat single fill', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-simples-gradiente',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const logoDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    await saveProjectAsset('fundo-simples-gradiente', { kind: 'logo', filename: 'logo.png', dataUrl: logoDataUrl }, dir, new Date(), {
+      logoColorAnalyzer: async () => ['#F01818', '#F0D890'],
+    });
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('fundo-simples-gradiente', {
+      kind: 'reference',
+      filename: 'mussarela-fatiada.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da mussarela fatiada.',
+    }, dir);
+
+    await saveProjectOffer('fundo-simples-gradiente', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      productTreatment: 'faithful_enhance',
+      backgroundStyle: 'simple_brand',
+      active: true,
+    }, dir, new Date('2026-09-15T12:00:00.000Z'));
+    await updateProjectBrandInput('fundo-simples-gradiente', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('fundo-simples-gradiente', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-simples-gradiente',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-15T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.equal(content.creativeSpec.background.style, 'simple_brand');
+    assert.match(prompt, /cor sólida ou gradiente suave usando só as cores da marca \(#F01818 e #F0D890, ou tons muito próximos\)/i);
+    assert.match(prompt, /fundo pode ser cor sólida ou gradiente suave, só com as cores da marca \(#F01818 e #F0D890\)/i);
+    assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso, preenchido com a cor principal/i);
   });
 });
 
