@@ -7462,9 +7462,14 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? 'Esse apoio visual nunca pode disputar atenção com o produto, ocupar mais área que ele ou virar cenário grande do segmento.'
         : '',
       ...quantityRules.visualLines,
+      // Food businesses used to get ONLY the rice/food-texture note below,
+      // skipping this line entirely — so a food creative had no defense
+      // against the generic plastic/clip-art/AI look this line exists to
+      // block. Every project gets it now; food gets the extra note too.
+      'Evitar visual infantil, plástico, artificial, genérico de IA, sobrecarregado ou com enfeites de template sem função.',
       isFoodBusiness(project)
         ? 'Comida: atenção real ao arroz/prato — grãos soltos, textura, brilho natural; evitar simetria/brilho de IA; luz quente e natural.'
-        : 'Evitar visual infantil, plástico, artificial, genérico de IA, sobrecarregado ou com enfeites de template sem função.',
+        : '',
       // A saved direction can describe the brand's regular commercial style;
       // special dates need an explicit noncommercial override.
       isSpecialDateFreeTitle
@@ -7549,6 +7554,14 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
             : `Fundo obrigatoriamente liso, preenchido com a cor principal da marca (${topBrandColor} ou tom muito próximo) — sem cenário, objetos de contexto, ambientação, gradiente escuro ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`)
           : 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.')
         : '',
+      // A gradient across the brand palette still needs a decision: which of
+      // those colors goes where. Left unstated, that choice is arbitrary and
+      // can clash with the attached product photo — e.g. a warm/orange photo
+      // sitting on a cold-toned half of the gradient reads as pasted-on
+      // rather than designed together.
+      creativeSpec.background?.style === 'simple_brand' && secondBrandColor && productReferences.length
+        ? 'Escolher qual dessas cores da marca fica mais perto do produto e qual fica mais longe com base nas cores reais da foto anexada — a cor do fundo encostando no produto deve harmonizar com o tom predominante da foto, não ser uma escolha arbitrária.'
+        : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
         ? (creativeSpec.background?.style === 'simple_brand'
           ? 'Pode variar luz, tipografia e acabamento apenas como apoio simples; fundo continua travado pela regra de fundo acima, não a de "apoio simples" — não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
@@ -7576,6 +7589,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // text that small comes out garbled/illegible in the final render.
       !isVerticalStory ? 'Não adicionar faixas, ribbons, selos secundários ou fileira de ícones com texto além dos elementos definidos em HIERARQUIA — texto em fonte muito pequena sai ilegível/embaralhado na geração final.' : '',
       exactPrice ? 'Não posicionar o preço no centro cobrindo o produto principal.' : '',
+      exactPrice ? 'Selo de preço: retângulo arredondado ou pílula sólida, alinhado na horizontal — sem rotação/inclinação, sem fita diagonal, bandeirola recortada ou raios de estrela ilustrados atrás; acabamento de anúncio impresso profissional, não clip-art.' : '',
       productLockedToPhoto ? 'Não criar cenário grande de uso/segmento que roube o foco do produto real; contexto e decoração devem ser pequenos e secundários.' : '',
       creativeSpec.background?.style === 'simple_brand'
         ? (topBrandColor

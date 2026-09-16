@@ -3861,10 +3861,11 @@ test('AI final prompt is compiled into concise creative brief and limited refere
     assert.doesNotMatch(prompt, /modo de operação/i);
     assert.doesNotMatch(prompt, /Não publicar sem aprovação/i);
     assert.doesNotMatch(prompt, /Variação criativa de teste: 2026/i);
-    // Budget bumped from 6500: the brand visual system section and the
-    // backgroundStyle lock line (both legitimate, separately-reviewed
-    // additions merged together) push a normal prompt to ~6840 chars.
-    assert.ok(prompt.length < 7200);
+    // Budget bumped from 6500, then 7200: the brand visual system section,
+    // the backgroundStyle lock line, the straight-price-badge lock, and the
+    // combined food/anti-clip-art line (all legitimate, separately-reviewed
+    // additions merged together) push a normal prompt further still.
+    assert.ok(prompt.length < 7500, `prompt.length was ${prompt.length}`);
     assert.equal((prompt.match(/9:16 Vertical/g) || []).length <= 2, true);
     assert.equal(references.filter((reference) => reference.role === 'product_photo').length, 2);
     assert.equal(references.filter((reference) => reference.role === 'layout_model').length, 1);
@@ -9611,6 +9612,145 @@ test('simple_brand background style allows a soft gradient between two registere
     assert.match(prompt, /cor sólida ou gradiente suave usando só as cores da marca \(#F01818 e #F0D890, ou tons muito próximos\)/i);
     assert.match(prompt, /fundo pode ser cor sólida ou gradiente suave, só com as cores da marca \(#F01818 e #F0D890\)/i);
     assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso, preenchido com a cor principal/i);
+    // Gradient + a real product photo attached: the model must be told which
+    // side of the gradient goes near the product, using the photo's own
+    // colors — otherwise the background/photo pairing is arbitrary instead
+    // of designed together.
+    assert.match(prompt, /qual dessas cores da marca fica mais perto do produto e qual fica mais longe com base nas cores reais da foto anexada/i);
+  });
+});
+
+test('simple_brand background style skips the photo-harmony line when there is only one brand color or no product photo', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'fundo-simples-sem-harmonia',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    const logoDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    await saveProjectAsset('fundo-simples-sem-harmonia', { kind: 'logo', filename: 'logo.png', dataUrl: logoDataUrl }, dir, new Date(), {
+      // Only one color — no second color to place the product against, so
+      // there is no gradient decision to make in the first place.
+      logoColorAnalyzer: async () => ['#F01818'],
+    });
+
+    const dataUrl = `data:image/png;base64,${Buffer.from('mussarela').toString('base64')}`;
+    const offerPhoto = await saveProjectAsset('fundo-simples-sem-harmonia', {
+      kind: 'reference',
+      filename: 'mussarela-fatiada.jpg',
+      dataUrl,
+      role: 'product_photo',
+      usageRoles: ['product_photo'],
+      referenceCategory: 'real_product',
+      weight: 'high',
+      instruction: 'Foto real da mussarela fatiada.',
+    }, dir);
+
+    await saveProjectOffer('fundo-simples-sem-harmonia', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      photoReferenceIds: [offerPhoto.metadata.id],
+      productTreatment: 'faithful_enhance',
+      backgroundStyle: 'simple_brand',
+      active: true,
+    }, dir, new Date('2026-09-15T12:00:00.000Z'));
+    await updateProjectBrandInput('fundo-simples-sem-harmonia', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    await simulateTestPost('fundo-simples-sem-harmonia', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-simples-sem-harmonia',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-15T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.doesNotMatch(prompt, /qual dessas cores da marca fica mais perto do produto/i);
+  });
+});
+
+test('any offer with a price gets a straight, non-ribbon price badge lock — no diagonal ribbon or illustrated starburst', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'selo-preco-reto',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    await saveProjectOffer('selo-preco-reto', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+    await updateProjectBrandInput('selo-preco-reto', {
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    const content = await simulateTestPost('selo-preco-reto', {
+      channel: 'instagram_feed',
+      testSeed: 'selo-preco-reto',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.ok(content.creativeSpec.offer.price);
+    assert.match(prompt, /Selo de preço: retângulo arredondado ou pílula sólida, alinhado na horizontal/i);
+    assert.match(prompt, /sem rotação\/inclinação, sem fita diagonal, bandeirola recortada ou raios de estrela ilustrados atrás/i);
+  });
+});
+
+test('a food-business creative gets the anti-plastic\\/AI-clip-art warning on top of the rice/food-texture note, not instead of it', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'comida-sem-cara-de-ia',
+      name: 'Cliente Frios',
+      handle: '@clientefrios',
+      approvalEmail: 'aprovacao@example.com',
+    }, dir);
+
+    await saveProjectOffer('comida-sem-cara-de-ia', {
+      name: 'Mussarela Fatiada',
+      type: 'offer',
+      price: 'R$ 39,90',
+      active: true,
+    }, dir, new Date('2026-09-05T12:00:00.000Z'));
+    await updateProjectBrandInput('comida-sem-cara-de-ia', {
+      segment: 'Frios e laticínios',
+      segmentGroup: 'Varejo',
+      segmentCategory: 'Supermercado',
+    }, dir);
+    await registerCreativeTemplate('group:varejo/category:supermercado', 'offer', 'feed', dir);
+
+    const generatorCalls = [];
+    await simulateTestPost('comida-sem-cara-de-ia', {
+      channel: 'instagram_feed',
+      testSeed: 'comida-sem-cara-de-ia',
+      imageGenerator: async (payload) => {
+        generatorCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-05T12:05:00.000Z'));
+
+    const prompt = generatorCalls[0].content.image.prompt;
+    assert.match(prompt, /Evitar visual infantil, plástico, artificial, genérico de IA, sobrecarregado ou com enfeites de template sem função/i);
+    assert.match(prompt, /Comida: atenção real ao arroz\/prato/i);
   });
 });
 
