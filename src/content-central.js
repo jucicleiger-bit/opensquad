@@ -7998,7 +7998,47 @@ function prioritizeReferencesByTopic(refs, focus) {
   return [...matching, ...rest];
 }
 
+// An encarte is a grid, not a hero shot. Every selected product gets its
+// own numbered slot with its own exact price; naming the total count makes
+// a dropped product a visible failure rather than a silent one. Prices go
+// in verbatim — a model that "tidies" R$ 8,49 into R$ 8,50 has published a
+// wrong price in a market's window.
+function buildFlyerProductFocus(topic = {}) {
+  const products = Array.isArray(topic.products) ? topic.products : [];
+  const lines = products.map((product, index) => {
+    const unit = product.priceUnit ? ` (${product.priceUnit})` : '';
+    return product.price
+      ? `${index + 1}. ${product.name} — ${product.price}${unit}`
+      : `${index + 1}. ${product.name} — sem preço cadastrado: não exibir preço para este produto`;
+  });
+  const missingPrice = products.filter((product) => !product.price).map((product) => product.name);
+  return {
+    heroLine: `Encarte de ofertas em grade com todos os ${products.length} produtos abaixo, cada um com seu preço:\n${lines.join('\n')}`,
+    assetLines: [
+      'Cada produto da lista ocupa o seu próprio espaço na grade, com o nome e o preço legíveis ao lado ou abaixo dele.',
+      'Usar a foto real anexada de cada produto no espaço correspondente a ele.',
+    ],
+    visualLines: [
+      `A peça mostra todos os ${products.length} produtos da lista, nenhum produto em destaque exclusivo sobre os outros.`,
+      'Composição de encarte: grade organizada, leitura rápida, preços com peso visual alto.',
+    ],
+    restrictionLines: [
+      'Escrever cada preço exatamente como escrito na lista: não arredondar, não alterar centavos, não converter e não inventar preço.',
+      'Não omitir nenhum produto da lista e não acrescentar produto que não esteja nela.',
+      'Não associar o preço de um produto a outro produto.',
+      missingPrice.length
+        ? `Os seguintes produtos estão sem preço cadastrado e devem aparecer sem preço nenhum: ${missingPrice.join(', ')}.`
+        : '',
+    ].filter(Boolean),
+  };
+}
+
 function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, productTreatment = 'creative_redraw') {
+  // A flyer has no protagonist by definition — every product on the grid
+  // is equally the subject. The multi-product hero logic below would pick
+  // one and instruct the model not to swap it, which is the exact opposite
+  // of what an encarte needs.
+  if (topic.source === 'flyer') return buildFlyerProductFocus(topic);
   const multiProduct = multiProductFocus(topic);
   if (multiProduct) {
     const item = multiProduct.item;

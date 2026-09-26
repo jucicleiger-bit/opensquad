@@ -10256,3 +10256,89 @@ test('non-offer generation (goal topic) never gets the simple_brand background l
     assert.doesNotMatch(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
   });
 });
+
+test('a flyer briefs the model as a product grid with literal prices, never as one hero product', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-grade', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-grade', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+
+    const arroz = (await saveProjectOffer('mercado-grade', { name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote' }, dir)).offer;
+    const feijao = (await saveProjectOffer('mercado-grade', { name: 'Feijão 1kg', price: 'R$ 8,49', priceUnit: 'kg' }, dir)).offer;
+    const cafe = (await saveProjectOffer('mercado-grade', { name: 'Café 500g', price: '', priceUnit: '' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-grade', {
+      offerIds: [arroz.id, feijao.id, cafe.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-grade');
+    const paths = getCentralPaths(dir, 'mercado-grade');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-grade', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    const prompt = calls[0].content.image.prompt;
+
+    // The grid, numbered in selection order.
+    assert.match(prompt, /1\.\s*Arroz 5kg\s*—\s*R\$ 24,90/);
+    assert.match(prompt, /2\.\s*Feijão 1kg\s*—\s*R\$ 8,49/);
+    assert.match(prompt, /3\.\s*Café 500g/);
+
+    // All present, none promoted.
+    assert.match(prompt, /todos os 3 produtos/i, 'must state the exact count so a missing item is a visible failure');
+    assert.match(prompt, /nenhum produto em destaque exclusivo/i);
+
+    // Literal prices, and no invented one for the product without a price.
+    assert.match(prompt, /exatamente como escrito/i);
+    assert.match(prompt, /não arredondar/i);
+    assert.match(prompt, /Café 500g.*sem preço cadastrado/is, 'a product with no price must be called out, not given an invented one');
+
+    // The single-hero instruction must be absent.
+    assert.doesNotMatch(prompt, /Não trocar .* por outro produto listado na oferta/i);
+    assert.doesNotMatch(prompt, /como produto principal/i);
+  });
+});
+
+test('a normal multi-item offer still gets the single-hero brief', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'oferta-heroi', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('oferta-heroi', {
+      brandName: 'Boss Pizzaria', segment: 'pizzaria', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria',
+    }, dir);
+    // A sales/product post type is blocked without a registered creative
+    // template (see requiresCreativeTemplate) — without this the generator
+    // never calls imageGenerator at all, which is not what this
+    // non-regression test is about.
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    await saveProjectOffer('oferta-heroi', {
+      name: 'Combo',
+      price: 'R$ 49,90',
+      items: 'Pizza grande, refrigerante 2L',
+    }, dir);
+
+    const batch = await generateContentBatch('oferta-heroi', {
+      days: 1,
+      startDate: '2026-09-01',
+      channel: 'instagram_feed',
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'oferta-heroi');
+    const paths = getCentralPaths(dir, 'oferta-heroi');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'oferta-heroi', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/combo.png', mimeType: 'image/png' };
+      },
+    }, paths);
+
+    assert.match(calls[0].content.image.prompt, /produto principal/i, 'the scheduled path must keep its hero-product brief — non-regression guard');
+  });
+});
