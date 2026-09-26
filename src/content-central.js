@@ -7340,18 +7340,25 @@ function normalizeBackgroundStyle(value) {
   return String(value || '').trim().toLowerCase() === 'elaborate' ? 'elaborate' : 'simple_brand';
 }
 
-function creativeLayoutZones(channel) {
+// isFlyer swaps the single-protagonist center label for a grid label — this
+// feeds REFERÊNCIA PRINCIPAL's generic zone list, which used to restate
+// "produto/benefício como protagonista" right under the flyer's own
+// numbered grid brief, contradicting it in the same section.
+function creativeLayoutZones(channel, isFlyer = false) {
+  const centerLabel = isFlyer
+    ? 'grade com todos os produtos e preços da oferta lado a lado, nenhum produto isolado como protagonista'
+    : 'produto/benefício como protagonista';
   if (isVerticalStoryChannel(channel)) {
     return [
       'Topo (0-18%): logo e título dentro da área segura.',
-      'Centro (18-68%): produto/benefício como protagonista.',
+      `Centro (18-68%): ${centerLabel}.`,
       'Base média (68-86%): preço e benefícios curtos, sem cobrir o produto.',
       'Rodapé (86-100%): CTA/fechamento dentro da área segura.',
     ];
   }
   return [
     'Topo (0-22%): logo e título dentro da área segura.',
-    'Centro (22-72%): produto/benefício como protagonista.',
+    `Centro (22-72%): ${centerLabel}.`,
     'Base (72-100%): preço, benefícios e CTA com leitura clara.',
   ];
 }
@@ -7413,7 +7420,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       strength: layoutStrength,
       referenceId: layoutReference?.id || '',
       referencePath: layoutReference?.relativePath || '',
-      zones: creativeLayoutZones(targetChannel),
+      zones: creativeLayoutZones(targetChannel, topic.source === 'flyer'),
     },
     background: {
       style: backgroundStyle,
@@ -7574,7 +7581,15 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
             : `Título exato: ${exactTitle}`,
       topic.items ? `Subtítulo/benefícios obrigatórios: ${cleanPromptText(topic.items)}` : '',
       topic.notes ? `Observações e restrições obrigatórias da oferta: ${cleanPromptText(topic.notes)}` : '',
-      exactPrice ? `Preço exato: ${exactPrice}` : 'Preço: não inserir preço, pois não há preço cadastrado para este criativo.',
+      // A flyer's topic.price is deliberately blank by design (see
+      // buildFlyerProductFocus/generateFlyerContent) — the unconditional
+      // "don't insert any price" fallback below used to fire for every
+      // flyer, contradicting the twelve exact per-product prices listed a
+      // few lines later in HIERARQUIA. Money-correctness path: defer to the
+      // per-product list instead of banning price text outright.
+      topic.source === 'flyer'
+        ? 'Preço: não existe um preço único desta peça — cada produto tem seu próprio preço exato, listado em HIERARQUIA; usar exatamente esses preços individuais, um por produto.'
+        : (exactPrice ? `Preço exato: ${exactPrice}` : 'Preço: não inserir preço, pois não há preço cadastrado para este criativo.'),
       realUrgency ? `Urgência real cadastrada: ${realUrgency}` : '',
       exactCta
         ? (useSubtleCta
@@ -7636,6 +7651,15 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Sem foto real selecionada nesta geração; criar produto/serviço coerente sem copiar marca de terceiros.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
+    ] : topic.source === 'flyer' ? [
+      // A flyer is always a physical-goods price list — the "no product
+      // photo ever uploaded on this project => it's a service business"
+      // inference below is categorically false here (a market that just
+      // hasn't photographed its products yet is still selling products),
+      // so it gets its own framing instead of the generic fallback.
+      'Este encarte não tem nenhuma foto real de produto cadastrada no projeto, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.',
+      ...productFocus.assetLines,
+      ...quantityRules.assetLines,
     ] : [
       // No product photo was ever uploaded for this project — treat it as a
       // service/work business with no physical product to depict, instead
@@ -7677,7 +7701,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     ]),
     isVerticalStory ? section('ESTRUTURA VERTICAL OBRIGATÓRIA', [
       'Topo: logo + título principal.',
-      quantityRules.storyCenterLine || 'Centro: produto principal como protagonista visual.',
+      topic.source === 'flyer'
+        ? 'Centro: grade vertical com todos os produtos da lista, cada um com nome e preço legíveis — nenhum produto isolado como protagonista.'
+        : (quantityRules.storyCenterLine || 'Centro: produto principal como protagonista visual.'),
       exactPrice ? 'Parte inferior média: preço em selo compacto e legível, preferencialmente lateral ou abaixo do produto, sem cobrir a área principal.' : '',
       exactCta
         ? `Rodapé: chamada “${exactCta}” em texto pequeno, sem botão — logo/fechamento limpo domina.`
@@ -7690,7 +7716,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // a proscriptive struture with an explicit closed element list is what
       // actually holds it, same as it does for Story.
       'Topo: logo e/ou título principal — nenhuma faixa, ribbon ou selo decorativo acima ou ao redor do título.',
-      quantityRules.storyCenterLine || 'Centro: produto real em destaque, ocupando a maior área da composição.',
+      topic.source === 'flyer'
+        ? 'Centro: grade com todos os produtos da lista, cada um com nome e preço legíveis, ocupando juntos a maior área da composição — nenhum produto isolado maior que os outros.'
+        : (quantityRules.storyCenterLine || 'Centro: produto real em destaque, ocupando a maior área da composição.'),
       exactPrice ? 'Base: preço em um único selo compacto e legível — não duplicar em outro selo ou faixa.' : '',
       exactCta
         ? `Rodapé: chamada “${exactCta}” em texto ou botão simples — não repetir como selo/ícone extra. Se for botão, deixar respiro visível entre ele e a borda inferior.`
@@ -7706,7 +7734,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       exactPrice ? `3. Preço “${exactPrice}” em selo compacto de alto contraste.` : '',
       exactCta ? (useSubtleCta ? `4. Chamada sutil “${exactCta}” (sem botão).` : `4. CTA “${exactCta}”.`) : '',
       logoReferences.length ? '5. Logo oficial.' : '',
-      'O produto deve ser o protagonista visual.',
+      topic.source === 'flyer'
+        ? 'Nenhum produto individual é protagonista: a grade completa, com todos os produtos e preços, é o elemento central da peça.'
+        : 'O produto deve ser o protagonista visual.',
       exactPrice ? 'O selo de preço não pode cobrir parte relevante do produto principal.' : '',
     ]),
     section('REFERÊNCIA PRINCIPAL', layoutReference ? [
@@ -8012,12 +8042,23 @@ function buildFlyerProductFocus(topic = {}) {
       : `${index + 1}. ${product.name} — sem preço cadastrado: não exibir preço para este produto`;
   });
   const missingPrice = products.filter((product) => !product.price).map((product) => product.name);
+  const missingPhoto = products
+    .filter((product) => !(Array.isArray(product.photoReferenceIds) && product.photoReferenceIds.length))
+    .map((product) => product.name);
   return {
     heroLine: `Encarte de ofertas em grade com todos os ${products.length} produtos abaixo, cada um com seu preço:\n${lines.join('\n')}`,
     assetLines: [
       'Cada produto da lista ocupa o seu próprio espaço na grade, com o nome e o preço legíveis ao lado ou abaixo dele.',
       'Usar a foto real anexada de cada produto no espaço correspondente a ele.',
-    ],
+      // Positive guidance for the no-photo case (a market that hasn't
+      // photographed its products yet is still a real physical-goods
+      // offer, never a service) — this line reaches every PRODUTOS OU
+      // FOTOS REAIS branch via ...productFocus.assetLines, so it applies
+      // regardless of how many products in this flyer have a photo.
+      missingPhoto.length
+        ? `Os seguintes produtos não têm foto anexada — desenhar cada um de forma reconhecível a partir do nome e categoria (ex.: "Sabão em pó 1kg" vira uma embalagem de sabão em pó reconhecível), sempre como produto físico real, nunca como ícone genérico ou serviço: ${missingPhoto.join(', ')}.`
+        : '',
+    ].filter(Boolean),
     visualLines: [
       `A peça mostra todos os ${products.length} produtos da lista, nenhum produto em destaque exclusivo sobre os outros.`,
       'Composição de encarte: grade organizada, leitura rápida, preços com peso visual alto.',

@@ -10301,9 +10301,27 @@ test('a flyer briefs the model as a product grid with literal prices, never as o
     assert.match(prompt, /não arredondar/i);
     assert.match(prompt, /Café 500g.*sem preço cadastrado/is, 'a product with no price must be called out, not given an invented one');
 
-    // The single-hero instruction must be absent.
+    // Strengthened per code review: the two hand-picked phrases below used to
+    // be the ONLY guard, and they passed while single-hero/center/no-price
+    // instructions from OTHER, unbranched sections of this same prompt
+    // builder still reached the model (ESTRUTURA FEED/VERTICAL, HIERARQUIA,
+    // TEXTOS OBRIGATÓRIOS, PRODUTOS OU FOTOS REAIS, REFERÊNCIA PRINCIPAL's
+    // generic zones). Every pattern below is the exact literal wording those
+    // sections emit for a non-flyer topic (see the sibling non-regression
+    // test) — none of it may reach a flyer prompt, assembled whole.
     assert.doesNotMatch(prompt, /Não trocar .* por outro produto listado na oferta/i);
     assert.doesNotMatch(prompt, /como produto principal/i);
+    assert.doesNotMatch(prompt, /produto deve ser o protagonista visual/i, 'HIERARQUIA must not name a single product the protagonist');
+    assert.doesNotMatch(prompt, /produto\/benefício como protagonista/i, 'REFERÊNCIA PRINCIPAL zones must not restate the single-protagonist center label');
+    assert.doesNotMatch(prompt, /produto real em destaque, ocupando a maior área/i, 'ESTRUTURA FEED must not center one product over the largest area');
+    assert.doesNotMatch(prompt, /produto principal como protagonista visual/i, 'ESTRUTURA VERTICAL must not center one product as protagonist');
+    assert.doesNotMatch(prompt, /não inserir preço, pois não há preço cadastrado/i, 'TEXTOS OBRIGATÓRIOS must not ban price when the grid lists exact per-product prices');
+    assert.doesNotMatch(prompt, /provavelmente vende serviço/i, 'PRODUTOS OU FOTOS REAIS must not call a physical-goods flyer a service business');
+
+    // Positive guidance for the no-photo case: the model should still be
+    // told each product is a real physical good it can draw from its name.
+    assert.match(prompt, /oferta de produtos físicos com preço/i);
+    assert.match(prompt, /desenhar cada um de forma reconhecível a partir do nome/i);
   });
 });
 
@@ -10339,6 +10357,13 @@ test('a normal multi-item offer still gets the single-hero brief', async () => {
       },
     }, paths);
 
-    assert.match(calls[0].content.image.prompt, /produto principal/i, 'the scheduled path must keep its hero-product brief — non-regression guard');
+    const prompt = calls[0].content.image.prompt;
+    assert.match(prompt, /produto principal/i, 'the scheduled path must keep its hero-product brief — non-regression guard');
+    // Non-regression guard for the fixes above: a real (non-flyer) offer must
+    // keep every hero/center/price instruction the flyer branch now skips.
+    assert.match(prompt, /produto deve ser o protagonista visual/i);
+    assert.match(prompt, /produto real em destaque, ocupando a maior área/i);
+    assert.match(prompt, /produto\/benefício como protagonista/i);
+    assert.match(prompt, /Preço exato: R\$ 49,90/);
   });
 });
