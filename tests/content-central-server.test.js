@@ -232,6 +232,49 @@ test('AI image reviewer receives the product/layout comparison manifest and retu
   assert.match(prompt, /Não inventar capacidade térmica/i);
 });
 
+test('the visual reviewer gets every flyer product and price, and blocks on any of them being wrong or missing', () => {
+  const prompt = buildAiImageReviewPrompt({
+    project: { name: 'Mercado Teste' },
+    content: {
+      channel: 'instagram_feed',
+      formatLabel: 'Instagram Feed',
+      image: { url: 'https://cdn.example.com/encarte.png' },
+      contentTopic: {
+        source: 'flyer',
+        type: 'offer',
+        label: 'Flyer de ofertas',
+        price: '',
+        items: '',
+        products: [
+          { offerId: 'a', name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote', photoReferenceIds: [] },
+          { offerId: 'b', name: 'Feijão 1kg', price: 'R$ 8,49', priceUnit: 'kg', photoReferenceIds: [] },
+        ],
+      },
+    },
+  });
+
+  assert.match(prompt, /Arroz 5kg\s*—\s*R\$ 24,90/);
+  assert.match(prompt, /Feijão 1kg\s*—\s*R\$ 8,49/);
+  assert.match(prompt, /2 produtos/, 'the reviewer must know the expected count to notice a dropped product');
+  assert.match(prompt, /preço diferente do preço autorizado para aquele produto/i);
+  assert.match(prompt, /produto da lista que não apareça/i);
+  assert.match(prompt, /produto que não esteja na lista/i);
+});
+
+test('a non-flyer card keeps the single authorized price line', () => {
+  const prompt = buildAiImageReviewPrompt({
+    project: { name: 'Boss Pizzaria' },
+    content: {
+      channel: 'instagram_feed',
+      formatLabel: 'Instagram Feed',
+      image: { url: 'https://cdn.example.com/pizza.png' },
+      contentTopic: { source: 'offer', type: 'combo', offerName: 'Combo', price: 'R$ 49,90', items: 'Pizza, refrigerante' },
+    },
+  });
+  assert.match(prompt, /Preço autorizado: R\$ 49,90/);
+  assert.doesNotMatch(prompt, /produtos do encarte/i, 'the flyer block must not leak into normal cards');
+});
+
 test('resolveContentImageAbsolutePath derives the real file path on disk from content.filePath + image.url, without needing targetDir threaded in separately', () => {
   const projectDir = 'C:\\Users\\op\\OneDrive\\Documentos\\PROJETO\\OPENSQUAD\\_opensquad\\content-central\\projects\\boss-pizzaria';
   const resolved = resolveContentImageAbsolutePath({

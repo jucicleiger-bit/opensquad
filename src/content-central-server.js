@@ -3676,6 +3676,16 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     : [];
   const attachmentManifest = comparisonReferences
     .map((reference, index) => `Anexo ${index + 2}: ${reference.role} — ${reference.relativePath || reference.filename || reference.id || 'referência'}.`);
+  // An encarte carries up to twelve prices; the single "Preço autorizado"
+  // line below can only verify one. Hand the reviewer the whole list, so a
+  // wrong price on product 7 is a block rather than an approval.
+  const flyerProducts = expected?.source === 'flyer' && Array.isArray(expected.products) ? expected.products : [];
+  const flyerProductLines = flyerProducts.map((product, index) => {
+    const unit = product.priceUnit ? ` (${product.priceUnit})` : '';
+    return product.price
+      ? `${index + 1}. ${product.name} — ${product.price}${unit}`
+      : `${index + 1}. ${product.name} — sem preço autorizado: não pode aparecer preço nenhum para este produto`;
+  });
   return [
     contentCentralPersonaLine('renata'),
     contentCentralPersonaResponsibilityLine('renata'),
@@ -3688,9 +3698,11 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     'Dados obrigatórios do card:',
     `Projeto: ${project?.name || ''}`,
     `Canal: ${content?.formatLabel || content?.channel || ''}`,
-    `Título/oferta autorizada: ${expected.offerName || 'não definido'}`,
-    `Preço autorizado: ${expected.price || 'não definido'}`,
-    `Itens autorizados: ${expected.items || 'não definidos'}`,
+    flyerProducts.length
+      ? `Produtos do encarte (${flyerProducts.length} produtos, todos obrigatórios):\n${flyerProductLines.join('\n')}`
+      : `Título/oferta autorizada: ${expected.offerName || 'não definido'}`,
+    flyerProducts.length ? '' : `Preço autorizado: ${expected.price || 'não definido'}`,
+    flyerProducts.length ? '' : `Itens autorizados: ${expected.items || 'não definidos'}`,
     `Observações/restrições obrigatórias: ${expected.notes || 'nenhuma'}`,
     `CTA autorizado: ${chooseCreativeCta(expected, content?.channel) || 'nenhum — não deve ter botão/selo de CTA na arte'}`,
     `Tratamento do produto: ${spec.product?.treatment || 'sem referência de produto'}`,
@@ -3705,6 +3717,9 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     '- texto principal, preço, logo ou CTA cortado nas bordas;',
     '- quando houver logo oficial cadastrada/anexada, se a arte mostrar placeholder de marca/logo (ex.: “SUA MARCA”, “YOUR LOGO”, “LOGO AQUI”) em vez da logo real;',
     '- preço diferente do preço autorizado;',
+    flyerProducts.length ? '- preço diferente do preço autorizado para aquele produto específico da lista;' : '',
+    flyerProducts.length ? `- qualquer produto da lista que não apareça visualmente na peça — os ${flyerProducts.length} produtos precisam estar todos presentes;` : '',
+    flyerProducts.length ? '- qualquer produto que não esteja na lista aparecendo na peça;' : '',
     '- oferta extra não pertencente ao assunto atual, como rodízio em card de combo ou combo em card de rodízio;',
     '- qualquer item listado em "Itens autorizados" (ex: um combo com 4 produtos) que não apareça visualmente reconhecível na peça — todos os itens listados precisam estar representados, não só parte deles;',
     '- texto embaralhado, ilegível ou com palavra importante faltando;',
