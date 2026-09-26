@@ -2164,6 +2164,12 @@ export async function generateSpecialDateContent(projectId, options = {}, target
 
 const FLYER_BATCH_PREFIX = 'flyer';
 const MAX_FLYER_PRODUCTS = 12;
+// Date.now() alone can repeat within the same millisecond — writeJson's
+// own temp-file naming elsewhere in this file hit exactly this
+// (reproduced 100% of the time with concurrent carousel slide writes) and
+// added a counter on top for the same reason. Mirror that here so
+// batchToken is structurally unique instead of incidentally so.
+let flyerBatchTokenCounter = 0;
 
 // A market's "encarte": ONE piece carrying several registered products and
 // their prices, generated on demand for a campaign date instead of coming
@@ -2227,12 +2233,13 @@ export async function generateFlyerContent(projectId, options = {}, targetDir = 
   // batchId/contentId and a second call silently overwrote the first
   // (drafts/ is permanent storage; approval/publish never move files out
   // of it). A creation-time token, baked in once and reused for every
-  // channel of this same call, is the same fix already used for ad
-  // creatives/carousels (see generateAdCreative/generateCarousel) — cheap,
-  // stable once written (nothing later recomputes it), and it keeps every
-  // channel of THIS flyer sharing one batchId/creativeGroupKey prefix
-  // while two different flyers (different token) never collide.
-  const batchToken = Date.now();
+  // channel of this same call, keeps every channel of THIS flyer sharing
+  // one batchId/creativeGroupKey prefix while two different flyers never
+  // collide — Date.now() plus a monotonic counter (flyerBatchTokenCounter
+  // above) rather than Date.now() alone, since a bare timestamp can repeat
+  // within the same millisecond (see writeJsonTempCounter's own comment
+  // elsewhere in this file for a case where that happened for real).
+  const batchToken = `${Date.now()}-${flyerBatchTokenCounter++}`;
   const batchId = `${date}-${FLYER_BATCH_PREFIX}-${batchToken}`;
   const batchDir = join(paths.draftsDir, batchId);
   const imageDir = join(batchDir, 'images');
