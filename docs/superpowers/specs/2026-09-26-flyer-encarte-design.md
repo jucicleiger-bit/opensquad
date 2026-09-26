@@ -89,8 +89,9 @@ Aba nova `Flyer` (`/projects/:projectId/flyer`), com um formulário:
 - **Data** e **hora** de publicação.
 - Botão **Gerar flyer**.
 
-Abaixo do formulário, a lista dos flyers já gerados com status, no mesmo
-padrão da aba Carrossel.
+Os flyers já gerados aparecem no Aguardando aprovação, que já lista
+qualquer item aguardando — a aba Flyer não repete essa lista. Se na prática
+fizer falta ver só os encartes, aí sim vale uma lista própria.
 
 O flyer **não** consome cota do plano de conteúdo nem move o cursor do
 rodízio de ofertas/pilares — mesma garantia que `generateSpecialDateContent`
@@ -157,16 +158,20 @@ cadastrado.
 
 ### Rede de segurança
 
-`buildFlyerContentReview`, irmã de `buildCatalogContentReview`
-(`src/content-central.js:3780`), roda no mesmo loop de revisão que já
-existe (`generateAiImageWithReviewLoop`) e checa:
+São duas camadas distintas, e vale não confundi-las:
 
-- todos os N produtos pedidos aparecem na arte;
-- cada preço confere, dígito por dígito, com o cadastrado;
-- nenhum produto que não foi selecionado apareceu.
+**Antes de gerar** — `buildFlyerContentReview`, irmã de
+`buildCatalogContentReview` (`src/content-central.js:3780`), roda no
+`buildContentReview` do item e avisa, no próprio card, quais produtos estão
+sem preço e quais estão sem foto. É conferência de cadastro, não de arte.
 
-Reprovou, o loop regenera sozinho — comportamento que já existe hoje, só
-com uma checklist nova.
+**Depois de gerar** — `buildAiImageReviewPrompt`
+(`src/content-central-server.js:~3640`) é quem olha a arte pronta. Hoje ele
+confere um único "Preço autorizado". Para flyer, recebe a lista inteira, a
+quantidade esperada e regras de bloqueio próprias: preço diferente do
+autorizado para aquele produto, produto da lista ausente, produto de fora
+da lista presente. Reprovou, o loop `generateAiImageWithReviewLoop`
+regenera sozinho — comportamento que já existe, só com checklist nova.
 
 ## Tratamento de erro
 
