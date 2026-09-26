@@ -259,6 +259,16 @@ test('the visual reviewer gets every flyer product and price, and blocks on any 
   assert.match(prompt, /preço diferente do preço autorizado para aquele produto/i);
   assert.match(prompt, /produto da lista que não apareça/i);
   assert.match(prompt, /produto que não esteja na lista/i);
+  assert.equal(
+    prompt.includes('- preço diferente do preço autorizado;'),
+    false,
+    'this bullet\'s antecedent ("Preço autorizado: ...") is blank by design on a flyer card and must not dangle',
+  );
+  assert.equal(
+    prompt.includes('- qualquer item listado em "Itens autorizados" (ex: um combo com 4 produtos) que não apareça visualmente reconhecível na peça — todos os itens listados precisam estar representados, não só parte deles;'),
+    false,
+    'this bullet\'s antecedent ("Itens autorizados: ...") is blank by design on a flyer card and must not dangle',
+  );
 });
 
 test('a non-flyer card keeps the single authorized price line', () => {
@@ -273,6 +283,16 @@ test('a non-flyer card keeps the single authorized price line', () => {
   });
   assert.match(prompt, /Preço autorizado: R\$ 49,90/);
   assert.doesNotMatch(prompt, /produtos do encarte/i, 'the flyer block must not leak into normal cards');
+  assert.equal(
+    prompt.includes('- preço diferente do preço autorizado;'),
+    true,
+    'a normal card keeps this bullet — its antecedent ("Preço autorizado: ...") is still populated',
+  );
+  assert.equal(
+    prompt.includes('- qualquer item listado em "Itens autorizados" (ex: um combo com 4 produtos) que não apareça visualmente reconhecível na peça — todos os itens listados precisam estar representados, não só parte deles;'),
+    true,
+    'a normal card keeps this bullet — its antecedent ("Itens autorizados: ...") is still populated',
+  );
 });
 
 test('resolveContentImageAbsolutePath derives the real file path on disk from content.filePath + image.url, without needing targetDir threaded in separately', () => {
