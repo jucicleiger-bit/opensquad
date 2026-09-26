@@ -3973,6 +3973,23 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
 // Same checks buildContentReview does for a photo/price safety net, scoped
 // to what actually matters for a catalog product card — no CTA/pillar/type
 // checks, since catalog mode has none of those concepts.
+// The operator's last chance to notice that three of the twelve products
+// have no price before the art comes back wrong. Scoped to what an encarte
+// can actually get wrong — no CTA/pillar/type checks, since a flyer has a
+// product list rather than a single offer.
+function buildFlyerContentReview({ contentTopic }) {
+  const products = Array.isArray(contentTopic?.products) ? contentTopic.products : [];
+  const checks = [`${products.length} produto(s) selecionado(s) para o encarte.`];
+  const warnings = [];
+  const semPreco = products.filter((product) => !product.price).map((product) => product.name);
+  const semFoto = products.filter((product) => !(product.photoReferenceIds || []).length).map((product) => product.name);
+  if (semPreco.length) warnings.push(`Sem preço cadastrado: ${semPreco.join(', ')} — a peça sai sem preço para esse(s) produto(s).`);
+  else checks.push('Todos os produtos com preço cadastrado.');
+  if (semFoto.length) warnings.push(`Sem foto cadastrada: ${semFoto.join(', ')} — o produto será desenhado a partir do nome.`);
+  else checks.push('Todos os produtos com foto real anexada.');
+  return { status: warnings.length ? 'warning' : 'ok', checks, warnings };
+}
+
 function buildCatalogContentReview({ contentTopic }) {
   const checks = [];
   const warnings = [];
@@ -6922,6 +6939,7 @@ function formatPillarLines(pillar) {
 }
 
 function buildContentReview({ channel, aspectRatio, dimensions, contentTopic }) {
+  if (contentTopic?.source === 'flyer') return buildFlyerContentReview({ contentTopic });
   const checks = [];
   const warnings = [];
   if (isVerticalStoryChannel(channel)) {

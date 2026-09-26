@@ -8633,6 +8633,47 @@ test('a flyer sends every selected product photo — while a normal offer still 
   });
 });
 
+test('a flyer item warns about products missing a price or a photo, and passes clean when all are complete', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-review', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-review', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const photo = await saveProjectAsset('mercado-review', {
+      kind: 'reference',
+      filename: 'arroz.png',
+      dataUrl,
+      role: 'product_photo',
+    }, dir);
+    const completo = (await saveProjectOffer('mercado-review', {
+      name: 'Arroz 5kg', price: 'R$ 24,90', photoReferenceIds: [photo.metadata.id],
+    }, dir)).offer;
+    const semPreco = (await saveProjectOffer('mercado-review', { name: 'Feijão 1kg', price: '' }, dir)).offer;
+
+    const comProblema = await generateFlyerContent('mercado-review', {
+      offerIds: [completo.id, semPreco.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+    const review = comProblema.items[0].contentReview;
+    assert.equal(review.status, 'warning');
+    assert.ok(review.warnings.some((warning) => /Feijão 1kg/.test(warning) && /preço/i.test(warning)));
+    assert.ok(review.warnings.some((warning) => /Feijão 1kg/.test(warning) && /foto/i.test(warning)));
+    assert.ok(review.checks.some((check) => /2 produto/.test(check)));
+
+    const limpo = await generateFlyerContent('mercado-review', {
+      offerIds: [completo.id],
+      date: '2026-10-01',
+      channels: ['instagram_feed'],
+    }, dir);
+    assert.equal(limpo.items[0].contentReview.status, 'ok');
+  });
+});
+
 test('a normal single-offer topic still caps product photos at two', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'oferta-normal-fotos', name: 'Boss Pizzaria' }, dir);
