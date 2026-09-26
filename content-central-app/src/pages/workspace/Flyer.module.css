@@ -1,0 +1,33 @@
+.counter {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 var(--space-xs);
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+
+.offer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  color: var(--text);
+  margin: 0 0 6px 18px;
+}
+
+.channel {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  color: var(--text);
+  margin: 0 0 6px;
+}

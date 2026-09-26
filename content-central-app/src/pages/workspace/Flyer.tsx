@@ -1,0 +1,156 @@
+import { useMemo, useState } from "react";
+import { useOutletContext } from "react-router-dom";
+import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
+import { generateFlyer } from "@/api/client";
+import { CHANNEL_LABELS, channelFullLabel } from "./contentDisplay";
+import { Button } from "@/components/Button";
+import { Card } from "@/components/Card";
+import { ChannelCheckboxGroup } from "@/components/ChannelCheckboxGroup";
+import styles from "./Flyer.module.css";
+
+const MAX_FLYER_PRODUCTS = 12;
+// Offer the same channel set the rest of the app offers for a single piece
+// (mirrors CHANNEL_CODES in GenerateContent.tsx) — the backend accepts any,
+// so nothing here is a real restriction, just parity with the other tabs.
+const CHANNEL_CODES = Object.keys(CHANNEL_LABELS);
+
+export function Flyer() {
+  const { project } = useOutletContext<WorkspaceContext>();
+  const [selected, setSelected] = useState<string[]>([]);
+  const [channels, setChannels] = useState<Set<string>>(new Set());
+  const [date, setDate] = useState("");
+  const [postTime, setPostTime] = useState("09:00");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const offers = useMemo(
+    () => (project.contentStrategy?.offers || []).filter((offer) => offer.active !== false),
+    [project],
+  );
+  const groups = project.contentStrategy?.offerGroups || [];
+  const full = selected.length >= MAX_FLYER_PRODUCTS;
+
+  // A group checkbox is a bulk toggle over its own offers, nothing more —
+  // the request always travels as an explicit offerIds list, so a group
+  // edited later never silently changes a flyer already generated.
+  function toggleGroup(groupId: string) {
+    const ids = offers.filter((offer) => offer.groupId === groupId).map((offer) => offer.id);
+    const allIn = ids.every((id) => selected.includes(id));
+    setSelected((current) => {
+      if (allIn) return current.filter((id) => !ids.includes(id));
+      const merged = [...current];
+      for (const id of ids) {
+        if (!merged.includes(id) && merged.length < MAX_FLYER_PRODUCTS) merged.push(id);
+      }
+      return merged;
+    });
+  }
+
+  function toggleOffer(offerId: string) {
+    setSelected((current) => {
+      if (current.includes(offerId)) return current.filter((id) => id !== offerId);
+      if (current.length >= MAX_FLYER_PRODUCTS) return current;
+      return [...current, offerId];
+    });
+  }
+
+  function toggleChannel(channel: string) {
+    setChannels((current) => {
+      const next = new Set(current);
+      if (next.has(channel)) next.delete(channel);
+      else next.add(channel);
+      return next;
+    });
+  }
+
+  async function handleGenerate() {
+    setBusy(true);
+    setError(null);
+    try {
+      await generateFlyer(project.projectId, { offerIds: selected, date, channels: [...channels], postTime });
+      setDone(true);
+      setSelected([]);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canGenerate = selected.length > 0 && channels.size > 0 && Boolean(date) && !busy;
+
+  return (
+    <div>
+      <h2 style={{ margin: "0 0 var(--space-xs)" }}>Flyer</h2>
+      <p className="muted" style={{ marginBottom: 16 }}>
+        Monte um encarte com até {MAX_FLYER_PRODUCTS} produtos já cadastrados em Ofertas. Ele vai direto para
+        Aguardando aprovação.
+      </p>
+
+      <Card style={{ padding: 20, marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Produtos</h3>
+        <p className={styles.counter}>
+          {selected.length} de {MAX_FLYER_PRODUCTS} produtos selecionados
+        </p>
+
+        {groups.map((group) => {
+          const ids = offers.filter((offer) => offer.groupId === group.id).map((offer) => offer.id);
+          if (ids.length === 0) return null;
+          return (
+            <label key={group.id} className={styles.group}>
+              <input
+                type="checkbox"
+                checked={ids.every((id) => selected.includes(id))}
+                onChange={() => toggleGroup(group.id)}
+              />
+              {group.name}
+            </label>
+          );
+        })}
+
+        {offers.map((offer) => (
+          <label key={offer.id} className={styles.offer}>
+            <input
+              type="checkbox"
+              checked={selected.includes(offer.id)}
+              disabled={full && !selected.includes(offer.id)}
+              onChange={() => toggleOffer(offer.id)}
+              aria-label={`Produto ${offer.name}`}
+            />
+            <span>{offer.name}</span>
+            <span className="muted">
+              {offer.price || "sem preço"}
+              {offer.priceUnit ? ` / ${offer.priceUnit}` : ""}
+              {(offer.photoReferenceIds || []).length ? "" : " · sem foto"}
+            </span>
+          </label>
+        ))}
+      </Card>
+
+      <Card style={{ padding: 20, marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Publicação</h3>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+          <ChannelCheckboxGroup
+            channels={CHANNEL_CODES}
+            selected={channels}
+            onToggle={toggleChannel}
+            ariaLabel={(channel) => channelFullLabel(channel)}
+          />
+        </div>
+        <label htmlFor="flyer-date">Data de publicação</label>
+        <input id="flyer-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        <label htmlFor="flyer-time" style={{ marginTop: 12 }}>
+          Horário
+        </label>
+        <input id="flyer-time" type="time" value={postTime} onChange={(event) => setPostTime(event.target.value)} />
+      </Card>
+
+      {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
+      {done ? <p className="muted">Flyer gerado. Ele está em Aguardando aprovação.</p> : null}
+      <Button type="button" className="full-width" disabled={!canGenerate} onClick={handleGenerate}>
+        {busy ? "Gerando..." : "Gerar flyer"}
+      </Button>
+    </div>
+  );
+}

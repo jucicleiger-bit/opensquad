@@ -870,6 +870,28 @@ export function deleteCarousel(projectId: string, carouselId: string): Promise<{
   });
 }
 
+// A market's encarte: several registered offers on one piece for a given
+// date/channels — see generateFlyerContent in content-central.js. Same
+// fire-and-forget shape as generateSpecialDateContent: the panel polls
+// PendingApproval for the resulting items instead of this call returning
+// finished images.
+export interface GenerateFlyerInput {
+  offerIds: string[];
+  date: string;
+  channels: string[];
+  postTime?: string;
+}
+
+export function generateFlyer(
+  projectId: string,
+  input: GenerateFlyerInput,
+): Promise<{ batch: { items: ContentItem[] } }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/generate-flyer`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
 // For catalog (venda direta) projects: no formats/channels matrix — just
 // how many days, how many stories per day, and when the first one goes out.
 export interface GenerateCatalogContentInput {

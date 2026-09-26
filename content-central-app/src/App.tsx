@@ -11,6 +11,7 @@ import { Pillars } from "@/pages/workspace/Pillars";
 import { GenerateContent } from "@/pages/workspace/GenerateContent";
 import { AdCreatives } from "@/pages/workspace/AdCreatives";
 import { Carousels } from "@/pages/workspace/Carousels";
+import { Flyer } from "@/pages/workspace/Flyer";
 import { TestPost } from "@/pages/workspace/TestPost";
 import { PendingApproval } from "@/pages/workspace/PendingApproval";
 import { Calendar } from "@/pages/workspace/Calendar";
@@ -56,6 +57,7 @@ export function App() {
           <Route path="gerar" element={<GenerateContent />} />
           <Route path="anuncios" element={<AdCreatives />} />
           <Route path="carrossel" element={<Carousels />} />
+          <Route path="flyer" element={<Flyer />} />
           <Route path="teste" element={<TestPost />} />
           <Route path="aguardando" element={<PendingApproval />} />
           <Route path="calendario" element={<Calendar />} />
