@@ -10366,6 +10366,223 @@ test('a flyer briefs the model as a product grid with literal prices, never as o
   });
 });
 
+// The Feed test above passed while a Story encarte shipped with the raw
+// project name as its entire headline and the model forbidden to improve it:
+// on Feed useSalesHookTitle masked a blank exactTitle, on vertical nothing
+// did. Every literal below comes from buildChatGptFinalCardPrompt /
+// creativeLayoutZones; the paired positives (a non-flyer offer on the same
+// vertical channel keeping exactly the lines negated here) live in the
+// sibling test below.
+test('a flyer on a vertical channel gets a real encarte headline and the grid center, never the bare project name', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-vertical', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-vertical', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+
+    const arroz = (await saveProjectOffer('mercado-vertical', { name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote' }, dir)).offer;
+    const feijao = (await saveProjectOffer('mercado-vertical', { name: 'Feijão 1kg', price: 'R$ 8,49', priceUnit: 'kg' }, dir)).offer;
+    const cafe = (await saveProjectOffer('mercado-vertical', { name: 'Café 500g', price: '', priceUnit: '' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-vertical', {
+      offerIds: [arroz.id, feijao.id, cafe.id],
+      date: '2026-09-30',
+      channels: ['instagram_story'],
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-vertical');
+    const paths = getCentralPaths(dir, 'mercado-vertical');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-vertical', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte-story.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    assert.equal(calls[0].content.channel, 'instagram_story');
+    const prompt = calls[0].content.image.prompt;
+
+    // The headline: not the company name, and not locked.
+    assert.doesNotMatch(prompt, /Título exato: Mercado Teste/i, 'the company name must not be the entire headline of a Story encarte');
+    assert.doesNotMatch(prompt, /Não alterar título/i, 'an AI-written encarte headline must not then be frozen');
+    assert.ok(
+      prompt.includes('Título: criar um título curto (até 5 palavras) de abertura de encarte de ofertas'),
+      'the flyer must get its own encarte-opener headline instruction',
+    );
+    assert.ok(
+      prompt.includes('Não alterar preço. Não criar telefone, endereço, desconto ou informação extra.'),
+      'prices stay locked even though the headline is free',
+    );
+    assert.ok(
+      prompt.includes('Não criar urgência, estoque, prazo, desconto ou garantia falsa.'),
+      'a free headline over a price grid must not be allowed to invent a discount',
+    );
+    assert.ok(
+      prompt.includes('2. Título de abertura do encarte criado pela IA (chamada curta de ofertas acima da grade).'),
+      'HIERARQUIA must name the AI-written headline instead of rendering an empty exact title',
+    );
+    assert.doesNotMatch(prompt, /2\. Título “”/, 'the title slot must never render with an empty exact title');
+
+    // The vertical center/hierarchy wording is the grid wording.
+    assert.ok(
+      prompt.includes('Centro: grade vertical com todos os produtos da lista, cada um com nome e preço legíveis — nenhum produto isolado como protagonista.'),
+      'ESTRUTURA VERTICAL OBRIGATÓRIA must describe the grid',
+    );
+    assert.ok(
+      prompt.includes('Centro (18-68%): grade com todos os produtos e preços da oferta lado a lado, nenhum produto isolado como protagonista.'),
+      "REFERÊNCIA PRINCIPAL's vertical zones must describe the grid too",
+    );
+    assert.ok(
+      prompt.includes('Encarte de ofertas em grade com todos os 3 produtos abaixo, cada um com seu preço:'),
+      'the numbered grid must reach the vertical prompt as well',
+    );
+    assert.doesNotMatch(prompt, /Centro: produto principal como protagonista visual/i);
+    assert.doesNotMatch(prompt, /Centro \(18-68%\): produto\/benefício como protagonista/i);
+  });
+});
+
+// Reproduces the mix-up the spec warned about: the grid is numbered in the
+// operator's selection order while photos arrive in reference-registration
+// order, so an unlabeled photo list next to a numbered grid pairs the wrong
+// price with the wrong product. Selection here is the exact reverse of
+// registration, so an unlabeled list would be maximally wrong.
+test('a flyer labels every product photo with its own product and that product\'s exact price', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-rotulo', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-rotulo', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const specs = [
+      { name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote' },
+      { name: 'Feijão 1kg', price: 'R$ 8,49', priceUnit: 'kg' },
+      { name: 'Café 500g', price: '', priceUnit: '' },
+    ];
+    const offers = [];
+    for (const [index, spec] of specs.entries()) {
+      const reference = await saveProjectAsset('mercado-rotulo', {
+        kind: 'reference', filename: `foto-${index}.png`, dataUrl, role: 'product_photo',
+      }, dir);
+      offers.push((await saveProjectOffer('mercado-rotulo', {
+        ...spec, photoReferenceIds: [reference.metadata.id],
+      }, dir)).offer);
+    }
+
+    const batch = await generateFlyerContent('mercado-rotulo', {
+      // Reverse of registration order, on purpose.
+      offerIds: [offers[2].id, offers[1].id, offers[0].id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-rotulo');
+    const paths = getCentralPaths(dir, 'mercado-rotulo');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-rotulo', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    const prompt = calls[0].content.image.prompt;
+
+    assert.equal(
+      calls[0].content.image.references.filter((reference) => reference.role === 'product_photo').length,
+      3,
+      'all three linked photos must travel',
+    );
+    // Each photo names its own product and that product's exact price.
+    assert.ok(prompt.includes('Foto de "Arroz 5kg" (R$ 24,90): assets/references/foto-0.png'), 'foto-0 belongs to Arroz 5kg');
+    assert.ok(prompt.includes('Foto de "Feijão 1kg" (R$ 8,49): assets/references/foto-1.png'), 'foto-1 belongs to Feijão 1kg');
+    assert.ok(
+      prompt.includes('Foto de "Café 500g" (sem preço cadastrado): assets/references/foto-2.png'),
+      'a photo of a product with no registered price must say so, not borrow another product\'s price',
+    );
+    assert.ok(
+      prompt.includes('Usar a foto real anexada de cada produto no espaço correspondente a ele — cada foto anexada vem rotulada com o nome e o preço do produto a que pertence.'),
+      'the brief must tell the model the photo/product correspondence is written down',
+    );
+    // The bare label is what used to ship, and it is exactly what misleads
+    // here: foto-0 is Arroz, which is grid slot 3, not slot 1.
+    assert.ok(!prompt.includes('Foto selecionada:'), 'a flyer must never emit the unlabeled photo line');
+    assert.ok(prompt.includes('1. Café 500g — sem preço cadastrado: não exibir preço para este produto'));
+    assert.ok(prompt.includes('3. Arroz 5kg — R$ 24,90 (pacote)'), 'the grid follows selection order while foto-0 is Arroz — the reason the label is mandatory');
+  });
+});
+
+// C1's guard. The default state of a flyer is products with no linked photo
+// (photoReferenceIds is empty until someone links one), and a market that
+// has uploaded photos for other things then had up to twelve of them pulled
+// in by the keyword-guess pool fallback — products not in the campaign,
+// handed over as "render these faithfully" while the same prompt declared
+// every listed product photo-less. The non-flyer half of this pair (a topic
+// with no linked photo still getting pool photos) is asserted by the
+// esfiha/pizza keyword-fallback tests earlier in this file.
+test('a photo-less flyer attaches no photo at all, even when the project holds unclaimed product photos', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-pool', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-pool', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    for (let index = 0; index < 8; index += 1) {
+      await saveProjectAsset('mercado-pool', {
+        kind: 'reference', filename: `avulsa-${index}.png`, dataUrl, role: 'product_photo',
+      }, dir);
+    }
+    const arroz = (await saveProjectOffer('mercado-pool', { name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote' }, dir)).offer;
+    const feijao = (await saveProjectOffer('mercado-pool', { name: 'Feijão 1kg', price: 'R$ 8,49', priceUnit: 'kg' }, dir)).offer;
+    const cafe = (await saveProjectOffer('mercado-pool', { name: 'Café 500g', price: '', priceUnit: '' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-pool', {
+      offerIds: [arroz.id, feijao.id, cafe.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-pool');
+    const paths = getCentralPaths(dir, 'mercado-pool');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-pool', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    const prompt = calls[0].content.image.prompt;
+
+    assert.deepEqual(
+      calls[0].content.image.references.filter((reference) => reference.role === 'product_photo'),
+      [],
+      'no unclaimed pool photo may be attached to a flyer — a flyer asserts a per-product photo correspondence a guess cannot satisfy',
+    );
+    assert.doesNotMatch(prompt, /avulsa-/, 'no unrelated photo may be named in the prompt either');
+    assert.ok(!prompt.includes('Foto selecionada:'));
+    assert.ok(!prompt.includes('Foto de "'), 'nothing to label when nothing is attached');
+    // And the piece must still be briefed as a real physical-goods offer,
+    // with the photo instruction gone rather than dangling over no photos.
+    assert.ok(
+      prompt.includes('Este encarte está sem foto real de produto anexada, mas é uma oferta de produtos físicos com preço'),
+      'a flyer with no photo is still a physical-goods price list, never a service and never "criar produto/serviço"',
+    );
+    assert.doesNotMatch(prompt, /criar produto\/serviço coerente/i, 'the generic no-photo fallback must not claim an encarte might be a service');
+    assert.ok(
+      !prompt.includes('Usar a foto real anexada de cada produto no espaço correspondente a ele'),
+      'the per-product photo rule must not dangle when no product has a photo',
+    );
+    assert.match(prompt, /desenhar cada um de forma reconhecível a partir do nome/i);
+    assert.ok(prompt.includes('1. Arroz 5kg — R$ 24,90 (pacote)'), 'the grid and its literal prices survive with no photos');
+  });
+});
+
 test('a normal multi-item offer still gets the single-hero brief', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'oferta-heroi', name: 'Boss Pizzaria' }, dir);
@@ -10377,28 +10594,32 @@ test('a normal multi-item offer still gets the single-hero brief', async () => {
     // never calls imageGenerator at all, which is not what this
     // non-regression test is about.
     await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'vertical', dir);
     await saveProjectOffer('oferta-heroi', {
       name: 'Combo',
       price: 'R$ 49,90',
       items: 'Pizza grande, refrigerante 2L',
     }, dir);
 
-    const batch = await generateContentBatch('oferta-heroi', {
-      days: 1,
-      startDate: '2026-09-01',
-      channel: 'instagram_feed',
-    }, dir);
-    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'oferta-heroi');
-    const paths = getCentralPaths(dir, 'oferta-heroi');
-    const calls = [];
-    await enrichBatchItemsWithRealImages(batch, project, 'oferta-heroi', {
-      imageGenerator: async (payload) => {
-        calls.push(payload);
-        return { url: 'https://cdn.example.com/combo.png', mimeType: 'image/png' };
-      },
-    }, paths);
+    const promptFor = async (channel) => {
+      const batch = await generateContentBatch('oferta-heroi', {
+        days: 1,
+        startDate: '2026-09-01',
+        channel,
+      }, dir);
+      const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'oferta-heroi');
+      const paths = getCentralPaths(dir, 'oferta-heroi');
+      const calls = [];
+      await enrichBatchItemsWithRealImages(batch, project, 'oferta-heroi', {
+        imageGenerator: async (payload) => {
+          calls.push(payload);
+          return { url: 'https://cdn.example.com/combo.png', mimeType: 'image/png' };
+        },
+      }, paths);
+      return calls[0].content.image.prompt;
+    };
 
-    const prompt = calls[0].content.image.prompt;
+    const prompt = await promptFor('instagram_feed');
     assert.match(prompt, /produto principal/i, 'the scheduled path must keep its hero-product brief — non-regression guard');
     // Non-regression guard for the fixes above: a real (non-flyer) offer must
     // keep every hero/center/price instruction the flyer branch now skips.
@@ -10406,5 +10627,15 @@ test('a normal multi-item offer still gets the single-hero brief', async () => {
     assert.match(prompt, /produto real em destaque, ocupando a maior área/i);
     assert.match(prompt, /produto\/benefício como protagonista/i);
     assert.match(prompt, /Preço exato: R\$ 49,90/);
+
+    // Paired positives for the vertical flyer test above: on the same
+    // vertical channel a normal offer keeps the exact-title lock and the
+    // single-protagonist center that the flyer branch replaces.
+    const storyPrompt = await promptFor('instagram_story');
+    assert.match(storyPrompt, /Título exato: Combo/);
+    assert.ok(storyPrompt.includes('Não alterar título, preço'), 'a real offer name stays locked — only a flyer/free-title topic drops this');
+    assert.ok(storyPrompt.includes('Centro: produto principal como protagonista visual.'));
+    assert.ok(storyPrompt.includes('Centro (18-68%): produto/benefício como protagonista.'));
+    assert.ok(!storyPrompt.includes('grade com todos os produtos'), 'the flyer grid wording must not leak into a normal vertical offer');
   });
 });

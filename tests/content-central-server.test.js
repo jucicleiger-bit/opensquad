@@ -255,6 +255,12 @@ test('the visual reviewer gets every flyer product and price, and blocks on any 
 
   assert.match(prompt, /Arroz 5kg\s*—\s*R\$ 24,90/);
   assert.match(prompt, /Feijão 1kg\s*—\s*R\$ 8,49/);
+  // The numbering and the unit rendering come from the same
+  // formatFlyerProductLines the generation brief's grid uses — this asserts
+  // the reviewer's copy of the money line character for character, so the
+  // shared formatter can't be changed for one reader and not the other.
+  assert.ok(prompt.includes('1. Arroz 5kg — R$ 24,90 (pacote)'));
+  assert.ok(prompt.includes('2. Feijão 1kg — R$ 8,49 (kg)'));
   assert.match(prompt, /2 produtos/, 'the reviewer must know the expected count to notice a dropped product');
   assert.match(prompt, /preço diferente do preço autorizado para aquele produto/i);
   assert.match(prompt, /produto da lista que não apareça/i);

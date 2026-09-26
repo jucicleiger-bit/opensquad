@@ -3970,9 +3970,6 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
   return { ...plan, summary: buildPlanSummary(plan) };
 }
 
-// Same checks buildContentReview does for a photo/price safety net, scoped
-// to what actually matters for a catalog product card — no CTA/pillar/type
-// checks, since catalog mode has none of those concepts.
 // The operator's last chance to notice that three of the twelve products
 // have no price before the art comes back wrong. Scoped to what an encarte
 // can actually get wrong — no CTA/pillar/type checks, since a flyer has a
@@ -3990,6 +3987,9 @@ function buildFlyerContentReview({ contentTopic }) {
   return { status: warnings.length ? 'warning' : 'ok', checks, warnings };
 }
 
+// Same checks buildContentReview does for a photo/price safety net, scoped
+// to what actually matters for a catalog product card — no CTA/pillar/type
+// checks, since catalog mode has none of those concepts.
 function buildCatalogContentReview({ contentTopic }) {
   const checks = [];
   const warnings = [];
@@ -7482,7 +7482,18 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // of the pillar topic — the operator's own note, when given, already
   // reaches the model through the OBJETIVO section above regardless.
   const isAdCreativeFreeTitle = topic.source === 'ad_creative' && !topic.offerId;
-  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle;
+  // Fourth time, and the only one where the piece has no message at all
+  // without the fix: a flyer's offerName is blank by design (the products and
+  // their prices live on topic.products), so exactTitle collapsed to the raw
+  // project name — "Título exato: Mercado Teste" followed by "Não alterar
+  // título", the company name as the entire headline with the model forbidden
+  // to improve it. On Feed useSalesHookTitle masked it; on Story/vertical
+  // nothing did. Kept as its own case rather than folded into the goal branch
+  // because an encarte's headline is neither a curiosity hook nor a
+  // celebration — it's the opener over a price grid ("SUPER OFERTAS"), and
+  // it must not invent the one thing a price grid can be wrong about.
+  const isFlyerFreeTitle = topic.source === 'flyer';
+  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
     || topic.ideaTitle
@@ -7590,7 +7601,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       objective,
     ]),
     section('TEXTOS OBRIGATÓRIOS', [
-      isSpecialDateFreeTitle
+      isFlyerFreeTitle
+        ? `Título: criar um título curto (até 5 palavras) de abertura de encarte de ofertas — a chamada que fica acima da grade de produtos (ex. de estilo, adaptar: "Super ofertas", "Ofertas imperdíveis", "Confira nossas ofertas"). Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
+        : isSpecialDateFreeTitle
         ? `Título: criar um título curto (até 8 palavras) com tom caloroso e comemorativo sobre "${freeTitleSubject}" — é um post de celebração da data, não uma oferta nem uma peça comercial. Pode conectar de leve com o negócio/segmento da marca, mas sem soar como anúncio, pitch de venda ou gancho de captação. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo.`
         : isGoalTopic || isAdCreativeFreeTitle
           ? `Título: criar um título curto (até 8 palavras), chamativo, em formato de gancho ou pergunta específica sobre "${freeTitleSubject}" — não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Ex. de estilo (adaptar ao assunto real, não copiar): pergunta direta que gera curiosidade, seguida de um subtítulo curto que reforça o valor.`
@@ -7625,7 +7638,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       ].join(''),
       realUrgency
         ? 'Não inventar outra urgência além da cadastrada.'
-        : useSalesHookTitle ? 'Não criar urgência, estoque, prazo, desconto ou garantia falsa.' : '',
+        // A flyer reached this line through useSalesHookTitle on Feed and lost
+        // it the moment it joined isFreeTitleTopic above; it's the one piece
+        // that least tolerates an invented discount, so it gets the ban
+        // explicitly (on Story too, which never had it).
+        : useSalesHookTitle || isFlyerFreeTitle ? 'Não criar urgência, estoque, prazo, desconto ou garantia falsa.' : '',
     ]),
     section('ATIVOS OFICIAIS', logoReferences.length ? [
       'Utilizar a logo oficial anexada.',
@@ -7664,18 +7681,25 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : 'Não substituir por outro produto/serviço nem deformar sua identidade real.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
-      ...productReferences.map((reference) => `Foto selecionada: ${reference.relativePath}`),
-    ] : hasAnyProductPhotoReference(project) ? [
-      'Sem foto real selecionada nesta geração; criar produto/serviço coerente sem copiar marca de terceiros.',
+      ...productReferences.map((reference) => (topic.source === 'flyer'
+        ? flyerProductLabelFor(topic, reference)
+        : `Foto selecionada: ${reference.relativePath}`)),
+    ] : topic.source === 'flyer' ? [
+      // A flyer is always a physical-goods price list, so both generic
+      // no-photo branches below are wrong for it: one offers to "criar
+      // produto/serviço", the other infers a service business from the
+      // project never having uploaded a photo. A market that just hasn't
+      // photographed its products yet is still selling products. Ordered
+      // ahead of hasAnyProductPhotoReference because since a photo-less
+      // flyer stopped borrowing pool photos (buildPrimaryAiImageReferences)
+      // this is the common case, not the rare one: a project can hold a
+      // shelf full of unclaimed product photos while this encarte's own
+      // products have none linked.
+      'Este encarte está sem foto real de produto anexada, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
-    ] : topic.source === 'flyer' ? [
-      // A flyer is always a physical-goods price list — the "no product
-      // photo ever uploaded on this project => it's a service business"
-      // inference below is categorically false here (a market that just
-      // hasn't photographed its products yet is still selling products),
-      // so it gets its own framing instead of the generic fallback.
-      'Este encarte não tem nenhuma foto real de produto cadastrada no projeto, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.',
+    ] : hasAnyProductPhotoReference(project) ? [
+      'Sem foto real selecionada nesta geração; criar produto/serviço coerente sem copiar marca de terceiros.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
     ] : [
@@ -7748,7 +7772,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     section('HIERARQUIA', [
       quantityRules.heroLine || productFocus.heroLine || (productReferences.length ? '1. Produto/foto real em destaque.' : '1. Produto ou benefício principal em destaque.'),
       quantityRules.heroLine && productFocus.heroLine ? productFocus.heroLine : '',
-      isGoalTopic || useSalesHookTitle ? '2. Título chamativo criado pela IA (gancho curto e específico do assunto real).' : `2. Título “${exactTitle}”.`,
+      // A flyer has no exactTitle (see isFlyerFreeTitle) and isn't a hook
+      // either, so without its own line this slot rendered `2. Título “”.`
+      isFlyerFreeTitle
+        ? '2. Título de abertura do encarte criado pela IA (chamada curta de ofertas acima da grade).'
+        : isGoalTopic || useSalesHookTitle ? '2. Título chamativo criado pela IA (gancho curto e específico do assunto real).' : `2. Título “${exactTitle}”.`,
       exactPrice ? `3. Preço “${exactPrice}” em selo compacto de alto contraste.` : '',
       exactCta ? (useSubtleCta ? `4. Chamada sutil “${exactCta}” (sem botão).` : `4. CTA “${exactCta}”.`) : '',
       logoReferences.length ? '5. Logo oficial.' : '',
@@ -8046,6 +8074,47 @@ function prioritizeReferencesByTopic(refs, focus) {
   return [...matching, ...rest];
 }
 
+// The encarte money line, written once for the two readers that must agree
+// on it character for character: the generation brief's HIERARQUIA grid here
+// and buildAiImageReviewPrompt's authorized product list in
+// content-central-server.js. The visual reviewer's entire authority comes
+// from its list matching the brief's — let the numbering or the unit
+// rendering drift on one side and it starts blocking correct art or
+// approving a cross-attached price, and since each module's test asserts
+// only its own literals a one-sided edit passes green. Only the per-product
+// line is shared; each caller keeps its own no-price wording, which is about
+// its own job ("don't display" for the brief, "must not appear" for the
+// reviewer).
+export function formatFlyerProductLines(products = [], missingPriceText = '') {
+  return products.map((product, index) => {
+    const unit = product.priceUnit ? ` (${product.priceUnit})` : '';
+    return product.price
+      ? `${index + 1}. ${product.name} — ${product.price}${unit}`
+      : `${index + 1}. ${product.name} — ${missingPriceText}`;
+  });
+}
+
+// A flyer's photo list has to say which product each photo belongs to. The
+// grid is numbered in the operator's selection order while the photos arrive
+// in reference-registration order, so an unlabeled "Foto selecionada:
+// foto-0.png" sitting under a numbered grid doesn't just fail to help — the
+// two numberings invite the model to pair grid slot 1 with the first
+// filename, which is usually a different product. Per spec
+// (docs/superpowers/specs/2026-09-26-flyer-encarte-design.md): "O rótulo é
+// obrigatório: sem ele o modelo embaralha qual preço pertence a qual foto."
+// A photo that no selected product claims is said to be unclaimed rather
+// than silently borrowing the product next to it; a photo linked to two
+// products is labeled with the first one that claimed it, since the same
+// photo standing for two different SKUs is a data oddity, not a case worth
+// branching on.
+function flyerProductLabelFor(topic = {}, reference = {}) {
+  const products = Array.isArray(topic.products) ? topic.products : [];
+  const owner = products.find((product) => (product.photoReferenceIds || []).includes(reference.id));
+  return owner
+    ? `Foto de "${owner.name}" (${owner.price || 'sem preço cadastrado'}): ${reference.relativePath}`
+    : `Foto sem produto correspondente na lista — não usar como produto da grade: ${reference.relativePath}`;
+}
+
 // An encarte is a grid, not a hero shot. Every selected product gets its
 // own numbered slot with its own exact price; naming the total count makes
 // a dropped product a visible failure rather than a silent one. Prices go
@@ -8053,12 +8122,7 @@ function prioritizeReferencesByTopic(refs, focus) {
 // wrong price in a market's window.
 function buildFlyerProductFocus(topic = {}) {
   const products = Array.isArray(topic.products) ? topic.products : [];
-  const lines = products.map((product, index) => {
-    const unit = product.priceUnit ? ` (${product.priceUnit})` : '';
-    return product.price
-      ? `${index + 1}. ${product.name} — ${product.price}${unit}`
-      : `${index + 1}. ${product.name} — sem preço cadastrado: não exibir preço para este produto`;
-  });
+  const lines = formatFlyerProductLines(products, 'sem preço cadastrado: não exibir preço para este produto');
   const missingPrice = products.filter((product) => !product.price).map((product) => product.name);
   const missingPhoto = products
     .filter((product) => !(Array.isArray(product.photoReferenceIds) && product.photoReferenceIds.length))
@@ -8067,7 +8131,15 @@ function buildFlyerProductFocus(topic = {}) {
     heroLine: `Encarte de ofertas em grade com todos os ${products.length} produtos abaixo, cada um com seu preço:\n${lines.join('\n')}`,
     assetLines: [
       'Cada produto da lista ocupa o seu próprio espaço na grade, com o nome e o preço legíveis ao lado ou abaixo dele.',
-      'Usar a foto real anexada de cada produto no espaço correspondente a ele.',
+      // Only when at least one product actually has a photo. Unconditional,
+      // this read as "use each product's attached photo" immediately above
+      // "none of these products has a photo" — invisible while a photo-less
+      // flyer was still being handed pool photos, glaring once it stopped.
+      // The label clause tells the model the correspondence is written down
+      // (see flyerProductLabelFor) instead of left to it to guess.
+      missingPhoto.length < products.length
+        ? 'Usar a foto real anexada de cada produto no espaço correspondente a ele — cada foto anexada vem rotulada com o nome e o preço do produto a que pertence.'
+        : '',
       // Positive guidance for the no-photo case (a market that hasn't
       // photographed its products yet is still a real physical-goods
       // offer, never a service) — this line reaches every PRODUTOS OU
@@ -8395,9 +8467,21 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   // plain product shot instead of the conceptual/benefit-led piece it
   // should be. Only an explicit photoReferenceIds pick opts a goal topic
   // into a real product photo; the pool guess stays offer-topics-only.
+  // A flyer is the same problem with money attached, and worse: its prompt
+  // asserts a per-product photo correspondence ("usar a foto real anexada de
+  // cada produto no espaço correspondente a ele") and labels every photo with
+  // the product and exact price it belongs to. A keyword-guessed pool photo
+  // has no product to belong to, so with productPhotoLimit at 12 an encarte
+  // whose products have no linked photo (the default state — photoReferenceIds
+  // is empty until someone links one) collected up to twelve photos of items
+  // that aren't even in the campaign and was told to render them faithfully,
+  // while the same prompt declared those products photo-less. Only an explicit
+  // per-product link is meaningful here; with none, the products get drawn
+  // from their names, which the flyer branch of PRODUTOS OU FOTOS REAIS asks
+  // for in so many words.
   const productPhotos = linkedPhotos.length
     ? linkedPhotos
-    : options.topic?.source === 'goal'
+    : options.topic?.source === 'goal' || options.topic?.source === 'flyer'
       ? []
       : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, productPhotoLimit);
   const postType = deriveCreativePostType(options.topic);

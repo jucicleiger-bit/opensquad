@@ -77,6 +77,7 @@ import {
   regenerateCarouselSlide,
   regenerateContentCarouselSlide,
   enrichBatchItemsWithRealImages,
+  formatFlyerProductLines,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -3678,14 +3679,12 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
     .map((reference, index) => `Anexo ${index + 2}: ${reference.role} — ${reference.relativePath || reference.filename || reference.id || 'referência'}.`);
   // An encarte carries up to twelve prices; the single "Preço autorizado"
   // line below can only verify one. Hand the reviewer the whole list, so a
-  // wrong price on product 7 is a block rather than an approval.
+  // wrong price on product 7 is a block rather than an approval. The line
+  // format itself comes from formatFlyerProductLines in content-central.js,
+  // shared with the generation brief's own grid so the authorized list and
+  // the brief it reviews against can't drift apart — see that function.
   const flyerProducts = expected?.source === 'flyer' && Array.isArray(expected.products) ? expected.products : [];
-  const flyerProductLines = flyerProducts.map((product, index) => {
-    const unit = product.priceUnit ? ` (${product.priceUnit})` : '';
-    return product.price
-      ? `${index + 1}. ${product.name} — ${product.price}${unit}`
-      : `${index + 1}. ${product.name} — sem preço autorizado: não pode aparecer preço nenhum para este produto`;
-  });
+  const flyerProductLines = formatFlyerProductLines(flyerProducts, 'sem preço autorizado: não pode aparecer preço nenhum para este produto');
   return [
     contentCentralPersonaLine('renata'),
     contentCentralPersonaResponsibilityLine('renata'),
