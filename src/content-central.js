@@ -7479,7 +7479,10 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // allowed.
   const useSubtleCta = topic.source !== 'ad_creative' && Boolean(exactCta);
   const logoReferences = selectedReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
-  const productReferences = selectedReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2);
+  // Mirrors the limit in buildPrimaryAiImageReferences — a flyer describes
+  // every product photo it was sent, everything else describes at most two.
+  const productReferences = selectedReferences.filter((reference) => reference.role === 'product_photo')
+    .slice(0, topic.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2);
   // Only trust a photo as "this exact real product" when it's the one this
   // topic/offer explicitly linked (see buildPrimaryAiImageReferences) — a
   // pool-matched photo (legacy pizza/esfiha keyword fallback) doesn't get
@@ -8262,6 +8265,10 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   }
   const brandAssets = selected.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
   const productPool = selected.filter((reference) => reference.role === 'product_photo' && !claimedByOtherOffers.has(reference.id));
+  // A flyer is the one piece that legitimately needs every linked photo:
+  // each product on the encarte grid shows its own. Single-hero pieces keep
+  // the 2-photo cap that stops the prompt from fighting over protagonists.
+  const productPhotoLimit = options.topic?.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2;
   // A topic/offer with its own explicitly linked photo(s) — e.g. a reseller
   // with dozens of visually distinct real products (phone models, shoes,
   // etc.) — must always show THAT exact product, never a guess from a
@@ -8279,7 +8286,7 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   // guess, so the "claimed by a different offer" guard — meant to stop the
   // keyword fallback from grabbing the wrong product — must not apply to it).
   const linkedPhotos = linkedPhotoIds.size
-    ? selected.filter((reference) => reference.role === 'product_photo' && linkedPhotoIds.has(reference.id)).slice(0, 2)
+    ? selected.filter((reference) => reference.role === 'product_photo' && linkedPhotoIds.has(reference.id)).slice(0, productPhotoLimit)
     : [];
   // Institutional/authority/relationship posts (source 'goal') aren't about
   // one specific product — with a multi-product catalog, the keyword-guess
@@ -8293,7 +8300,7 @@ function buildPrimaryAiImageReferences(references, options = {}) {
     ? linkedPhotos
     : options.topic?.source === 'goal'
       ? []
-      : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, 2);
+      : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, productPhotoLimit);
   const postType = deriveCreativePostType(options.topic);
   const shape = creativeShapeGroupForChannel(options.channel);
   const templateRequired = requiresCreativeTemplate(postType);

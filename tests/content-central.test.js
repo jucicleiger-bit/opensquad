@@ -8573,6 +8573,111 @@ test('generateFlyerContent lets two encartes for the same project and date coexi
   });
 });
 
+test('a flyer sends every selected product photo — while a normal offer still caps at two', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-fotos', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-fotos', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+
+    // Four real product photos, each linked to its own offer.
+    const products = [
+      { name: 'Arroz 5kg', price: 'R$ 24,90', unit: 'pacote' },
+      { name: 'Feijão 1kg', price: 'R$ 8,49', unit: 'kg' },
+      { name: 'Café 500g', price: 'R$ 17,90', unit: 'pacote' },
+      { name: 'Açúcar 1kg', price: 'R$ 4,29', unit: 'kg' },
+    ];
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const offerIds = [];
+    for (const [index, product] of products.entries()) {
+      const reference = await saveProjectAsset('mercado-fotos', {
+        kind: 'reference',
+        filename: `produto-${index}.png`,
+        dataUrl,
+        role: 'product_photo',
+      }, dir);
+      const offer = (await saveProjectOffer('mercado-fotos', {
+        name: product.name,
+        price: product.price,
+        priceUnit: product.unit,
+        photoReferenceIds: [reference.metadata.id],
+      }, dir)).offer;
+      offerIds.push(offer.id);
+    }
+
+    const batch = await generateFlyerContent('mercado-fotos', {
+      offerIds,
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-fotos');
+    const paths = getCentralPaths(dir, 'mercado-fotos');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-fotos', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte.png', mimeType: 'image/png' };
+      },
+    }, paths);
+
+    const sentReferences = calls[0].content.image.references;
+    const productPhotos = sentReferences.filter((reference) => reference.role === 'product_photo');
+    assert.equal(productPhotos.length, 4, 'all four product photos must travel — the 2-photo cap is for single-hero pieces');
+
+    // The prompt text that names each product next to its own price is
+    // Task 4's job (buildFlyerProductFocus); this task only proves the
+    // photos are no longer thrown away before they get there.
+  });
+});
+
+test('a normal single-offer topic still caps product photos at two', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'oferta-normal-fotos', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('oferta-normal-fotos', {
+      brandName: 'Boss Pizzaria', segmentGroup: 'Alimenticio', segmentCategory: 'Pizzaria', segment: 'pizzaria', productsOrServices: 'pizzas',
+    }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'offer', 'feed', dir);
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const referenceIds = [];
+    for (let index = 0; index < 4; index += 1) {
+      const reference = await saveProjectAsset('oferta-normal-fotos', {
+        kind: 'reference',
+        filename: `pizza-${index}.png`,
+        dataUrl,
+        role: 'product_photo',
+      }, dir);
+      referenceIds.push(reference.metadata.id);
+    }
+    await saveProjectOffer('oferta-normal-fotos', {
+      name: 'Pizza Grande',
+      price: 'R$ 49,90',
+      photoReferenceIds: referenceIds,
+    }, dir);
+
+    const batch = await generateContentBatch('oferta-normal-fotos', {
+      days: 1,
+      startDate: '2026-09-01',
+      channel: 'instagram_feed',
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'oferta-normal-fotos');
+    const paths = getCentralPaths(dir, 'oferta-normal-fotos');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'oferta-normal-fotos', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/pizza.png', mimeType: 'image/png' };
+      },
+    }, paths);
+
+    const productPhotos = calls[0].content.image.references.filter((reference) => reference.role === 'product_photo');
+    assert.ok(productPhotos.length <= 2, 'the scheduled path must keep its 2-photo cap — this is the non-regression guard');
+  });
+});
+
 test('generateAdCreative builds a standalone ad creative — no scheduledDate/approval/publish fields, tied to an offer when one is given', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'anuncio-oferta', name: 'Boss Pizzaria' }, dir);
