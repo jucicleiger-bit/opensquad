@@ -24,9 +24,20 @@ function stubFetchSequence(responses: Array<{ body: unknown; ok?: boolean }>) {
   );
 }
 
-function projectState(offers: ProjectOffer[] = [], offerGroups: OfferGroup[] = []) {
+function projectState(
+  offers: ProjectOffer[] = [],
+  offerGroups: OfferGroup[] = [],
+  contentSettings?: Record<string, unknown>,
+) {
   return {
-    projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", contentStrategy: { offers, offerGroups } }],
+    projects: [
+      {
+        projectId: "boss-pizzaria",
+        name: "Boss Pizzaria",
+        contentStrategy: { offers, offerGroups },
+        ...(contentSettings ? { contentSettings } : {}),
+      },
+    ],
     globalRules: {},
   };
 }
@@ -95,11 +106,68 @@ describe("Flyer", () => {
     expect(screen.getAllByRole("checkbox", { checked: true })).toHaveLength(13);
   });
 
+  it("caps a group selection at 12 without dropping already-selected individual offers", async () => {
+    const groups: OfferGroup[] = [{ id: "group-big", name: "Grupo grande" }];
+    const individualOffers: ProjectOffer[] = Array.from({ length: 10 }, (_, index) => ({
+      id: `offer-ind-${index + 1}`,
+      name: `Individual ${index + 1}`,
+      type: "offer",
+      active: true,
+    }));
+    const groupOffers: ProjectOffer[] = Array.from({ length: 5 }, (_, index) => ({
+      id: `offer-grp-${index + 1}`,
+      name: `Grupo item ${index + 1}`,
+      type: "offer",
+      active: true,
+      groupId: "group-big",
+    }));
+    stubFetchSequence([{ body: projectState([...individualOffers, ...groupOffers], groups) }]);
+    renderFlyer();
+
+    await screen.findByText("Grupo grande");
+    for (const offer of individualOffers) {
+      await userEvent.click(screen.getByLabelText(`Produto ${offer.name}`));
+    }
+    expect(screen.getByText("10 de 12 produtos selecionados")).toBeInTheDocument();
+
+    // The group has 5 members but only 2 slots remain — selecting it must
+    // stop at the cap, not drop the 10 individually-selected offers to make
+    // room, and not silently ignore the group click either.
+    await userEvent.click(screen.getByLabelText("Grupo grande"));
+    expect(screen.getByText("12 de 12 produtos selecionados")).toBeInTheDocument();
+
+    for (const offer of individualOffers) {
+      expect(screen.getByLabelText(`Produto ${offer.name}`)).toBeChecked();
+    }
+    expect(screen.getByLabelText("Produto Grupo item 1")).toBeChecked();
+    expect(screen.getByLabelText("Produto Grupo item 2")).toBeChecked();
+    expect(screen.getByLabelText("Produto Grupo item 3")).not.toBeChecked();
+    expect(screen.getByLabelText("Produto Grupo item 4")).not.toBeChecked();
+    expect(screen.getByLabelText("Produto Grupo item 5")).not.toBeChecked();
+    expect(screen.getAllByRole("checkbox", { checked: true })).toHaveLength(12);
+  });
+
   it("requires at least one product and one channel before generating", async () => {
     stubFetchSequence([{ body: projectState([], []) }]);
     renderFlyer();
 
     await screen.findByText("0 de 12 produtos selecionados");
     expect(screen.getByRole("button", { name: "Gerar flyer" })).toBeDisabled();
+  });
+
+  it("uses the project's configured default post time when set", async () => {
+    stubFetchSequence([{ body: projectState([], [], { defaultPostTime: "14:30" }) }]);
+    renderFlyer();
+
+    await screen.findByText("0 de 12 produtos selecionados");
+    expect(screen.getByLabelText("Horário")).toHaveValue("14:30");
+  });
+
+  it("falls back to 09:00 when the project has no configured default post time", async () => {
+    stubFetchSequence([{ body: projectState([], []) }]);
+    renderFlyer();
+
+    await screen.findByText("0 de 12 produtos selecionados");
+    expect(screen.getByLabelText("Horário")).toHaveValue("09:00");
   });
 });

@@ -19,7 +19,15 @@ export function Flyer() {
   const [selected, setSelected] = useState<string[]>([]);
   const [channels, setChannels] = useState<Set<string>>(new Set());
   const [date, setDate] = useState("");
-  const [postTime, setPostTime] = useState("09:00");
+  // contentSettings.defaultPostTime is a real per-project field every other
+  // generation flow (generateContent, generateSpecialDateContent, etc. in
+  // content-central.js) falls back to before its own hardcoded default — it
+  // isn't in the ProjectSummary.contentSettings type, just carried through
+  // its index signature (unknown), same as Offers.tsx's catalogGeneralInfo
+  // read, so it needs a cast here.
+  const [postTime, setPostTime] = useState(
+    (project.contentSettings?.defaultPostTime as string | undefined) || "09:00",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
