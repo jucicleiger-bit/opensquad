@@ -8481,6 +8481,98 @@ test('generateFlyerContent rejects an empty selection and more than 12 products'
   });
 });
 
+test('generateFlyerContent rejects an offerId that does not resolve to a registered offer', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer-invalido', name: 'Mercado Teste' }, dir);
+    const arroz = (await saveProjectOffer('mercado-flyer-invalido', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    await assert.rejects(
+      () => generateFlyerContent('mercado-flyer-invalido', { offerIds: [arroz.id, 'nao-existe'], date: '2026-09-30' }, dir),
+      /produto não encontrado no projeto: nao-existe/i,
+    );
+  });
+});
+
+test('generateFlyerContent deduplicates a repeated offerId instead of giving one product two grid slots, and applies the 12-cap after deduping', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer-duplicado', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-flyer-duplicado', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+    const arroz = (await saveProjectOffer('mercado-flyer-duplicado', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+    const feijao = (await saveProjectOffer('mercado-flyer-duplicado', { name: 'Feijão 1kg', price: 'R$ 8,49' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-flyer-duplicado', {
+      offerIds: [arroz.id, feijao.id, arroz.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+
+    assert.deepEqual(
+      batch.items[0].contentTopic.products.map((product) => product.name),
+      ['Arroz 5kg', 'Feijão 1kg'],
+      'the repeated id collapses to a single product, keeping first-occurrence order',
+    );
+
+    // 12 distinct ids plus one repeat of the first must still pass (13 raw
+    // ids, 12 distinct) — the cap applies to the deduplicated count, not
+    // the raw request length.
+    const twelveIds = [arroz.id];
+    for (let index = 0; index < 11; index += 1) {
+      const offer = (await saveProjectOffer('mercado-flyer-duplicado', { name: `Produto ${index + 1}`, price: 'R$ 1,00' }, dir)).offer;
+      twelveIds.push(offer.id);
+    }
+    await generateFlyerContent('mercado-flyer-duplicado', {
+      offerIds: [...twelveIds, arroz.id],
+      date: '2026-10-01',
+      channels: ['instagram_feed'],
+    }, dir);
+  });
+});
+
+test('generateFlyerContent lets two encartes for the same project and date coexist instead of the second silently overwriting the first', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer-mesma-data', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-flyer-mesma-data', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+    const arroz = (await saveProjectOffer('mercado-flyer-mesma-data', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+    const feijao = (await saveProjectOffer('mercado-flyer-mesma-data', { name: 'Feijão 1kg', price: 'R$ 8,49' }, dir)).offer;
+
+    const first = await generateFlyerContent('mercado-flyer-mesma-data', {
+      offerIds: [arroz.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+    const second = await generateFlyerContent('mercado-flyer-mesma-data', {
+      offerIds: [feijao.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed'],
+    }, dir);
+
+    assert.notEqual(first.batchId, second.batchId, 'two flyers for the same project+date must not share a batchId');
+    assert.notEqual(first.items[0].contentId, second.items[0].contentId, 'nor a contentId');
+    assert.notEqual(
+      first.items[0].creativeGroupKey,
+      second.items[0].creativeGroupKey,
+      'nor a creativeGroupKey — each flyer must generate its own art',
+    );
+
+    // The first batch's file must survive the second call untouched.
+    const listed = await listProjectContent('mercado-flyer-mesma-data', dir);
+    const firstStillThere = listed.find((entry) => entry.contentId === first.items[0].contentId);
+    const secondStillThere = listed.find((entry) => entry.contentId === second.items[0].contentId);
+    assert.ok(firstStillThere, 'the first flyer must still exist after the second is generated');
+    assert.equal(firstStillThere.contentTopic.products[0].name, 'Arroz 5kg');
+    assert.ok(secondStillThere, 'the second flyer must exist alongside it');
+    assert.equal(secondStillThere.contentTopic.products[0].name, 'Feijão 1kg');
+  });
+});
+
 test('generateAdCreative builds a standalone ad creative — no scheduledDate/approval/publish fields, tied to an offer when one is given', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'anuncio-oferta', name: 'Boss Pizzaria' }, dir);

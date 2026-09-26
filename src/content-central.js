@@ -2187,9 +2187,14 @@ export async function generateFlyerContent(projectId, options = {}, targetDir = 
   const date = String(options.date || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Data inválida.');
 
-  const requestedIds = (Array.isArray(options.offerIds) ? options.offerIds : [])
-    .map((id) => String(id || '').trim())
-    .filter(Boolean);
+  // Deduplicated, first-occurrence order preserved: the checkbox UI can't
+  // produce a repeated id, but the endpoint is reachable directly, and a
+  // repeated offerId must not give one product two grid slots.
+  const requestedIds = [...new Set(
+    (Array.isArray(options.offerIds) ? options.offerIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean),
+  )];
   if (!requestedIds.length) throw new Error('Selecione ao menos um produto para o flyer.');
   if (requestedIds.length > MAX_FLYER_PRODUCTS) {
     throw new Error(`Um flyer comporta no máximo 12 produtos — foram selecionados ${requestedIds.length}.`);
@@ -2216,7 +2221,19 @@ export async function generateFlyerContent(projectId, options = {}, targetDir = 
   const channels = [...new Set(requestedChannels)];
   const postTime = options.postTime || project.contentSettings.defaultPostTime || DEFAULT_TIME;
 
-  const batchId = `${date}-${FLYER_BATCH_PREFIX}-${slugify(String(options.label || 'ofertas'))}`;
+  // Unlike generateSpecialDateContent, a flyer has no operator-supplied
+  // label to tell two batches apart — without a real differentiator here,
+  // every flyer for the same project + date resolved to the exact same
+  // batchId/contentId and a second call silently overwrote the first
+  // (drafts/ is permanent storage; approval/publish never move files out
+  // of it). A creation-time token, baked in once and reused for every
+  // channel of this same call, is the same fix already used for ad
+  // creatives/carousels (see generateAdCreative/generateCarousel) — cheap,
+  // stable once written (nothing later recomputes it), and it keeps every
+  // channel of THIS flyer sharing one batchId/creativeGroupKey prefix
+  // while two different flyers (different token) never collide.
+  const batchToken = Date.now();
+  const batchId = `${date}-${FLYER_BATCH_PREFIX}-${batchToken}`;
   const batchDir = join(paths.draftsDir, batchId);
   const imageDir = join(batchDir, 'images');
   await mkdir(batchDir, { recursive: true });
@@ -2253,7 +2270,10 @@ export async function generateFlyerContent(projectId, options = {}, targetDir = 
   for (const channel of channels) {
     const dimensions = imageDimensionsForChannel(channel);
     const aspectRatio = imageAspectRatioForChannel(channel);
-    const contentId = `${project.projectId}-${date}-flyer-${channel}`;
+    // Reuses batchId (already unique per call via batchToken) rather than
+    // re-deriving its own differentiator, so it can never drift out of
+    // sync with it.
+    const contentId = `${project.projectId}-${batchId}-${channel}`;
     const contentTopic = withProductRotationSeed(baseContentTopic, contentId);
     const imageFileName = `day-01-${channel}.svg`;
     const filePath = join(batchDir, `day-01-${channel}.json`);
