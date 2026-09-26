@@ -54,6 +54,7 @@ import {
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
+  generateFlyerContent,
   generateSpecialDateContent,
   getCentralPaths,
   listCentralProjects,
@@ -8378,6 +8379,105 @@ test('generateSpecialDateContent still defaults to a single channel (backward co
     }, dir);
     assert.equal(batch.items.length, 1);
     assert.equal(batch.items[0].channel, 'instagram_story');
+  });
+});
+
+test('generateFlyerContent creates one encarte item per channel shape, carrying every selected product, without touching the rotation', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-flyer', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+
+    const arroz = (await saveProjectOffer('mercado-flyer', { name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote' }, dir)).offer;
+    const feijao = (await saveProjectOffer('mercado-flyer', { name: 'Feijão 1kg', price: 'R$ 8,49', priceUnit: 'kg' }, dir)).offer;
+
+    // A normal batch first, so the rotation cursor sits at a real non-zero
+    // position that the flyer must leave alone.
+    await generateContentBatch('mercado-flyer', { days: 3, startDate: '2026-09-01', channel: 'instagram_feed' }, dir);
+    const before = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-flyer');
+    const cursorBefore = before.contentStrategy?.nextScheduleTopicIndex;
+
+    const batch = await generateFlyerContent('mercado-flyer', {
+      offerIds: [arroz.id, feijao.id],
+      date: '2026-09-30',
+      channels: ['instagram_feed', 'instagram_story'],
+      postTime: '09:00',
+    }, dir);
+
+    assert.equal(batch.items.length, 2, 'one item per requested channel');
+    const feed = batch.items.find((item) => item.channel === 'instagram_feed');
+    const story = batch.items.find((item) => item.channel === 'instagram_story');
+
+    assert.equal(feed.scheduledDate, '2026-09-30');
+    assert.equal(feed.scheduledTime, '09:00');
+    assert.equal(feed.status, 'draft_generated');
+    assert.equal(feed.contentTopic.source, 'flyer');
+    assert.deepEqual(
+      feed.contentTopic.products.map((product) => product.name),
+      ['Arroz 5kg', 'Feijão 1kg'],
+      'every selected product travels on the topic, in selection order',
+    );
+    assert.equal(feed.contentTopic.products[0].price, 'R$ 24,90');
+    assert.equal(feed.contentTopic.products[0].priceUnit, 'pacote');
+
+    // Feed (1:1) and Story (9:16) are different pixel shapes, so they must
+    // NOT share a creative — same rule the scheduled path follows.
+    assert.notEqual(feed.creativeGroupKey, story.creativeGroupKey);
+
+    const after = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-flyer');
+    assert.equal(after.contentStrategy?.nextScheduleTopicIndex, cursorBefore, 'the flyer must not advance the rotation cursor');
+  });
+});
+
+test('generateFlyerContent shares one creative between channels of the same pixel shape', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer-shape', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-flyer-shape', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('mercado-flyer-shape', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-flyer-shape', {
+      offerIds: [arroz.id],
+      date: '2026-09-30',
+      channels: ['instagram_story', 'whatsapp_status'],
+    }, dir);
+
+    assert.equal(batch.items.length, 2);
+    assert.equal(
+      batch.items[0].creativeGroupKey,
+      batch.items[1].creativeGroupKey,
+      'Story and WhatsApp Status are both 9:16 — one generated creative serves both',
+    );
+  });
+});
+
+test('generateFlyerContent rejects an empty selection and more than 12 products', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer-limite', name: 'Mercado Teste' }, dir);
+    const ids = [];
+    for (let index = 0; index < 13; index += 1) {
+      const offer = (await saveProjectOffer('mercado-flyer-limite', { name: `Produto ${index + 1}`, price: 'R$ 1,00' }, dir)).offer;
+      ids.push(offer.id);
+    }
+
+    await assert.rejects(
+      () => generateFlyerContent('mercado-flyer-limite', { offerIds: [], date: '2026-09-30' }, dir),
+      /selecione ao menos um produto/i,
+    );
+    await assert.rejects(
+      () => generateFlyerContent('mercado-flyer-limite', { offerIds: ids, date: '2026-09-30' }, dir),
+      /no máximo 12/i,
+    );
+    await assert.rejects(
+      () => generateFlyerContent('mercado-flyer-limite', { offerIds: [ids[0]], date: 'ontem' }, dir),
+      /data inválida/i,
+    );
   });
 });
 

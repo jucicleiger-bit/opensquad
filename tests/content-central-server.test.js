@@ -4506,6 +4506,38 @@ test('POST generate-special-date creates a real content card for the chosen date
   );
 });
 
+test('POST generate-flyer creates encarte drafts for the selected products', async () => {
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'mercado-http', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-http', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+    const arroz = (await saveProjectOffer('mercado-http', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const created = await request(server, '/api/projects/mercado-http/generate-flyer', {
+      method: 'POST',
+      body: JSON.stringify({
+        offerIds: [arroz.id],
+        date: '2026-09-30',
+        channels: ['instagram_feed'],
+        postTime: '09:00',
+      }),
+    });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.body.batch.items.length, 1);
+    assert.equal(created.body.batch.items[0].contentTopic.source, 'flyer');
+    assert.equal(created.body.batch.items[0].contentTopic.products[0].name, 'Arroz 5kg');
+
+    const empty = await request(server, '/api/projects/mercado-http/generate-flyer', {
+      method: 'POST',
+      body: JSON.stringify({ offerIds: [], date: '2026-09-30' }),
+    });
+    assert.equal(empty.response.status, 500);
+  });
+});
+
 test('POST carousels creates a placeholder immediately and the background pipeline fills in the roteiro + real images', async () => {
   await withServer(
     async (_dir, server) => {

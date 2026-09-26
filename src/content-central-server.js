@@ -80,6 +80,7 @@ import {
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
+  generateFlyerContent,
   generateSpecialDateContent,
   isVerticalStoryChannel,
   importCreativeStructures,
@@ -1141,6 +1142,23 @@ async function handleRequest(req, res, targetDir, context = {}) {
       // and paying for a separate AI generation per format.
       channels: (body.channel || body.channels) ? normalizeChannels(body) : undefined,
       offerId: body.offerId,
+      postTime: body.postTime,
+    }, targetDir);
+    enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
+    return sendJson(res, 201, { batch });
+  }
+
+  // A market's encarte: one piece with several registered products and
+  // their prices, for a campaign date — see generateFlyerContent. Same
+  // fire-and-forget shape as generate-special-date above: create the draft
+  // items, queue the real image generation, let the panel poll.
+  if (parts.length === 4 && parts[3] === 'generate-flyer') {
+    const body = await readBody(req);
+    const imageOptions = { imageGenerator: context.imageGenerator, imageReviewer: context.imageReviewer, captionGenerator: context.captionGenerator, videoAnimator: context.videoAnimator };
+    const batch = await generateFlyerContent(projectId, {
+      offerIds: body.offerIds,
+      date: body.date,
+      channels: (body.channel || body.channels) ? normalizeChannels(body) : undefined,
       postTime: body.postTime,
     }, targetDir);
     enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);

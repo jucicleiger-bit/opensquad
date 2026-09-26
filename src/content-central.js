@@ -2162,6 +2162,175 @@ export async function generateSpecialDateContent(projectId, options = {}, target
   });
 }
 
+const FLYER_BATCH_PREFIX = 'flyer';
+const MAX_FLYER_PRODUCTS = 12;
+
+// A market's "encarte": ONE piece carrying several registered products and
+// their prices, generated on demand for a campaign date instead of coming
+// out of the schedule rotation. Deliberately modeled on
+// generateSpecialDateContent rather than generateContentBatch — same
+// one-off shape (own date, own channel list, shared creative across
+// same-shape channels, lands in Aguardando aprovação like any other card)
+// and the same guarantee that it never reads or advances
+// nextScheduleTopicIndex/nextPillarSequenceIndex.
+//
+// The difference that matters: the topic carries `products` — the full
+// selected list, in the operator's own selection order — instead of a
+// single offer. Everything downstream that needs to behave differently for
+// an encarte branches on `topic.source === 'flyer'`; nothing about the
+// scheduled path changes.
+export async function generateFlyerContent(projectId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+  const project = await loadProject(paths);
+  const globalRules = await loadGlobalRules(getCentralPaths(targetDir));
+  const date = String(options.date || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Data inválida.');
+
+  const requestedIds = (Array.isArray(options.offerIds) ? options.offerIds : [])
+    .map((id) => String(id || '').trim())
+    .filter(Boolean);
+  if (!requestedIds.length) throw new Error('Selecione ao menos um produto para o flyer.');
+  if (requestedIds.length > MAX_FLYER_PRODUCTS) {
+    throw new Error(`Um flyer comporta no máximo 12 produtos — foram selecionados ${requestedIds.length}.`);
+  }
+
+  const offersById = new Map(normalizeProjectOffers(project.contentStrategy?.offers || []).map((offer) => [offer.id, offer]));
+  // Preserve the operator's selection order: it is the reading order they
+  // expect on the grid, and the prompt numbers the slots from it.
+  const products = requestedIds.map((id) => {
+    const offer = offersById.get(id);
+    if (!offer) throw new Error(`Produto não encontrado no projeto: ${id}`);
+    return {
+      offerId: offer.id,
+      name: offer.name || '',
+      price: offer.price || '',
+      priceUnit: offer.priceUnit || '',
+      photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
+    };
+  });
+
+  const requestedChannels = Array.isArray(options.channels) && options.channels.length
+    ? options.channels
+    : [options.channel || project.contentSettings.channels[0] || DEFAULT_CHANNEL];
+  const channels = [...new Set(requestedChannels)];
+  const postTime = options.postTime || project.contentSettings.defaultPostTime || DEFAULT_TIME;
+
+  const batchId = `${date}-${FLYER_BATCH_PREFIX}-${slugify(String(options.label || 'ofertas'))}`;
+  const batchDir = join(paths.draftsDir, batchId);
+  const imageDir = join(batchDir, 'images');
+  await mkdir(batchDir, { recursive: true });
+  await mkdir(imageDir, { recursive: true });
+
+  const productNames = products.map((product) => product.name).filter(Boolean).join(', ');
+  const baseContentTopic = {
+    id: 'flyer',
+    source: 'flyer',
+    // Commercially this IS an offer piece — CTA, sales framing and pillar
+    // handling should treat it as one. Only the post type (and therefore
+    // which registered structure it matches) is flyer-specific.
+    type: 'offer',
+    label: 'Flyer de ofertas',
+    offerName: '',
+    products,
+    // The union of every product's linked photos, so the existing
+    // photo-linking machinery (buildPrimaryAiImageReferences) sees them all
+    // as deliberately requested rather than pool guesses.
+    photoReferenceIds: [...new Set(products.flatMap((product) => product.photoReferenceIds))],
+    // Deliberately blank: a flyer has no single price or item list. The
+    // per-product prices live on `products` and are rendered by the flyer
+    // branch of the prompt builder (a later task).
+    price: '',
+    items: '',
+    cta: '',
+    autoGenerateCta: false,
+    notes: '',
+    objective: `Encarte de ofertas de ${project.name} com os produtos: ${productNames}. Todos os produtos selecionados devem aparecer na peça, cada um com o seu preço exato.`,
+  };
+  const createdAt = new Date().toISOString();
+
+  const items = [];
+  for (const channel of channels) {
+    const dimensions = imageDimensionsForChannel(channel);
+    const aspectRatio = imageAspectRatioForChannel(channel);
+    const contentId = `${project.projectId}-${date}-flyer-${channel}`;
+    const contentTopic = withProductRotationSeed(baseContentTopic, contentId);
+    const imageFileName = `day-01-${channel}.svg`;
+    const filePath = join(batchDir, `day-01-${channel}.json`);
+    const imageLocalPath = `content/drafts/${batchId}/images/${imageFileName}`;
+    const shapeGroup = creativeShapeGroupForChannel(channel);
+    const item = {
+      schemaVersion: 1,
+      contentId,
+      projectId: project.projectId,
+      batchId,
+      dayNumber: 1,
+      scheduledDate: date,
+      scheduledTime: postTime,
+      channel,
+      formatLabel: CHANNEL_LABELS[channel] || channel,
+      contentTopic,
+      contentReview: buildContentReview({ channel, aspectRatio, dimensions, contentTopic }),
+      status: 'draft_generated',
+      title: `Encarte — ${project.name}`,
+      // Same key shape the scheduled path and special dates use: one
+      // creative per pixel shape, so Story + WhatsApp Status share an art
+      // while Feed gets its own.
+      creativeGroupKey: shapeGroup ? `${batchId}::${date}::${shapeGroup}::flyer` : null,
+      image: {
+        localPath: imageLocalPath,
+        prompt: buildImagePrompt(project, globalRules.rules, [], 1, { channel, contentTopic, logoReference: getProjectLogoReference(project, paths) }),
+        references: await buildImageReferencePayload(project, paths, { channel, topic: contentTopic }),
+        aspectRatio,
+        dimensions,
+        generated: true,
+        mimeType: 'image/svg+xml',
+        version: 1,
+      },
+      caption: {
+        text: buildCaptionDraft(project, 1, contentTopic),
+        version: 1,
+      },
+      dayRules: [],
+      generationContext: {
+        globalRules: globalRules.rules.map((rule) => rule.text),
+        projectRules: [...project.rules.project],
+        contentRules: [],
+      },
+      approval: {
+        required: project.mode !== 'automatic',
+        emailSentAt: null,
+        approvedAt: null,
+        approvalSource: null,
+      },
+      publish: {
+        publishedAt: null,
+        metaMediaId: null,
+        error: null,
+      },
+      filePath,
+      createdAt,
+      updatedAt: createdAt,
+    };
+    item.image.previewDataUrl = await writeGeneratedImage(join(imageDir, imageFileName), item, project);
+    await writeJson(filePath, item);
+    items.push(item);
+  }
+
+  const batch = {
+    batchId,
+    projectId: project.projectId,
+    createdAt,
+    days: 1,
+    channel: channels[0],
+    startDate: date,
+    items,
+  };
+  await writeJson(join(batchDir, 'batch.json'), batch);
+  return batch;
+  });
+}
+
 // A "segment template" is a small library of pre-approved art (e.g. the
 // packaging/"embalagens" segment's 6 Feed pieces + 3 highlight covers) that
 // gets reused across future prospects in the same business segment instead
