@@ -39,7 +39,7 @@ export const OFFER_TYPES = new Set([
 // registered structure model. Service and content/relationship types must keep
 // the AI free to compose from the brief, brand, logo and optional product
 // photos instead of being blocked by a missing layout template.
-const CREATIVE_TEMPLATE_REQUIRED_POST_TYPES = new Set(['offer', 'combo', 'rodizio', 'delivery', 'product']);
+const CREATIVE_TEMPLATE_REQUIRED_POST_TYPES = new Set(['offer', 'combo', 'rodizio', 'delivery', 'product', 'flyer']);
 
 function requiresCreativeTemplate(postType) {
   return CREATIVE_TEMPLATE_REQUIRED_POST_TYPES.has(postType);
@@ -5129,7 +5129,7 @@ export function normalizeSegmentLearningEntry(input = {}) {
   const kind = input.kind === 'image' ? 'image' : 'text';
   const purpose = kind === 'image' && ['product', 'creative'].includes(input.purpose) ? input.purpose : undefined;
   const isCreativeImage = kind === 'image' && purpose === 'creative';
-  const supportedPostTypes = new Set([...OFFER_TYPES, 'special_date', 'ad_creative']);
+  const supportedPostTypes = new Set([...OFFER_TYPES, 'special_date', 'ad_creative', 'flyer']);
   const postType = isCreativeImage && supportedPostTypes.has(input.postType)
     ? input.postType
     : '';
@@ -8004,7 +8004,11 @@ function cleanPromptText(value) {
 // computes inline as isGoalTopic/isSpecialDateFreeTitle/isAdCreativeFreeTitle
 // — pulled out here as its own function so template lookup and prompt
 // building never drift into disagreeing about what counts as which type.
-function deriveCreativePostType(topic = {}) {
+export function deriveCreativePostType(topic = {}) {
+  // A flyer is never one of the rotation's offer types even though it
+  // carries real offers: it must match the operator's flyer/encarte
+  // structure, not the single-product "Oferta direta" one.
+  if (topic.source === 'flyer') return 'flyer';
   if (topic.source === 'goal') return topic.type === 'product' ? 'product' : 'institutional';
   if (topic.source === 'special_date' && !topic.offerId) return 'special_date';
   if (topic.source === 'ad_creative' && !topic.offerId) return 'ad_creative';
@@ -8028,6 +8032,7 @@ const CREATIVE_POST_TYPE_LABELS = {
   social_proof: 'Prova social',
   special_date: 'Data comemorativa',
   ad_creative: 'Anúncio pago',
+  flyer: 'Flyer / encarte',
 };
 const CREATIVE_SHAPE_LABELS = {
   vertical: 'Vertical (Stories/Reels)',

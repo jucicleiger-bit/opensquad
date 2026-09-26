@@ -107,6 +107,7 @@ import {
   updateProjectSettings,
   updateProjectImageRules,
   validateMetaToken,
+  deriveCreativePostType,
 } from '../src/content-central.js';
 
 async function withTempProject(fn) {
@@ -1618,6 +1619,34 @@ test('a registered product reference alone never satisfies the mandatory creativ
     }, dir, new Date('2026-07-20T12:00:00.000Z'));
 
     assert.match(content.imageGenerationError, /Nenhum modelo de criativo cadastrado/);
+  });
+});
+
+test('a creative structure can be registered as a flyer/encarte model, and a flyer topic resolves to that post type', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-flyer-tipo', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-flyer-tipo', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+
+    // Registering a structure tagged "flyer" must be accepted by the
+    // segment-learning store's post-type whitelist.
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'feed', dir);
+    const paths = getCentralPaths(dir);
+    const nodes = await loadSegmentLearningNodesForSelection(paths, { segmentGroup: 'Negócios locais e lojas', segmentCategory: 'Mercado / mercearia' });
+    const entries = nodes.flatMap((node) => node.entries || []);
+    assert.ok(
+      entries.some((entry) => entry.postType === 'flyer'),
+      'a structure tagged flyer must survive normalization instead of being dropped by the post-type whitelist',
+    );
+
+    // A flyer topic must resolve to the flyer post type so the flyer
+    // structure above is the one matched at generation time.
+    assert.equal(deriveCreativePostType({ source: 'flyer', type: 'offer' }), 'flyer');
+    // Non-flyer topics keep resolving exactly as before.
+    assert.equal(deriveCreativePostType({ source: 'offer', type: 'combo' }), 'combo');
+    assert.equal(deriveCreativePostType({ source: 'special_date' }), 'special_date');
   });
 });
 

@@ -31,6 +31,7 @@ const POST_TYPE_LABELS: Record<PostType, string> = {
   social_proof: "Prova social",
   special_date: "Data comemorativa",
   ad_creative: "Anuncio pago",
+  flyer: "Flyer / encarte",
 };
 
 const SHAPE_LABELS: Record<Shape, string> = {
