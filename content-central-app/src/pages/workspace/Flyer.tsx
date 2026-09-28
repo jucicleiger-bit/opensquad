@@ -123,7 +123,15 @@ export function Flyer() {
     }
   }
 
-  const canGenerate = selected.length > 0 && channels.size > 0 && Boolean(date) && !busy;
+  // A disabled button with no explanation is a dead end — the operator can
+  // see it is off but not which of the three requirements is missing, and
+  // two of them live in a different card further down the page.
+  const missing = [
+    selected.length === 0 ? "escolha ao menos um produto" : "",
+    channels.size === 0 ? "marque um canal" : "",
+    date ? "" : "informe a data de publicação",
+  ].filter(Boolean);
+  const canGenerate = missing.length === 0 && !busy;
 
   return (
     <div>
@@ -250,6 +258,11 @@ export function Flyer() {
 
       {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}
       {done ? <p className="muted">Flyer gerado. Ele está em Aguardando aprovação.</p> : null}
+      {missing.length > 0 && !busy ? (
+        <p className="muted" style={{ marginBottom: 8 }}>
+          Para gerar: {missing.join(", ")}.
+        </p>
+      ) : null}
       <Button type="button" className="full-width" disabled={!canGenerate} onClick={handleGenerate}>
         {busy ? "Gerando..." : "Gerar flyer"}
       </Button>

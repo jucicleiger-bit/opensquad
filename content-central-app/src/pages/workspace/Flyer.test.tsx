@@ -89,6 +89,30 @@ describe("Flyer", () => {
     expect(screen.getAllByLabelText("Produto Presunto Fricó")).toHaveLength(1);
   });
 
+  it("says which requirement is still missing while the generate button is off", async () => {
+    const offers: ProjectOffer[] = [
+      { id: "offer-1", name: "Produto 1", type: "offer", active: true, price: "R$ 10" },
+    ];
+    stubFetchSequence([{ body: projectState(offers, []) }]);
+    renderFlyer();
+
+    await screen.findByLabelText("Produto Produto 1");
+    // Nothing chosen yet: all three requirements are named.
+    expect(screen.getByText(/escolha ao menos um produto/)).toBeInTheDocument();
+    expect(screen.getByText(/marque um canal/)).toBeInTheDocument();
+    expect(screen.getByText(/informe a data de publicação/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByLabelText("Produto Produto 1"));
+    expect(screen.queryByText(/escolha ao menos um produto/)).toBeNull();
+
+    await userEvent.click(screen.getByLabelText("Instagram Feed"));
+    await userEvent.type(screen.getByLabelText("Data de publicação"), "2026-10-05");
+
+    // Everything satisfied: the hint disappears and the button turns on.
+    expect(screen.queryByText(/Para gerar:/)).toBeNull();
+    expect(screen.getByRole("button", { name: "Gerar flyer" })).toBeEnabled();
+  });
+
   it("selects a whole offer group and posts the flyer request", async () => {
     const groups: OfferGroup[] = [
       { id: "group-week", name: "Encarte da semana" },
