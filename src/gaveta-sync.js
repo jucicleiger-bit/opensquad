@@ -61,9 +61,18 @@ async function commitAndPush(gaveteDir, message) {
   await git(gaveteDir, ['push']);
 }
 
+// Once GitHub Actions has really published an item, its queue record is the
+// only thing stopping the next hourly sweep from posting it again.
+// approveContent never sends `publish`, so a re-approve (or regenerate +
+// re-approve) of an already-posted item used to reset it to
+// realPublished:false and the same slot went out to Instagram twice —
+// happened 4 times in Aug/Sep 2026. So a published record is never
+// downgraded or deleted from here; re-posting on purpose means resetting
+// the queue file by hand.
 export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
   await assertValidGaveteDir(gaveteDir);
   const path = queueItemPath(gaveteDir, projectId, contentId);
+  const existing = await readQueueItem(gaveteDir, projectId, contentId);
   const payload = {
     projectId,
     contentId,
@@ -72,7 +81,9 @@ export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
     mediaUrl: data.mediaUrl,
     scheduledDate: data.scheduledDate,
     scheduledTime: data.scheduledTime,
-    publish: data.publish || { realPublished: false, publishedAt: null, metaMediaId: null, permalink: null, error: null },
+    publish: existing?.publish?.realPublished && !data.publish?.realPublished
+      ? existing.publish
+      : data.publish || { realPublished: false, publishedAt: null, metaMediaId: null, permalink: null, error: null },
   };
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, JSON.stringify(payload, null, 2), 'utf-8');
@@ -83,12 +94,10 @@ export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
 export async function removeQueueItem(gaveteDir, projectId, contentId) {
   await assertValidGaveteDir(gaveteDir);
   const path = queueItemPath(gaveteDir, projectId, contentId);
-  try {
-    await readFile(path, 'utf-8');
-  } catch (err) {
-    if (err.code === 'ENOENT') return;
-    throw err;
-  }
+  const existing = await readQueueItem(gaveteDir, projectId, contentId);
+  // See upsertQueueItem: deleting a published record lets the next
+  // re-approve recreate it as unpublished. The sweep skips it anyway.
+  if (!existing || existing.publish?.realPublished) return;
   await rm(path, { force: true });
   await git(gaveteDir, ['add', join('queue', projectId, `${contentId}.json`)]);
   await commitAndPush(gaveteDir, `queue: remove ${projectId}/${contentId}`);

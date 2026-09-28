@@ -155,6 +155,38 @@ test('commitAndPush aborts a same-file rebase conflict instead of leaving the cl
   });
 });
 
+// Regression (king-assessoria-mkt 2026-08-22/08-28/09-01, casa-de-embalagem
+// 2026-08-17): after GitHub Actions published a story, regenerating it
+// (queue remove) and/or re-approving it (queue upsert, which never carries
+// `publish`) wrote realPublished:false back over the real publish record,
+// so the next hourly sweep posted the same slot to Instagram a second time.
+test('re-approving an already-published item keeps it marked published', async () => {
+  await withGaveta(async ({ workDir }) => {
+    const data = { channel: 'instagram_story', caption: 'v1', mediaUrl: 'https://i.ibb.co/a.png', scheduledDate: '2026-08-22', scheduledTime: '09:00' };
+    const published = { realPublished: true, publishedAt: '2026-08-22T12:40:28.999Z', metaMediaId: '17930702736379909', permalink: null, error: null };
+    await upsertQueueItem(workDir, 'king', 'story-01', { ...data, publish: published });
+
+    await upsertQueueItem(workDir, 'king', 'story-01', { ...data, caption: 'v2', mediaUrl: 'https://i.ibb.co/b.png' });
+
+    const item = await readQueueItem(workDir, 'king', 'story-01');
+    assert.deepEqual(item.publish, published);
+    assert.equal(item.caption, 'v2');
+  });
+});
+
+test('regenerate (remove) then re-approve of an already-published item keeps it marked published', async () => {
+  await withGaveta(async ({ workDir }) => {
+    const data = { channel: 'instagram_story', caption: 'v1', mediaUrl: 'https://i.ibb.co/a.png', scheduledDate: '2026-08-17', scheduledTime: '09:00' };
+    const published = { realPublished: true, publishedAt: '2026-08-17T12:45:23.342Z', metaMediaId: '18088724465533897', permalink: null, error: null };
+    await upsertQueueItem(workDir, 'casa', 'story-01', { ...data, publish: published });
+
+    await removeQueueItem(workDir, 'casa', 'story-01');
+    await upsertQueueItem(workDir, 'casa', 'story-01', { ...data, caption: 'v2' });
+
+    assert.equal((await readQueueItem(workDir, 'casa', 'story-01')).publish.realPublished, true);
+  });
+});
+
 test('readQueueItem returns the parsed item, or null when it does not exist', async () => {
   await withGaveta(async ({ workDir }) => {
     await upsertQueueItem(workDir, 'boss-pizzaria', 'content-1', { channel: 'instagram_feed', caption: 'x', mediaUrl: null, scheduledDate: '2026-08-10', scheduledTime: '18:00' });
