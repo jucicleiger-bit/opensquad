@@ -2275,6 +2275,15 @@ export async function generateFlyerContent(projectId, options = {}, targetDir = 
     // simply carries neither — never that the model fills the gap with
     // something plausible. Dates are passed through as registered, not
     // formatted here, so the prompt can state them verbatim.
+    // Same control the offer form has ("Fundo do criativo"), scoped to the
+    // whole encarte. Stored raw rather than normalized, because
+    // normalizeBackgroundStyle turns anything blank into 'simple_brand' —
+    // correct for an offer form that always submits a value, wrong here,
+    // where "not chosen" has to stay distinguishable from "chose simple" so
+    // an untouched flyer keeps the free background it has today.
+    backgroundStyle: ['simple_brand', 'elaborate'].includes(String(options.backgroundStyle || '').trim())
+      ? String(options.backgroundStyle).trim()
+      : '',
     campaign: cleanText(options.campaign),
     promoStart: cleanText(options.promoStart),
     promoEnd: cleanText(options.promoEnd),
@@ -3512,6 +3521,22 @@ function contentRulesWithApprovedPlan(contentRules, override) {
 // showed "published" locally with nothing posted on Instagram.) Refusing to
 // generate over dates the project already has drafted content for closes
 // this at the source instead of relying on the operator to notice.
+// What this guard is actually protecting against is two SCHEDULED PLANS
+// colliding on contentId. One-off extras — a flyer, a commemorative date, a
+// paid ad creative — are generated deliberately on top of a period the
+// operator already has content for, and each carries its own id shape
+// (`<project>-<date>-flyer-<token>-<channel>`, `<project>-<date>-<label>-
+// <channel>`) that can never equal a plan slot's
+// `<project>-<date>-<channel>-<NN>`. Counting them as conflicts blocked the
+// normal agenda for any operator who made a flyer first — the ordinary order
+// of work for a market — with an error telling them to delete a piece they
+// had just deliberately created.
+const ONE_OFF_CONTENT_SOURCES = new Set(['flyer', 'special_date', 'ad_creative', 'carousel']);
+
+function isOneOffExtra(item) {
+  return ONE_OFF_CONTENT_SOURCES.has(item?.contentTopic?.source);
+}
+
 async function assertNoScheduleOverlap(projectId, targetDir, startDate, days, formats) {
   const targetChannels = new Set(formats.map((format) => format.channel));
   if (!targetChannels.size) return;
@@ -3521,6 +3546,7 @@ async function assertNoScheduleOverlap(projectId, targetDir, startDate, days, fo
     targetChannels.has(item.channel)
     && item.scheduledDate >= startDate
     && item.scheduledDate < endDateExclusive
+    && !isOneOffExtra(item)
   );
   if (!conflicts.length) return;
   const dates = [...new Set(conflicts.map((item) => item.scheduledDate))].sort();
@@ -7415,7 +7441,17 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   // ad-creative) never opted into the background lock and has no UI to turn
   // it off, so it must keep today's pre-feature free background regardless
   // of what topic.backgroundStyle happens to contain.
-  const backgroundStyle = topic.source === 'offer' ? normalizeBackgroundStyle(topic.backgroundStyle) : 'elaborate';
+  // A flyer now has the same "Fundo do criativo" control the offer form has,
+  // so it joins offers in honouring it — twelve prices over a busy scenery
+  // background is exactly the case the lock was built for. Every other source
+  // (goal/authority/institutional, special-date, carousel, ad-creative) still
+  // has no UI to turn it off and keeps the free background regardless of what
+  // topic.backgroundStyle happens to contain.
+  const backgroundStyle = topic.source === 'offer'
+    ? normalizeBackgroundStyle(topic.backgroundStyle)
+    : topic.source === 'flyer' && topic.backgroundStyle
+      ? normalizeBackgroundStyle(topic.backgroundStyle)
+      : 'elaborate';
   return {
     schemaVersion: 1,
     project: {

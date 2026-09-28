@@ -890,6 +890,8 @@ export interface GenerateFlyerInput {
   promoEnd?: string;
   /** Footer small print, e.g. "enquanto durar o estoque". */
   footerNote?: string;
+  /** Same control the offer form has; blank keeps the free background. */
+  backgroundStyle?: "" | "simple_brand" | "elaborate";
 }
 
 export function generateFlyer(

@@ -112,7 +112,33 @@ describe("Company", () => {
     await screen.findByRole("heading", { name: "Empresa / Raio-X" });
     await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
 
-    expect(await screen.findByText("Preencha nome, segmento e o que a empresa vende/oferece.")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Preencha nome da empresa, o segmento .* e o que a empresa vende\/oferece\./),
+    ).toBeInTheDocument();
+  });
+
+  // A real operator filled Setor + Nicho, left the free-text "Segmento
+  // detalhado" empty, and was blocked by a message that just said "segmento"
+  // — the field they thought they had filled.
+  it("accepts setor + nicho as the segment and sends them as the detailed segment", async () => {
+    stubFetchSequence([{ body: projectState() }, { body: { project: {} } }, { body: { project: {} } }]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.type(screen.getByLabelText("Nome da empresa"), "Mercado Carvalho");
+    fireEvent.change(screen.getByLabelText("Setor principal"), { target: { value: "Negócios locais e lojas" } });
+    fireEvent.change(screen.getByLabelText("Tipo de negócio / nicho"), { target: { value: "Mercado / mercearia" } });
+    await userEvent.type(screen.getByLabelText("O que a empresa vende/oferece"), "Produtos de supermercado");
+
+    await userEvent.click(screen.getByRole("button", { name: "Salvar e analisar minha marca" }));
+
+    expect(screen.queryByText(/Preencha nome da empresa/)).toBeNull();
+
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    const save = calls.find(([url]) => String(url).includes("brand-xray/analyze"));
+    expect(save).toBeDefined();
+    const body = JSON.parse(String(save![1]?.body));
+    expect(body.segment).toBe("Negócios locais e lojas / Mercado / mercearia");
   });
 
   it("analyzes the brand through the real endpoint and renders the generated Raio-X blocks", async () => {

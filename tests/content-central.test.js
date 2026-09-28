@@ -4929,6 +4929,50 @@ test('generateContentSchedulePlan skips the carousel quota entirely when the bat
   });
 });
 
+// The overlap guard exists to stop two SCHEDULED PLANS from colliding on
+// contentId (the king-assessoria-mkt "published but never posted" incident).
+// One-off extras — a flyer, a commemorative date — are generated deliberately
+// on top of a period and carry their own id shape, so they can never collide
+// with a plan slot. Counting them as conflicts blocked the normal agenda
+// every time an operator made a flyer first, which is the ordinary order of
+// work for a market.
+test('a flyer or a commemorative date on the same dates does not block the normal schedule', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'agenda-com-extras', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('agenda-com-extras', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('agenda-com-extras', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    await generateFlyerContent('agenda-com-extras', {
+      offerIds: [arroz.id],
+      date: '2026-09-29',
+      channels: ['instagram_story'],
+    }, dir);
+    await generateSpecialDateContent('agenda-com-extras', {
+      date: '2026-09-30',
+      label: 'Dia do Cliente',
+      channels: ['instagram_story'],
+    }, dir);
+
+    // The agenda covering both those dates must still generate.
+    const plan = await generateContentSchedulePlan('agenda-com-extras', {
+      days: 7,
+      startDate: '2026-09-28',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '13:00', intervalMinutes: 0 }],
+    }, dir);
+    assert.ok(plan.items.length > 0, 'an extra piece must never block the scheduled plan');
+
+    // And the extras survive alongside it, with their own ids.
+    const all = await listProjectContent('agenda-com-extras', dir);
+    assert.ok(all.some((item) => item.contentTopic?.source === 'flyer'), 'the flyer must not be overwritten by the plan');
+    assert.ok(all.some((item) => item.contentTopic?.source === 'special_date'));
+    assert.equal(new Set(all.map((item) => item.contentId)).size, all.length, 'no two pieces may share a contentId');
+  });
+});
+
 test('generateContentSchedulePlan refuses to generate over dates the project already has drafted content for', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -8644,6 +8688,85 @@ test('a flyer with no campaign, promo window or address tells the model to inven
     assert.match(prompt, /não escrever data, prazo/i);
     assert.match(prompt, /não inventar endereço, telefone/i);
     assert.doesNotMatch(prompt, /Ofertas imperdíveis/i);
+  });
+});
+
+// The background lock was scoped to single-offer topics because nothing else
+// had a UI to turn it off, so a flyer always fell through to "elaborate" — a
+// busy scenery background competing with twelve prices. The Flyer tab now
+// offers the same control the offer form does, for the whole encarte.
+test('a flyer honours the background style chosen for the piece, and defaults to the free background without one', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-fundo', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-fundo', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+      brandColors: '#B3121B, #F5C518',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('mercado-fundo', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const simple = await generateFlyerContent('mercado-fundo', {
+      offerIds: [arroz.id], date: '2026-10-05', channels: ['instagram_story'],
+      backgroundStyle: 'simple_brand',
+    }, dir);
+    assert.equal(simple.items[0].contentTopic.backgroundStyle, 'simple_brand');
+
+    const free = await generateFlyerContent('mercado-fundo', {
+      offerIds: [arroz.id], date: '2026-10-06', channels: ['instagram_story'],
+    }, dir);
+    assert.equal(free.items[0].contentTopic.backgroundStyle, '');
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-fundo');
+    const paths = getCentralPaths(dir, 'mercado-fundo');
+    async function specFor(batch) {
+      const calls = [];
+      await enrichBatchItemsWithRealImages(batch, project, 'mercado-fundo', {
+        imageGenerator: async (payload) => {
+          calls.push(payload);
+          return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+        },
+      }, paths);
+      return calls[0].content;
+    }
+
+    const simpleContent = await specFor(simple);
+    assert.equal(simpleContent.creativeSpec.background.style, 'simple_brand');
+    assert.match(simpleContent.image.prompt, /cores da marca/i);
+
+    // Without a choice the flyer keeps the free background it has today.
+    const freeContent = await specFor(free);
+    assert.equal(freeContent.creativeSpec.background.style, 'elaborate');
+  });
+});
+
+test('a commemorative date keeps its free background even if a backgroundStyle leaks onto the topic', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'data-fundo', name: 'Boss Pizzaria' }, dir);
+    await updateProjectBrandInput('data-fundo', {
+      segmentGroup: 'Alimentício', segmentCategory: 'Pizzaria', segment: 'pizzaria',
+    }, dir);
+    await registerCreativeTemplate('group:alimenticio/category:pizzaria', 'special_date', 'vertical', dir);
+
+    const batch = await generateSpecialDateContent('data-fundo', {
+      date: '2026-12-25', label: 'Natal', channels: ['instagram_story'],
+    }, dir);
+    batch.items[0].contentTopic.backgroundStyle = 'simple_brand';
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'data-fundo');
+    const paths = getCentralPaths(dir, 'data-fundo');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'data-fundo', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    assert.equal(
+      calls[0].content.creativeSpec.background.style,
+      'elaborate',
+      'only offers and flyers opted into the background lock — non-regression guard',
+    );
   });
 });
 

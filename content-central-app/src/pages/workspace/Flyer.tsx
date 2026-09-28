@@ -35,6 +35,8 @@ export function Flyer() {
   const [promoStart, setPromoStart] = useState("");
   const [promoEnd, setPromoEnd] = useState("");
   const [footerNote, setFooterNote] = useState("");
+  // "" = não escolhido, e o encarte fica com o fundo livre de hoje.
+  const [backgroundStyle, setBackgroundStyle] = useState<"" | "simple_brand" | "elaborate">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -113,6 +115,7 @@ export function Flyer() {
         promoStart,
         promoEnd,
         footerNote,
+        backgroundStyle,
       });
       setDone(true);
       setSelected([]);
@@ -237,6 +240,22 @@ export function Flyer() {
         </div>
         <p className="muted" style={{ marginTop: 4 }}>
           Em branco, a peça sai sem prazo nenhum — nada de &quot;válido até domingo&quot; inventado.
+        </p>
+
+        <label htmlFor="flyer-background" style={{ marginTop: 12 }}>
+          Fundo do criativo
+        </label>
+        <select
+          id="flyer-background"
+          value={backgroundStyle}
+          onChange={(event) => setBackgroundStyle(event.target.value as "" | "simple_brand" | "elaborate")}
+        >
+          <option value="">Deixar a IA decidir</option>
+          <option value="simple_brand">Simples (cores da marca)</option>
+          <option value="elaborate">Elaborado (cenário/ambientação)</option>
+        </select>
+        <p className="muted" style={{ marginTop: 4 }}>
+          Com 12 produtos, o fundo simples costuma deixar os preços mais legíveis.
         </p>
 
         <label htmlFor="flyer-footer-note" style={{ marginTop: 12 }}>

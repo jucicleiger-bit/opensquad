@@ -20,7 +20,7 @@ import {
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 
-const REQUIRED_MESSAGE = "Preencha nome, segmento e o que a empresa vende/oferece.";
+const REQUIRED_MESSAGE = "Preencha nome da empresa, o segmento (setor + nicho, ou o segmento detalhado) e o que a empresa vende/oferece.";
 
 const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
 const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
@@ -178,8 +178,19 @@ export function Company() {
     });
   }
 
+  // Picking Setor + Nicho from the lists already says what the segment is —
+  // requiring the free-text "Segmento detalhado" on top of that reads as a
+  // bug from the operator's side: the field sits beside the two they just
+  // filled, carries no required marker, and the old message just said
+  // "segmento". Either way of naming the segment is accepted, and the
+  // detailed field is filled in from the pair when left blank so nothing
+  // downstream ever sees an empty segment.
+  const resolvedSegment =
+    form.segment.trim() ||
+    [form.segmentGroup.trim(), form.segmentCategory.trim()].filter(Boolean).join(" / ");
+
   function validateRequired() {
-    if (!form.brandName.trim() || !form.segment.trim() || !form.productsOrServices.trim()) {
+    if (!form.brandName.trim() || !resolvedSegment || !form.productsOrServices.trim()) {
       setError(REQUIRED_MESSAGE);
       return false;
     }
@@ -385,7 +396,7 @@ export function Company() {
   const weightValues = resolvedGoalWeights(weightBuckets);
   const weightSum = weightBuckets.reduce((total, key) => total + (weightValues[key] || 0), 0);
   const weightsInvalid = weightBuckets.length >= 2 && weightSum !== 100;
-  const brandPayload = { ...form, contentGoalWeights: weightBuckets.length >= 2 ? weightValues : {} };
+  const brandPayload = { ...form, segment: resolvedSegment, contentGoalWeights: weightBuckets.length >= 2 ? weightValues : {} };
 
   return (
     <div>
