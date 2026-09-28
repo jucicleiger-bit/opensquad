@@ -62,6 +62,8 @@ export function Company() {
     productsOrServices: project.brandInput?.productsOrServices || "",
     description: project.brandInput?.description || "",
     serviceRegion: project.brandInput?.serviceRegion || "",
+    address: project.brandInput?.address || "",
+    contact: project.brandInput?.contact || "",
     mainDifferential: project.brandInput?.mainDifferential || "",
     contentGoals: project.brandInput?.contentGoals || ([] as string[]),
     contentGoalWeights: project.brandInput?.contentGoalWeights || ({} as Record<string, number>),
@@ -535,6 +537,31 @@ export function Company() {
             />
           </div>
         </div>
+
+        {/* Printed in the footer of pieces that carry one, like a flyer. */}
+        <div className="row">
+          <div>
+            <label htmlFor="brand-address">Endereço</label>
+            <input
+              id="brand-address"
+              value={form.address}
+              placeholder="Rua, número, bairro, cidade"
+              onChange={(e) => setForm({ ...form, address: e.target.value })}
+            />
+          </div>
+          <div>
+            <label htmlFor="brand-contact">Telefone / WhatsApp</label>
+            <input
+              id="brand-contact"
+              value={form.contact}
+              placeholder="(00) 00000-0000"
+              onChange={(e) => setForm({ ...form, contact: e.target.value })}
+            />
+          </div>
+        </div>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Vai no rodapé do flyer. Em branco, nenhum endereço ou telefone é impresso — a IA não inventa.
+        </p>
 
         <label htmlFor="brand-products">O que a empresa vende/oferece</label>
         <textarea

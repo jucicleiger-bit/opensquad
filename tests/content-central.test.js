@@ -583,6 +583,8 @@ test('company profile starts empty, can be updated, and feeds the image prompt r
       audience: '',
       audienceType: '',
       location: '',
+      address: '',
+      contact: '',
       productsOrServices: '',
       differentiators: '',
       primaryObjective: '',
@@ -671,6 +673,8 @@ test('brand xray input uses simple user facts and approved four-block analysis i
       brandColors: '',
       factualConstraints: '',
       websiteOrInstagram: '',
+      address: '',
+      contact: '',
     });
     assert.equal(project.brandXray.status, 'empty');
 
@@ -8457,6 +8461,192 @@ test('generateFlyerContent shares one creative between channels of the same pixe
   });
 });
 
+// The operator owns the encarte's headline, its promo window and its
+// footer small print — the art was otherwise always coming back with the
+// same AI-picked "OFERTAS IMPERDÍVEIS", because the prompt carried literal
+// example headlines of its own. Each field is optional; blank means the
+// model decides (headline) or the art simply omits it (dates, note), never
+// that something gets invented.
+test('generateFlyerContent carries the campaign headline, promo window, footer note and the project address', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-campanha', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-campanha', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await updateProjectCompanyProfile('mercado-campanha', {
+      address: 'Av. das Torres, 1200 — Cuiabá/MT',
+      contact: '(65) 99999-0000',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('mercado-campanha', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-campanha', {
+      offerIds: [arroz.id],
+      date: '2026-10-05',
+      channels: ['instagram_story'],
+      campaign: 'QUINTA DOS FRIOS',
+      promoStart: '2026-10-02',
+      promoEnd: '2026-10-05',
+      footerNote: 'Ofertas válidas enquanto durar o estoque. Entregamos acima de R$ 150.',
+    }, dir);
+
+    const topic = batch.items[0].contentTopic;
+    assert.equal(topic.campaign, 'QUINTA DOS FRIOS');
+    assert.equal(topic.promoStart, '2026-10-02');
+    assert.equal(topic.promoEnd, '2026-10-05');
+    assert.match(topic.footerNote, /enquanto durar o estoque/);
+    assert.equal(topic.address, 'Av. das Torres, 1200 — Cuiabá/MT', 'the footer address comes from the Raio-X, not from the flyer form');
+    assert.equal(topic.contact, '(65) 99999-0000');
+  });
+});
+
+test('a flyer with no campaign, no promo window and no footer note leaves every one of them blank instead of inventing one', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-sem-campanha', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-sem-campanha', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('mercado-sem-campanha', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-sem-campanha', {
+      offerIds: [arroz.id],
+      date: '2026-10-05',
+      channels: ['instagram_story'],
+    }, dir);
+
+    const topic = batch.items[0].contentTopic;
+    assert.equal(topic.campaign, '');
+    assert.equal(topic.promoStart, '');
+    assert.equal(topic.promoEnd, '');
+    assert.equal(topic.footerNote, '');
+    assert.equal(topic.address, '');
+  });
+});
+
+// brandInput and companyProfile mirror each other in both directions, so a
+// field added to only one of them is silently wiped the next time the other
+// is saved — the Raio-X page writes brandInput, and the address would have
+// vanished on the operator's next edit there.
+test('the footer address and contact survive a round trip through both the Raio-X and the company profile', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-endereco', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-endereco', {
+      brandName: 'Mercado Teste',
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+      address: 'Av. das Torres, 1200 — Cuiabá/MT',
+      contact: '(65) 99999-0000',
+    }, dir);
+
+    const afterBrandInput = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-endereco');
+    assert.equal(afterBrandInput.brandInput.address, 'Av. das Torres, 1200 — Cuiabá/MT');
+    assert.equal(afterBrandInput.companyProfile.address, 'Av. das Torres, 1200 — Cuiabá/MT', 'saving the Raio-X must mirror the address into the profile');
+    assert.equal(afterBrandInput.companyProfile.contact, '(65) 99999-0000');
+
+    // Saving the Raio-X again, without retyping the address, must not drop it.
+    await updateProjectBrandInput('mercado-endereco', {
+      brandName: 'Mercado Teste',
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+      address: 'Av. das Torres, 1200 — Cuiabá/MT',
+      contact: '(65) 99999-0000',
+      description: 'Mercado de bairro',
+    }, dir);
+    const afterSecondSave = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-endereco');
+    assert.equal(afterSecondSave.companyProfile.address, 'Av. das Torres, 1200 — Cuiabá/MT');
+  });
+});
+
+test('a flyer prompt uses the operator\'s campaign headline verbatim and prints the registered promo window, note and address', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-prompt-campanha', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-prompt-campanha', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    // updateProjectCompanyProfile rewrites the whole profile, so the segment
+    // fields have to travel with it — without them the flyer structure below
+    // stops matching and generation throws before the prompt is ever built.
+    await updateProjectCompanyProfile('mercado-prompt-campanha', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+      address: 'Av. das Torres, 1200 — Cuiabá/MT',
+      contact: '(65) 99999-0000',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('mercado-prompt-campanha', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-prompt-campanha', {
+      offerIds: [arroz.id],
+      date: '2026-10-05',
+      channels: ['instagram_story'],
+      campaign: 'QUINTA DOS FRIOS',
+      promoStart: '2026-10-02',
+      promoEnd: '2026-10-05',
+      footerNote: 'Ofertas válidas enquanto durar o estoque.',
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-prompt-campanha');
+    const paths = getCentralPaths(dir, 'mercado-prompt-campanha');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-prompt-campanha', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    const prompt = calls[0].content.image.prompt;
+
+    assert.match(prompt, /Título exato: QUINTA DOS FRIOS/);
+    assert.match(prompt, /de 2026-10-02 a 2026-10-05/);
+    assert.match(prompt, /enquanto durar o estoque/);
+    assert.match(prompt, /Av\. das Torres, 1200/);
+    assert.match(prompt, /\(65\) 99999-0000/);
+    // The hardcoded example headlines are what made four consecutive real
+    // encartes ship with the same title.
+    assert.doesNotMatch(prompt, /Ofertas imperdíveis/i);
+    assert.doesNotMatch(prompt, /Super ofertas/i);
+    assert.doesNotMatch(prompt, /Confira nossas ofertas/i);
+  });
+});
+
+test('a flyer with no campaign, promo window or address tells the model to invent none of them', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-prompt-vazio', name: 'Mercado Teste' }, dir);
+    await updateProjectBrandInput('mercado-prompt-vazio', {
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / mercearia',
+    }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado-mercearia', 'flyer', 'vertical', dir);
+    const arroz = (await saveProjectOffer('mercado-prompt-vazio', { name: 'Arroz 5kg', price: 'R$ 24,90' }, dir)).offer;
+
+    const batch = await generateFlyerContent('mercado-prompt-vazio', {
+      offerIds: [arroz.id],
+      date: '2026-10-05',
+      channels: ['instagram_story'],
+    }, dir);
+
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'mercado-prompt-vazio');
+    const paths = getCentralPaths(dir, 'mercado-prompt-vazio');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'mercado-prompt-vazio', {
+      imageGenerator: async (payload) => {
+        calls.push(payload);
+        return { url: 'https://cdn.example.com/encarte.png', mimeType: 'image/png' };
+      },
+    }, paths);
+    const prompt = calls[0].content.image.prompt;
+
+    assert.match(prompt, /criar uma chamada curta/i, 'with no campaign registered the model writes the headline');
+    assert.match(prompt, /não escrever data, prazo/i);
+    assert.match(prompt, /não inventar endereço, telefone/i);
+    assert.doesNotMatch(prompt, /Ofertas imperdíveis/i);
+  });
+});
+
 test('generateFlyerContent rejects an empty selection and more than 12 products', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'mercado-flyer-limite', name: 'Mercado Teste' }, dir);
@@ -10408,7 +10598,7 @@ test('a flyer on a vertical channel gets a real encarte headline and the grid ce
     assert.doesNotMatch(prompt, /Título exato: Mercado Teste/i, 'the company name must not be the entire headline of a Story encarte');
     assert.doesNotMatch(prompt, /Não alterar título/i, 'an AI-written encarte headline must not then be frozen');
     assert.ok(
-      prompt.includes('Título: criar um título curto (até 5 palavras) de abertura de encarte de ofertas'),
+      prompt.includes('Título: criar uma chamada curta (até 5 palavras) de abertura do encarte'),
       'the flyer must get its own encarte-opener headline instruction',
     );
     assert.ok(

@@ -39,6 +39,9 @@ export interface BrandInput {
   brandColors?: string;
   factualConstraints?: string;
   websiteOrInstagram?: string;
+  /** Printed in the footer of pieces that carry one, like a flyer. */
+  address?: string;
+  contact?: string;
 }
 
 export interface TechnicalBase {
@@ -880,6 +883,13 @@ export interface GenerateFlyerInput {
   date: string;
   channels: string[];
   postTime?: string;
+  /** Headline printed verbatim at the top; blank lets the model write one. */
+  campaign?: string;
+  /** Promo window; blank means the art carries no date at all. */
+  promoStart?: string;
+  promoEnd?: string;
+  /** Footer small print, e.g. "enquanto durar o estoque". */
+  footerNote?: string;
 }
 
 export function generateFlyer(

@@ -2269,6 +2269,21 @@ export async function generateFlyerContent(projectId, options = {}, targetDir = 
     cta: '',
     autoGenerateCta: false,
     notes: '',
+    // The operator's own wording for this encarte. Every one of these is
+    // optional and blank-means-blank: an empty campaign hands the headline
+    // back to the model, and an empty promo window or note means the art
+    // simply carries neither — never that the model fills the gap with
+    // something plausible. Dates are passed through as registered, not
+    // formatted here, so the prompt can state them verbatim.
+    campaign: cleanText(options.campaign),
+    promoStart: cleanText(options.promoStart),
+    promoEnd: cleanText(options.promoEnd),
+    footerNote: cleanText(options.footerNote),
+    // Footer identity comes from the Raio-X, not from the flyer form, so it
+    // stays the same across every encarte for this client and is fixed in
+    // one place when it changes.
+    address: cleanText(project.companyProfile?.address),
+    contact: cleanText(project.companyProfile?.contact),
     objective: `Encarte de ofertas de ${project.name} com os produtos: ${productNames}. Todos os produtos selecionados devem aparecer na peça, cada um com o seu preço exato.`,
   };
   const createdAt = new Date().toISOString();
@@ -7493,6 +7508,33 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // celebration — it's the opener over a price grid ("SUPER OFERTAS"), and
   // it must not invent the one thing a price grid can be wrong about.
   const isFlyerFreeTitle = topic.source === 'flyer';
+  const flyerCampaign = topic.source === 'flyer' ? cleanPromptText(topic.campaign) : '';
+  // Footer content the operator registered, each independently optional.
+  // A blank promo window prints no window at all — an encarte that invents
+  // "válido até domingo" is a promise the market did not make.
+  const flyerFooterLines = topic.source === 'flyer'
+    ? [
+      topic.promoStart && topic.promoEnd
+        ? `Período da promoção, escrever exatamente estas datas: de ${topic.promoStart} a ${topic.promoEnd}.`
+        : topic.promoStart
+          ? `Período da promoção, escrever exatamente esta data de início: a partir de ${topic.promoStart}.`
+          : topic.promoEnd
+            ? `Período da promoção, escrever exatamente esta data final: até ${topic.promoEnd}.`
+            : 'Não há período de promoção cadastrado: não escrever data, prazo, "válido até", "só hoje" nem qualquer janela de validade na peça.',
+      topic.footerNote
+        ? `Texto obrigatório no rodapé, escrever exatamente assim: ${cleanPromptText(topic.footerNote)}`
+        : '',
+      topic.address
+        ? `Endereço no rodapé, escrever exatamente assim: ${cleanPromptText(topic.address)}`
+        : '',
+      topic.contact
+        ? `Contato no rodapé, escrever exatamente assim: ${cleanPromptText(topic.contact)}`
+        : '',
+      !topic.address && !topic.contact
+        ? 'Não há endereço nem telefone cadastrados: não inventar endereço, telefone, WhatsApp, site ou perfil no rodapé.'
+        : '',
+    ].filter(Boolean)
+    : [];
   const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
@@ -7601,8 +7643,20 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       objective,
     ]),
     section('TEXTOS OBRIGATÓRIOS', [
-      isFlyerFreeTitle
-        ? `Título: criar um título curto (até 5 palavras) de abertura de encarte de ofertas — a chamada que fica acima da grade de produtos (ex. de estilo, adaptar: "Super ofertas", "Ofertas imperdíveis", "Confira nossas ofertas"). Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
+      // An operator-written campaign headline is the whole headline — it is
+      // the one they typed for this week's encarte ("QUINTA DOS FRIOS"), so
+      // it goes in verbatim like any other exact text.
+      flyerCampaign
+        ? `Título exato: ${flyerCampaign}`
+        : isFlyerFreeTitle
+        // Deliberately no example headlines here. The earlier version of
+        // this line offered three ("Super ofertas", "Ofertas imperdíveis",
+        // "Confira nossas ofertas") as style hints to adapt; the model read
+        // them as a menu and picked the middle one every single time, so
+        // four consecutive real encartes shipped with the same headline —
+        // overriding the operator's own example in their registered
+        // structure. Describe the job, name no phrasing.
+        ? `Título: criar uma chamada curta (até 5 palavras) de abertura do encarte, acima da grade de produtos. Se o modelo estrutural cadastrado trouxer um exemplo de chamada, seguir o estilo dele. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
         : isSpecialDateFreeTitle
         ? `Título: criar um título curto (até 8 palavras) com tom caloroso e comemorativo sobre "${freeTitleSubject}" — é um post de celebração da data, não uma oferta nem uma peça comercial. Pode conectar de leve com o negócio/segmento da marca, mas sem soar como anúncio, pitch de venda ou gancho de captação. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo.`
         : isGoalTopic || isAdCreativeFreeTitle
@@ -7612,6 +7666,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
             : `Título exato: ${exactTitle}`,
       topic.items ? `Subtítulo/benefícios obrigatórios: ${cleanPromptText(topic.items)}` : '',
       topic.notes ? `Observações e restrições obrigatórias da oferta: ${cleanPromptText(topic.notes)}` : '',
+      ...flyerFooterLines,
       // A flyer's topic.price is deliberately blank by design (see
       // buildFlyerProductFocus/generateFlyerContent) — the unconditional
       // "don't insert any price" fallback below used to fire for every
@@ -8659,6 +8714,12 @@ export function normalizeCompanyProfile(input = {}) {
     audience: cleanText(input?.audience),
     audienceType: normalizeAudienceType(input?.audienceType),
     location: cleanText(input?.location),
+    // `location` is the area a business serves ("Cuiabá e região") — useful
+    // for targeting, useless in a flyer footer, which needs a place someone
+    // can actually go to and a number they can actually call. Kept separate
+    // for that reason rather than overloading location.
+    address: cleanText(input?.address),
+    contact: cleanText(input?.contact),
     productsOrServices: cleanText(input?.productsOrServices),
     differentiators: cleanText(input?.differentiators),
     primaryObjective: cleanText(input?.primaryObjective),
@@ -8771,6 +8832,11 @@ function normalizeBrandInput(input = {}, { validateContentGoalWeights = false } 
     brandColors: cleanText(input?.brandColors),
     factualConstraints: cleanText(input?.factualConstraints),
     websiteOrInstagram: cleanText(input?.websiteOrInstagram),
+    // Footer identity for printed pieces (see generateFlyerContent). Kept
+    // apart from serviceRegion, which is the area served rather than a place
+    // a customer can walk into.
+    address: cleanText(input?.address),
+    contact: cleanText(input?.contact),
   };
 }
 
@@ -8913,6 +8979,8 @@ function brandInputToCompanyProfile(input = {}, existingProfile = {}) {
     brandColors: brandInput.brandColors,
     factualConstraints: brandInput.factualConstraints,
     websiteOrInstagram: brandInput.websiteOrInstagram,
+    address: brandInput.address,
+    contact: brandInput.contact,
   });
 }
 
@@ -8937,6 +9005,8 @@ function companyProfileToBrandInput(profileInput = {}, fallbackName = '') {
     websiteOrInstagram: profile.websiteOrInstagram,
     mainDifferential: profile.differentiators,
     contentGoals: profile.contentGoals,
+    address: profile.address,
+    contact: profile.contact,
   });
 }
 

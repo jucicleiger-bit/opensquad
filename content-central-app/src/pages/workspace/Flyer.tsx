@@ -28,6 +28,13 @@ export function Flyer() {
   const [postTime, setPostTime] = useState(
     (project.contentSettings?.defaultPostTime as string | undefined) || "09:00",
   );
+  // All four are optional. Blank campaign hands the headline back to the
+  // model; blank dates and note mean the art carries neither, never that
+  // something plausible gets invented in their place.
+  const [campaign, setCampaign] = useState("");
+  const [promoStart, setPromoStart] = useState("");
+  const [promoEnd, setPromoEnd] = useState("");
+  const [footerNote, setFooterNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -76,7 +83,16 @@ export function Flyer() {
     setBusy(true);
     setError(null);
     try {
-      await generateFlyer(project.projectId, { offerIds: selected, date, channels: [...channels], postTime });
+      await generateFlyer(project.projectId, {
+        offerIds: selected,
+        date,
+        channels: [...channels],
+        postTime,
+        campaign,
+        promoStart,
+        promoEnd,
+        footerNote,
+      });
       setDone(true);
       setSelected([]);
     } catch (err) {
@@ -152,6 +168,60 @@ export function Flyer() {
           Horário
         </label>
         <input id="flyer-time" type="time" value={postTime} onChange={(event) => setPostTime(event.target.value)} />
+      </Card>
+
+      <Card style={{ padding: 16, marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Campanha</h3>
+        <label htmlFor="flyer-campaign">Campanha / tema do flyer</label>
+        <input
+          id="flyer-campaign"
+          value={campaign}
+          placeholder="QUINTA DOS FRIOS"
+          onChange={(event) => setCampaign(event.target.value)}
+        />
+        <p className="muted" style={{ marginTop: 4 }}>
+          É a chamada do topo, escrita exatamente assim na arte. Em branco, a IA escreve uma.
+        </p>
+
+        <div className="row" style={{ marginTop: 12 }}>
+          <div>
+            <label htmlFor="flyer-promo-start">Promoção começa</label>
+            <input
+              id="flyer-promo-start"
+              type="date"
+              value={promoStart}
+              onChange={(event) => setPromoStart(event.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="flyer-promo-end">Promoção termina</label>
+            <input
+              id="flyer-promo-end"
+              type="date"
+              value={promoEnd}
+              onChange={(event) => setPromoEnd(event.target.value)}
+            />
+          </div>
+        </div>
+        <p className="muted" style={{ marginTop: 4 }}>
+          Em branco, a peça sai sem prazo nenhum — nada de &quot;válido até domingo&quot; inventado.
+        </p>
+
+        <label htmlFor="flyer-footer-note" style={{ marginTop: 12 }}>
+          Observação no rodapé
+        </label>
+        <textarea
+          id="flyer-footer-note"
+          value={footerNote}
+          rows={2}
+          placeholder="Ofertas válidas enquanto durar o estoque. Entregamos acima de R$ 150."
+          onChange={(event) => setFooterNote(event.target.value)}
+        />
+        <p className="muted" style={{ marginTop: 4 }}>
+          {project.brandInput?.address || project.brandInput?.contact
+            ? "O endereço e o telefone do rodapé vêm do Raio-X."
+            : "Sem endereço no Raio-X: o rodapé sai sem endereço e sem telefone. Cadastre na aba Empresa."}
+        </p>
       </Card>
 
       {error ? <div className="pill bad" style={{ marginTop: 12 }}>{error}</div> : null}

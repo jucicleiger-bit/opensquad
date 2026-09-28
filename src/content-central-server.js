@@ -1163,6 +1163,10 @@ async function handleRequest(req, res, targetDir, context = {}) {
       date: body.date,
       channels: (body.channel || body.channels) ? normalizeChannels(body) : undefined,
       postTime: body.postTime,
+      campaign: body.campaign,
+      promoStart: body.promoStart,
+      promoEnd: body.promoEnd,
+      footerNote: body.footerNote,
     }, targetDir);
     enqueueBatchImageGeneration(projectId, batch, imageOptions, targetDir);
     return sendJson(res, 201, { batch });
