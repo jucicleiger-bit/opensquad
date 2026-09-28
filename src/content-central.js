@@ -8107,7 +8107,7 @@ export function formatFlyerProductLines(products = [], missingPriceText = '') {
 // products is labeled with the first one that claimed it, since the same
 // photo standing for two different SKUs is a data oddity, not a case worth
 // branching on.
-function flyerProductLabelFor(topic = {}, reference = {}) {
+export function flyerProductLabelFor(topic = {}, reference = {}) {
   const products = Array.isArray(topic.products) ? topic.products : [];
   const owner = products.find((product) => (product.photoReferenceIds || []).includes(reference.id));
   return owner

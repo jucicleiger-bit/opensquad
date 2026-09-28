@@ -32,6 +32,7 @@ import {
   publishContentToWhatsAppStatus,
   publishWithGaveteSync,
   resolveContentImageAbsolutePath,
+  buildCodexAttachmentManifest,
   selectImageReferencesForCodex,
   selectOpenAiImageEditReferences,
   startContentCentralServer,
@@ -705,6 +706,49 @@ test('selectImageReferencesForCodex forwards every product photo for a flyer, wh
     [brand, photos[0], photos[1], layout],
     'callers that pass no topic at all keep the old behaviour',
   );
+});
+
+// The generation prompt named each photo by file path, but codex receives
+// the images as unnamed attachments in `-i` order — nothing connected
+// "33362160.png" to "the eleventh image you were given". Confirmed live on a
+// 12-product encarte: every photo reached the model and it still redrew most
+// products generically. The review prompt already numbers its attachments;
+// generation never did.
+test('buildCodexAttachmentManifest numbers a flyer\'s attachments in -i order and names the product each photo belongs to', () => {
+  const brand = { id: 'logo', role: 'brand_asset', relativePath: 'assets/logo.png' };
+  const arroz = { id: 'ref-arroz', role: 'product_photo', relativePath: 'assets/references/arroz.png' };
+  const cafe = { id: 'ref-cafe', role: 'product_photo', relativePath: 'assets/references/cafe.png' };
+  const layout = { id: 'layout', role: 'layout_model', relativePath: 'segment/encarte.png' };
+  const topic = {
+    source: 'flyer',
+    products: [
+      { offerId: 'a', name: 'Arroz 5kg', price: 'R$ 24,90', priceUnit: 'pacote', photoReferenceIds: ['ref-arroz'] },
+      { offerId: 'b', name: 'Café 500g', price: 'R$ 17,90', priceUnit: '', photoReferenceIds: ['ref-cafe'] },
+    ],
+  };
+
+  const manifest = buildCodexAttachmentManifest([brand, arroz, cafe, layout], topic, 0);
+
+  assert.match(manifest, /Anexo 1:/);
+  assert.match(manifest, /Anexo 2:.*Arroz 5kg.*R\$ 24,90/);
+  assert.match(manifest, /Anexo 3:.*Café 500g.*R\$ 17,90/);
+  assert.match(manifest, /Anexo 4:/);
+  // The numbering is the whole point — it must track position in the list.
+  assert.ok(manifest.indexOf('Anexo 2:') < manifest.indexOf('Anexo 3:'));
+
+  // A targeted edit puts the canvas at Anexo 1, shifting everything by one.
+  const shifted = buildCodexAttachmentManifest([brand, arroz, cafe, layout], topic, 1);
+  assert.match(shifted, /Anexo 3:.*Arroz 5kg/);
+});
+
+test('buildCodexAttachmentManifest returns an empty string for a non-flyer topic, leaving its prompt untouched', () => {
+  const refs = [
+    { id: 'logo', role: 'brand_asset', relativePath: 'assets/logo.png' },
+    { id: 'p1', role: 'product_photo', relativePath: 'assets/references/p1.png' },
+  ];
+  assert.equal(buildCodexAttachmentManifest(refs, { source: 'offer', type: 'combo' }, 0), '');
+  assert.equal(buildCodexAttachmentManifest(refs, {}, 0), '');
+  assert.equal(buildCodexAttachmentManifest([], { source: 'flyer', products: [] }, 0), '');
 });
 
 test('selectImageReferencesForCodex never exceeds the provider 16-image ceiling, even for a full 12-product flyer', () => {

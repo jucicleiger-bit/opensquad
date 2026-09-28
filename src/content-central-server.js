@@ -127,6 +127,7 @@ import {
   updateProjectImageRules,
   validateMetaToken,
   MAX_FLYER_PRODUCTS,
+  flyerProductLabelFor,
 } from './content-central.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
@@ -2691,6 +2692,33 @@ async function generateAiImageWithNousFal({ content, projectId, targetDir, note,
 // Codex accepts up to 16 input images (see generateAiImageWithCodex), and a
 // full flyer is 1 brand + 12 photos + 2 layouts = 15, leaving room for a
 // targeted-edit base image.
+// The generation prompt lists references by absolute file path, but codex
+// receives them as unnamed attachments in `-i` order — the model has no way
+// to connect "33362160.png" to the eleventh image it was handed. For a
+// single-hero piece that costs nothing (there are one or two photos and one
+// obvious subject). For a twelve-product encarte it is the whole problem:
+// confirmed live, every photo reached the model and it still redrew most
+// products generically, because nothing said which attachment was which
+// product. reviewAiImageWithCodexAgent already numbers its attachments; this
+// gives generation the same manifest, scoped to flyers so no other card's
+// prompt changes. `offset` is how many attachments precede the references
+// (a targeted edit puts the canvas at Anexo 1).
+export function buildCodexAttachmentManifest(references, topic = {}, offset = 0) {
+  if (topic?.source !== 'flyer') return '';
+  const lines = references.map((reference, index) => {
+    const position = index + offset + 1;
+    return reference.role === 'product_photo'
+      ? `Anexo ${position}: ${flyerProductLabelFor(topic, reference)}`
+      : `Anexo ${position}: ${reference.role} — ${reference.relativePath || reference.filename || reference.id || 'referência'}.`;
+  });
+  if (!lines.length) return '';
+  return [
+    'Os anexos desta mensagem estão nesta ordem exata:',
+    ...lines,
+    'Cada foto de produto acima pertence ao produto nomeado nela. Colocar cada uma no espaço da grade daquele produto, preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um produto pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.',
+  ].join('\n');
+}
+
 export function selectImageReferencesForCodex(imageReferences, topic = {}) {
   const productPhotoLimit = topic?.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2;
   return [
@@ -2807,10 +2835,19 @@ async function generateAiImageWithCodexAgent({ content, projectId, targetDir, no
   const imageReferences = Array.isArray(content.image?.references)
     ? content.image.references.filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     : [];
+  const selectedReferences = selectImageReferencesForCodex(imageReferences, content.contentTopic);
   const referencePaths = [
     editBasePath,
-    ...selectImageReferencesForCodex(imageReferences, content.contentTopic).map((reference) => reference.absolutePath),
+    ...selectedReferences.map((reference) => reference.absolutePath),
   ].filter(Boolean);
+  // Built here, not inside buildAiImageGenerationPrompt, because this is
+  // where the attachment order is actually decided — the manifest has to
+  // describe the `-i` list it ships with, or its numbering lies.
+  const attachmentManifest = buildCodexAttachmentManifest(
+    selectedReferences,
+    content.contentTopic,
+    editBasePath ? 1 : 0,
+  );
 
   const outputDir = resolve(targetDir, '_opensquad', 'content-central', 'projects', projectId, 'assets', 'generated');
   await mkdir(outputDir, { recursive: true });
@@ -2830,9 +2867,11 @@ async function generateAiImageWithCodexAgent({ content, projectId, targetDir, no
     'Gere UMA imagem usando a ferramenta nativa "image_gen" (built-in), seguindo exatamente esta especificação:',
     '',
     prompt,
+    attachmentManifest ? '' : null,
+    attachmentManifest || null,
     '',
     'Não faça mais nada além disso: não peça confirmação, não explique o resultado, não gere variações extras, não crie ou copie nenhum arquivo, não rode comandos.',
-  ].join('\n');
+  ].filter((line) => line !== null).join('\n');
 
   let stdout;
   try {
