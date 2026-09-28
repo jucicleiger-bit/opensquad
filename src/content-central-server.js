@@ -126,6 +126,7 @@ import {
   simulateTestPost,
   updateProjectImageRules,
   validateMetaToken,
+  MAX_FLYER_PRODUCTS,
 } from './content-central.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
@@ -2682,10 +2683,19 @@ async function generateAiImageWithNousFal({ content, projectId, targetDir, note,
 // facts about the project and always come first; layout_model is borrowed
 // composition inspiration from another project's approved creative, so it's
 // capped to at most 1 and only fills a slot after the real references.
-export function selectImageReferencesForCodex(imageReferences) {
+// A flyer is the exception: it carries one photo per product on the grid, so
+// capping it at 2 throws away every other product's real packaging and the
+// model draws a generic stand-in in its place. Confirmed live on a
+// 9-product encarte — seven photos were discarded here, after surviving both
+// earlier caps, and one slot came back with a competitor's packaging.
+// Codex accepts up to 16 input images (see generateAiImageWithCodex), and a
+// full flyer is 1 brand + 12 photos + 2 layouts = 15, leaving room for a
+// targeted-edit base image.
+export function selectImageReferencesForCodex(imageReferences, topic = {}) {
+  const productPhotoLimit = topic?.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2;
   return [
     ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1),
-    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, 2),
+    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, productPhotoLimit),
     ...imageReferences.filter((reference) => reference.role === 'layout_model').slice(0, 2),
   ];
 }
@@ -2720,7 +2730,7 @@ async function generateAiImageWithCodex({ content, projectId, targetDir, note, a
   const imageReferences = Array.isArray(content.image?.references)
     ? content.image.references.filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     : [];
-  const referencePaths = selectImageReferencesForCodex(imageReferences).map((reference) => reference.absolutePath);
+  const referencePaths = selectImageReferencesForCodex(imageReferences, content.contentTopic).map((reference) => reference.absolutePath);
 
   const promptFile = join(tmpdir(), `opensquad-codex-prompt-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
   await writeFile(promptFile, prompt, 'utf-8');
@@ -2799,7 +2809,7 @@ async function generateAiImageWithCodexAgent({ content, projectId, targetDir, no
     : [];
   const referencePaths = [
     editBasePath,
-    ...selectImageReferencesForCodex(imageReferences).map((reference) => reference.absolutePath),
+    ...selectImageReferencesForCodex(imageReferences, content.contentTopic).map((reference) => reference.absolutePath),
   ].filter(Boolean);
 
   const outputDir = resolve(targetDir, '_opensquad', 'content-central', 'projects', projectId, 'assets', 'generated');
@@ -3672,7 +3682,7 @@ export function buildAiImageReviewPrompt({ content, project, note, attachedAsFil
   const topBrandColor = brandColorsForReview[0] || '';
   const secondBrandColor = brandColorsForReview.find((color) => color !== topBrandColor) || '';
   const comparisonReferences = Array.isArray(content?.image?.references)
-    ? selectImageReferencesForCodex(content.image.references)
+    ? selectImageReferencesForCodex(content.image.references, content.contentTopic)
       .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     : [];
   const attachmentManifest = comparisonReferences
@@ -3791,7 +3801,7 @@ async function reviewAiImageWithCodexAgent({ content, project, note }) {
   const imagePath = resolveContentImageAbsolutePath(content);
   if (!imagePath) return null;
   const prompt = buildAiImageReviewPrompt({ content, project, note, attachedAsFile: true });
-  const comparisonPaths = selectImageReferencesForCodex(content.image?.references || [])
+  const comparisonPaths = selectImageReferencesForCodex(content.image?.references || [], content.contentTopic)
     .filter((reference) => reference.absolutePath && String(reference.mimeType || '').startsWith('image/'))
     .map((reference) => reference.absolutePath)
     .filter((referencePath) => referencePath && referencePath !== imagePath);

@@ -675,6 +675,53 @@ test('selectImageReferencesForCodex still returns an empty list when there are n
   assert.deepEqual(selectImageReferencesForCodex([]), []);
 });
 
+// The 2-photo cap above is the third and last one on a product photo's way to
+// the model, after buildPrimaryAiImageReferences and buildChatGptFinalCardPrompt.
+// An encarte carries one photo per product, so that cap silently discarded
+// seven of nine real product photos on a live 9-product flyer and the model
+// drew generic food (and, in one slot, a competitor's packaging) in their
+// place. Codex accepts up to 16 input images, so a flyer's whole set fits.
+test('selectImageReferencesForCodex forwards every product photo for a flyer, while a normal topic keeps the 2-photo cap', () => {
+  const brand = { role: 'brand_asset', absolutePath: '/brand.png' };
+  const photos = Array.from({ length: 9 }, (_, index) => ({ role: 'product_photo', absolutePath: `/product${index + 1}.png` }));
+  const layout = { role: 'layout_model', absolutePath: '/layout.png' };
+  const references = [brand, ...photos, layout];
+
+  const flyer = selectImageReferencesForCodex(references, { source: 'flyer' });
+  assert.deepEqual(
+    flyer.filter((reference) => reference.role === 'product_photo'),
+    photos,
+    'every registered product photo must reach the model — one per grid slot',
+  );
+  assert.deepEqual(flyer, [brand, ...photos, layout], 'brand and layout keep their own slots around the photos');
+
+  assert.deepEqual(
+    selectImageReferencesForCodex(references, { source: 'offer' }),
+    [brand, photos[0], photos[1], layout],
+    'a single-hero topic must keep the 2-photo cap — non-regression guard',
+  );
+  assert.deepEqual(
+    selectImageReferencesForCodex(references),
+    [brand, photos[0], photos[1], layout],
+    'callers that pass no topic at all keep the old behaviour',
+  );
+});
+
+test('selectImageReferencesForCodex never exceeds the provider 16-image ceiling, even for a full 12-product flyer', () => {
+  const brand = { role: 'brand_asset', absolutePath: '/brand.png' };
+  const photos = Array.from({ length: 12 }, (_, index) => ({ role: 'product_photo', absolutePath: `/product${index + 1}.png` }));
+  const layouts = [
+    { role: 'layout_model', absolutePath: '/layout1.png' },
+    { role: 'layout_model', absolutePath: '/layout2.png' },
+  ];
+
+  const selected = selectImageReferencesForCodex([brand, ...photos, ...layouts], { source: 'flyer' });
+  // 1 brand + 12 photos + 2 layouts = 15, and the caller may prepend an edit
+  // base image, so 16 is the real worst case.
+  assert.equal(selected.length, 15);
+  assert.ok(selected.length + 1 <= 16, 'must leave room for a targeted-edit base image without blowing the provider ceiling');
+});
+
 test('selectOpenAiImageEditReferences reserves a slot for the layout reference instead of letting a well-configured project\'s own 4+ references push it out by array position under the 4-image cap', () => {
   const logo = { role: 'brand_asset', absolutePath: '/logo.png' };
   const photos = ['/p1.png', '/p2.png', '/p3.png', '/p4.png'].map((absolutePath) => ({ role: 'product_photo', absolutePath }));

@@ -2163,7 +2163,7 @@ export async function generateSpecialDateContent(projectId, options = {}, target
 }
 
 const FLYER_BATCH_PREFIX = 'flyer';
-const MAX_FLYER_PRODUCTS = 12;
+export const MAX_FLYER_PRODUCTS = 12;
 // Date.now() alone can repeat within the same millisecond — writeJson's
 // own temp-file naming elsewhere in this file hit exactly this
 // (reproduced 100% of the time with concurrent carousel slide writes) and
