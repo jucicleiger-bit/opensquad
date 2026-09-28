@@ -88,6 +88,8 @@ export function References() {
   const logoInputRef = useRef<HTMLInputElement>(null);
   const [logoBusy, setLogoBusy] = useState(false);
   const [logoError, setLogoError] = useState<string | null>(null);
+  // Re-uploads reuse the same path (assets/logo.png), so bust the browser cache.
+  const [logoVersion, setLogoVersion] = useState(0);
 
   const [visualStyle, setVisualStyle] = useState(project.brand?.visualStyle || "");
   const [imageRules, setImageRules] = useState((project.brand?.imageRules || []).join("\n"));
@@ -124,6 +126,7 @@ export function References() {
         instruction: "Logo oficial da marca. Preservar exatamente como enviado.",
       });
       if (logoInputRef.current) logoInputRef.current.value = "";
+      setLogoVersion(Date.now());
       await refreshProject();
     } catch (err) {
       setLogoError((err as Error).message);
@@ -224,6 +227,25 @@ export function References() {
             {logoBusy ? "Enviando..." : "Enviar logo"}
           </Button>
           {logoError ? <div className="pill bad" style={{ marginTop: 10 }}>{logoError}</div> : null}
+          {project.brandIdentity?.logoPath ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 16,
+                borderRadius: 12,
+                border: "1px solid var(--border, rgba(255,255,255,.12))",
+                background: "repeating-conic-gradient(#2a2a30 0% 25%, #202026 0% 50%) 50% / 16px 16px",
+                display: "flex",
+                justifyContent: "center",
+              }}
+            >
+              <img
+                src={`/api/projects/${project.projectId}/assets/${project.brandIdentity.logoPath}${logoVersion ? `?v=${logoVersion}` : ""}`}
+                alt="Logo enviada"
+                style={{ maxWidth: "100%", maxHeight: 180, objectFit: "contain" }}
+              />
+            </div>
+          ) : null}
           <div className="notice" style={{ marginTop: 12 }}>
             <b>Cores identificadas na logo</b>
             <br />
