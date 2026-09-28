@@ -5131,7 +5131,9 @@ export async function publishContentToWhatsAppStatus({ content, project }, targe
     if (!localImagePath) throw new Error('Imagem gerada não encontrada para publicar.');
     mediaUrl = await uploadGeneratedImagePublicly(localImagePath);
   }
-  const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 90000);
+  // Right after the PC wakes, WAHA was seen taking 70-85s to answer a send
+  // that did go out — 90s was cutting it close.
+  const timeoutMs = Number(process.env.OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS || 180000);
   try {
     const res = await fetch(`${url}/api/${sessionName}/status/image`, {
       method: 'POST',
@@ -5147,7 +5149,12 @@ export async function publishContentToWhatsAppStatus({ content, project }, targe
     return { mediaId: parsed.id || null, permalink: null };
   } catch (err) {
     if (err.name === 'AbortError' || err.name === 'TimeoutError') {
-      throw new Error('Canal beta instável — WAHA não respondeu a tempo.', { cause: err });
+      // WAHA keeps going after we give up and often posts anyway — flagged
+      // so runDuePublishSweep leaves the retry to the operator.
+      throw Object.assign(
+        new Error('Canal beta instável — WAHA não respondeu a tempo. O status pode ter saído mesmo assim: confira no WhatsApp antes de tentar de novo.', { cause: err }),
+        { outcomeUnknown: true },
+      );
     }
     throw err;
   }
@@ -5185,7 +5192,7 @@ export function startWhatsAppPublishScheduler(targetDir) {
   if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
   const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
   // A slow WAHA call (up to OPENSQUAD_WHATSAPP_PUBLISH_TIMEOUT_MS, default
-  // 90s, plus image upload) can outlast intervalMs — without this guard the
+  // 180s, plus image upload) can outlast intervalMs — without this guard the
   // next tick starts a second sweep before publishOneItem has persisted
   // realPublished:true for the in-flight item, so it gets published twice.
   // Same fix as startSocialSellingRadarScheduler's `running` guard below.

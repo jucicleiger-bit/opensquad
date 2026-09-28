@@ -4704,6 +4704,16 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
     const projectId = projectSummary.projectId;
     let content = await listProjectContent(projectId, targetDir);
     if (options.channels) content = content.filter((item) => options.channels.has(item.channel));
+    // A marker with no outcome means that attempt died mid-send (PC shut
+    // down or slept) — sweeps never overlap, so it isn't still running. It
+    // may already be live, so it's never auto-retried (see publishOneItem);
+    // flag it so the operator checks before "Tentar publicar de novo".
+    for (const item of content) {
+      if (item.publish?.attemptStartedAt && !item.publish.realPublished && !item.publish.error) {
+        item.publish.error = 'Publicação interrompida (o PC desligou ou dormiu?) — pode ter saído mesmo assim. Confira antes de tentar de novo.';
+        await writeJson(item.filePath, item);
+      }
+    }
     const alreadyPublishedContentIds = new Set(
       content
         .filter((item) => item.contentId && item.publish?.realPublished)
@@ -4719,6 +4729,7 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
         // Supabase content_items/schedules — the cloud sweep owns publishing
         // it from there on; publishing it locally too would double-post.
         && !item.migratedToCloud
+        && !item.publish?.attemptStartedAt
         && isPublishDue(item, now)
       )
       .sort((a, b) => {
@@ -4756,6 +4767,10 @@ async function publishOneItem(item, projectSummary, metaPublisher, now) {
   // calling this, so this is a no-op for it; it only matters for
   // publishSingleContent's manual retry path.
   if (item.publish?.realPublished) return true;
+  // Written before the send so an attempt the process never finishes is
+  // still visible to the next sweep, which won't blindly send it again.
+  item.publish = { ...item.publish, attemptStartedAt: now.toISOString() };
+  await writeJson(item.filePath, item);
   try {
     const result = await metaPublisher({ content: item, project: projectSummary });
     item.publish = {
@@ -4765,12 +4780,17 @@ async function publishOneItem(item, projectSummary, metaPublisher, now) {
       metaMediaId: result?.mediaId || null,
       permalink: result?.permalink || null,
       error: null,
+      attemptStartedAt: null,
     };
     item.updatedAt = now.toISOString();
     await writeJson(item.filePath, item);
     return true;
   } catch (err) {
-    item.publish = { ...item.publish, error: err.message };
+    // A timeout doesn't mean it wasn't sent — WAHA was seen posting a status
+    // after the client gave up, and the retry posted it twice (2026-09-14).
+    // Keep the marker on those so only the operator can retry; a definite
+    // failure clears it and gets auto-retried as before.
+    item.publish = { ...item.publish, error: err.message, attemptStartedAt: err.outcomeUnknown ? item.publish.attemptStartedAt : null };
     item.updatedAt = now.toISOString();
     await writeJson(item.filePath, item);
     return false;

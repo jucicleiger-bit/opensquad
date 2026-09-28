@@ -3994,7 +3994,8 @@ test('publishContentToWhatsAppStatus surfaces a clear beta-instability error whe
       }), async () => {
         await assert.rejects(
           () => publishContentToWhatsAppStatus({ content, project }, dir),
-          /Canal beta instável.*WAHA não respondeu a tempo/,
+          // outcomeUnknown: WAHA may still post it — the sweep must not retry.
+          { message: /Canal beta instável.*WAHA não respondeu a tempo/, outcomeUnknown: true },
         );
       });
     } finally {

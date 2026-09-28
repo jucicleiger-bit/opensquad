@@ -7279,6 +7279,59 @@ test('runDuePublishSweep records the error and keeps the item unpublished when t
   });
 });
 
+// Regression (WAHA logs, 2026-09-14): right after the PC came back on, WAHA
+// took >90s to answer, the client gave up, WAHA posted the status anyway,
+// and the next sweep posted it a second time.
+test('runDuePublishSweep never auto-retries a publish whose outcome is unknown (timeout), but the operator still can', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'publish-unknown', name: 'Publish Unknown', handle: '@publishunknown', approvalEmail: 'aprovacao@example.com' }, dir);
+    const batch = await generateContentBatch('publish-unknown', { days: 1, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    await approveContent('publish-unknown', batch.items[0].contentId, dir, batch.batchId);
+    const now = new Date('2026-07-20T12:00:00.000Z');
+
+    await runDuePublishSweep(dir, {
+      now,
+      metaPublisher: async () => { throw Object.assign(new Error('WAHA não respondeu a tempo'), { outcomeUnknown: true }); },
+    });
+    let calls = 0;
+    const second = await runDuePublishSweep(dir, { now, metaPublisher: async () => { calls += 1; return { mediaId: 'dup' }; } });
+
+    assert.equal(calls, 0);
+    assert.equal(second.published.length, 0);
+    const raw = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    assert.match(raw.publish.error, /WAHA não respondeu a tempo/);
+
+    const retried = await publishSingleContent('publish-unknown', batch.items[0].contentId, dir, {
+      metaPublisher: async () => ({ mediaId: 'manual' }),
+    }, batch.batchId);
+    assert.equal(retried.publish.realPublished, true);
+  });
+});
+
+test('runDuePublishSweep never auto-retries a publish cut off mid-send (PC shut down), and flags it for the operator', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'publish-cut', name: 'Publish Cut', handle: '@publishcut', approvalEmail: 'aprovacao@example.com' }, dir);
+    const batch = await generateContentBatch('publish-cut', { days: 1, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    await approveContent('publish-cut', batch.items[0].contentId, dir, batch.batchId);
+    const now = new Date('2026-07-20T12:00:00.000Z');
+
+    // The send starts and the process dies before any outcome is recorded:
+    // this sweep is simply abandoned, never resolving.
+    let sendStarted;
+    const started = new Promise((resolvePromise) => { sendStarted = resolvePromise; });
+    runDuePublishSweep(dir, { now, metaPublisher: () => { sendStarted(); return new Promise(() => {}); } });
+    await started;
+
+    let calls = 0;
+    await runDuePublishSweep(dir, { now, metaPublisher: async () => { calls += 1; return { mediaId: 'dup' }; } });
+
+    assert.equal(calls, 0);
+    const raw = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    assert.notEqual(raw.publish.realPublished, true);
+    assert.match(raw.publish.error, /interrompida/);
+  });
+});
+
 test('runDuePublishSweep only publishes the earliest overdue (date, time) slot per call, instead of bursting every backlogged slot out at once', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
