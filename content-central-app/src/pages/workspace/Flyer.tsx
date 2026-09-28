@@ -46,6 +46,27 @@ export function Flyer() {
   const groups = project.contentStrategy?.offerGroups || [];
   const full = selected.length >= MAX_FLYER_PRODUCTS;
 
+  // Products are shown under the group they were registered in, not as one
+  // flat list with the group checkboxes floating above it — a client with
+  // twenty offers across two groups otherwise reads as an undifferentiated
+  // wall, right where the grouping matters most. Groups with no products are
+  // skipped; products with no group get a section of their own so they stay
+  // reachable rather than disappearing with their heading.
+  const sections = useMemo(() => {
+    const grouped = groups
+      .map((group) => ({
+        id: group.id,
+        name: group.name,
+        offers: offers.filter((offer) => offer.groupId === group.id),
+      }))
+      .filter((section) => section.offers.length > 0);
+    const claimed = new Set(grouped.flatMap((section) => section.offers.map((offer) => offer.id)));
+    const loose = offers.filter((offer) => !claimed.has(offer.id));
+    return loose.length
+      ? [...grouped, { id: "none", name: "Sem grupo", offers: loose }]
+      : grouped;
+  }, [groups, offers]);
+
   // A group checkbox is a bulk toggle over its own offers, nothing more —
   // the request always travels as an explicit offerIds list, so a group
   // edited later never silently changes a flyer already generated.
@@ -118,37 +139,40 @@ export function Flyer() {
           {selected.length} de {MAX_FLYER_PRODUCTS} produtos selecionados
         </p>
 
-        {groups.map((group) => {
-          const ids = offers.filter((offer) => offer.groupId === group.id).map((offer) => offer.id);
-          if (ids.length === 0) return null;
-          return (
-            <label key={group.id} className={styles.group}>
-              <input
-                type="checkbox"
-                checked={ids.every((id) => selected.includes(id))}
-                onChange={() => toggleGroup(group.id)}
-              />
-              {group.name}
-            </label>
-          );
-        })}
+        {sections.map((section) => (
+          <div key={section.id} className={styles.section} data-testid={`flyer-group-${section.id}`}>
+            {section.id === "none" ? (
+              <p className={styles.sectionTitle}>{section.name}</p>
+            ) : (
+              <label className={styles.group}>
+                <input
+                  type="checkbox"
+                  checked={section.offers.every((offer) => selected.includes(offer.id))}
+                  onChange={() => toggleGroup(section.id)}
+                  aria-label={section.name}
+                />
+                {section.name}
+              </label>
+            )}
 
-        {offers.map((offer) => (
-          <label key={offer.id} className={styles.offer}>
-            <input
-              type="checkbox"
-              checked={selected.includes(offer.id)}
-              disabled={full && !selected.includes(offer.id)}
-              onChange={() => toggleOffer(offer.id)}
-              aria-label={`Produto ${offer.name}`}
-            />
-            <span>{offer.name}</span>
-            <span className="muted">
-              {offer.price || "sem preço"}
-              {offer.priceUnit ? ` / ${offer.priceUnit}` : ""}
-              {(offer.photoReferenceIds || []).length ? "" : " · sem foto"}
-            </span>
-          </label>
+            {section.offers.map((offer) => (
+              <label key={offer.id} className={styles.offer}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(offer.id)}
+                  disabled={full && !selected.includes(offer.id)}
+                  onChange={() => toggleOffer(offer.id)}
+                  aria-label={`Produto ${offer.name}`}
+                />
+                <span>{offer.name}</span>
+                <span className="muted">
+                  {offer.price || "sem preço"}
+                  {offer.priceUnit ? ` / ${offer.priceUnit}` : ""}
+                  {(offer.photoReferenceIds || []).length ? "" : " · sem foto"}
+                </span>
+              </label>
+            ))}
+          </div>
         ))}
       </Card>
 

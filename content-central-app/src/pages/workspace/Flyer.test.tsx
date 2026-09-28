@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -51,6 +51,44 @@ function renderFlyer() {
 }
 
 describe("Flyer", () => {
+  // The first build listed every group as a bare checkbox and then every
+  // product in one flat list underneath, so a market with two groups and
+  // twenty products saw one undifferentiated wall — the grouping it had
+  // already registered was invisible at the moment it mattered most.
+  it("nests each product under its own group, and keeps ungrouped ones in their own section", async () => {
+    const groups: OfferGroup[] = [
+      { id: "group-frios", name: "Fricó" },
+      { id: "group-venda", name: "VENDA" },
+    ];
+    const offers: ProjectOffer[] = [
+      { id: "offer-1", name: "Presunto Fricó", type: "offer", active: true, groupId: "group-frios", price: "R$ 17,49" },
+      { id: "offer-2", name: "Bacon Manta Fricó", type: "offer", active: true, groupId: "group-frios", price: "R$ 24,49" },
+      { id: "offer-3", name: "Mussarela fatiada", type: "offer", active: true, groupId: "group-venda", price: "R$ 44,90" },
+      { id: "offer-4", name: "Boozy pudim", type: "offer", active: true, price: "R$ 4,55" },
+    ];
+    stubFetchSequence([{ body: projectState(offers, groups) }]);
+    renderFlyer();
+
+    await screen.findByText("Fricó");
+
+    // Each group heading owns the products registered under it, in order.
+    const frios = screen.getByTestId("flyer-group-group-frios");
+    expect(within(frios).getByLabelText("Produto Presunto Fricó")).toBeInTheDocument();
+    expect(within(frios).getByLabelText("Produto Bacon Manta Fricó")).toBeInTheDocument();
+    expect(within(frios).queryByLabelText("Produto Mussarela fatiada")).toBeNull();
+
+    const venda = screen.getByTestId("flyer-group-group-venda");
+    expect(within(venda).getByLabelText("Produto Mussarela fatiada")).toBeInTheDocument();
+    expect(within(venda).queryByLabelText("Produto Presunto Fricó")).toBeNull();
+
+    // A product belonging to no group still has to be reachable.
+    const ungrouped = screen.getByTestId("flyer-group-none");
+    expect(within(ungrouped).getByLabelText("Produto Boozy pudim")).toBeInTheDocument();
+
+    // And no product is rendered twice across the sections.
+    expect(screen.getAllByLabelText("Produto Presunto Fricó")).toHaveLength(1);
+  });
+
   it("selects a whole offer group and posts the flyer request", async () => {
     const groups: OfferGroup[] = [
       { id: "group-week", name: "Encarte da semana" },
