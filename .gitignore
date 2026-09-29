@@ -55,3 +55,5 @@ visual-system-*.png
 content-central-app/test-output.txt
 # PNG sources already shipped as the tracked .webp versions
 content-central-app/src/assets/king-portfolio-*.png
+# Supabase CLI local cache (linked project ref, CLI version)
+supabase/.temp/
