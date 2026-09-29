@@ -6505,17 +6505,19 @@ function buildGoalContentTopic(goalKey, project, idea = null, index = 0) {
 // Raio-X lets the operator assign a percentage weight to each active
 // content-goal bucket (project.brandInput.contentGoalWeights, validated to
 // sum to 100 in normalizeContentGoalWeights). Resolves the actual weights
-// to use for THIS generation's active buckets: trusts the saved split only
-// when every currently-active bucket has an entry and those entries still
-// sum to 100 — a goal toggled on/off, or an offer group emptying out, can
-// silently invalidate a stale saved split — otherwise splits evenly, so
-// generation never blocks on a stale/missing configuration.
+// to use for THIS generation's active buckets: trusts the saved split
+// whenever every currently-active bucket has an entry, even when they no
+// longer sum to 100 — a weekday or group with no valid offer drops the
+// sales bucket, and the remaining goals must keep their configured
+// proportion (smoothWeightedRotation only needs relative weights). A bucket
+// with no saved entry (goal newly marked, stale config) or an all-zero
+// remainder splits evenly instead, so generation never blocks on it.
 function resolveContentGoalWeights(project, bucketKeys) {
   const saved = project.brandInput?.contentGoalWeights || {};
   const values = bucketKeys.map((key) => Number(saved[key]));
   const allPresent = values.every((value) => Number.isFinite(value) && value >= 0);
   const sum = values.reduce((total, value) => total + (Number.isFinite(value) ? value : 0), 0);
-  if (allPresent && sum === 100) return values;
+  if (allPresent && sum > 0) return values;
   const base = Math.floor(100 / bucketKeys.length);
   const remainder = 100 - base * bucketKeys.length;
   return bucketKeys.map((_, index) => base + (index < remainder ? 1 : 0));

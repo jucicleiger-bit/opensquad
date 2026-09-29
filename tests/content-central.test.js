@@ -5500,6 +5500,27 @@ test('a stale saved weight that no longer covers the active buckets falls back t
   });
 });
 
+test('a day where the sales bucket drops out (no offer valid that weekday) keeps the remaining goals in their configured proportion', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'peso-sem-venda-no-dia', name: 'Peso Sem Venda No Dia' }, dir);
+    await updateProjectBrandInput('peso-sem-venda-no-dia', {
+      brandName: 'Peso Sem Venda',
+      segment: 'loja',
+      contentGoals: ['authority', 'brand_awareness'],
+      contentGoalWeights: { sales: 20, authority: 60, brand_awareness: 20 },
+    }, dir);
+    // Only valid on Sundays, so Mon-Thu never has a sales bucket.
+    await saveProjectOffer('peso-sem-venda-no-dia', { name: 'Produto X', price: 'R$99', daysOfWeek: ['sun'] }, dir);
+
+    // 2026-08-03 is a Monday. authority:brand_awareness stays 60:20 = 3:1,
+    // not the 50/50 an even split would give.
+    const batch = await generateContentBatch('peso-sem-venda-no-dia', { days: 4, startDate: '2026-08-03', channel: 'instagram_feed' }, dir);
+    const goalKeys = batch.items.map((item) => item.contentTopic.goalKey);
+    assert.equal(goalKeys.filter((key) => key === 'authority').length, 3);
+    assert.equal(goalKeys.filter((key) => key === 'brand_awareness').length, 1);
+  });
+});
+
 test('a priced-intent goal has zero effect when there are no offers registered — no invented sales content', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'sem-oferta-boost', name: 'Sem Oferta Boost' }, dir);
