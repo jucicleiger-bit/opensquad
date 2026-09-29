@@ -25,6 +25,24 @@ const REQUIRED_MESSAGE = "Preencha nome da empresa, o segmento (setor + nicho, o
 const SEGMENT_GROUP_OPTIONS = SEGMENT_TREE.map((item) => item.group);
 const ALL_SEGMENT_CATEGORY_OPTIONS = [...new Set(SEGMENT_TREE.flatMap((item) => item.categories))];
 
+// "Venda" is not one of the goal buttons: it is the operator's active offers,
+// which generation always mixes in (see buildTopicPool). The sale-intent
+// buttons only steer the AI's text, so they sit apart from the goals that
+// actually get a weight of their own.
+const SALES_BUCKET_LABEL = "Venda (ofertas ativas)";
+const GOAL_BUTTON_GROUPS = [
+  {
+    title: "Metas de venda",
+    hint: "orientam o texto da IA; os posts de venda vêm das ofertas ativas.",
+    ids: Object.keys(CONTENT_GOAL_LABELS).filter((id) => !GOAL_WEIGHT_BUCKET_KEYS.includes(id)),
+  },
+  {
+    title: "Metas de conteúdo",
+    hint: "cada meta marcada ganha peso próprio na geração.",
+    ids: Object.keys(CONTENT_GOAL_LABELS).filter((id) => GOAL_WEIGHT_BUCKET_KEYS.includes(id)),
+  },
+];
+
 const XRAY_SOURCE_LABELS: Record<string, string> = {
   ai_analysis: "análise por IA",
   structured_fallback: "pré-análise local",
@@ -130,7 +148,12 @@ export function Company() {
   }
 
   function activeGoalWeightBuckets(): string[] {
-    const hasActiveOffers = (project.contentStrategy?.offers || []).some((offer) => offer.active);
+    // Same rule as activeProjectOffers on the server: an offer left in a
+    // deleted group never reaches generation, so it can't create "Venda".
+    const groupIds = new Set((project.contentStrategy?.offerGroups || []).map((group) => group.id));
+    const hasActiveOffers = (project.contentStrategy?.offers || []).some(
+      (offer) => offer.active && (!offer.groupId || groupIds.has(offer.groupId)),
+    );
     const goalBucketKeys = form.contentGoals.filter((id) => GOAL_WEIGHT_BUCKET_KEYS.includes(id));
     return hasActiveOffers ? ["sales", ...goalBucketKeys] : goalBucketKeys;
   }
@@ -396,6 +419,7 @@ export function Company() {
   const weightValues = resolvedGoalWeights(weightBuckets);
   const weightSum = weightBuckets.reduce((total, key) => total + (weightValues[key] || 0), 0);
   const weightsInvalid = weightBuckets.length >= 2 && weightSum !== 100;
+  const hasActivePillars = (project.contentStrategy?.pillars || []).some((pillar) => pillar.active !== false);
   const brandPayload = { ...form, segment: resolvedSegment, contentGoalWeights: weightBuckets.length >= 2 ? weightValues : {} };
 
   return (
@@ -682,18 +706,25 @@ export function Company() {
         <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
           Esses objetivos entram no planejamento junto das ofertas e assuntos cadastrados.
         </p>
-        <div className="button-row">
-          {Object.entries(CONTENT_GOAL_LABELS).map(([id, label]) => (
-            <Button
-              key={id}
-              type="button"
-              variant={form.contentGoals.includes(id) ? "primary" : "secondary"}
-              onClick={() => toggleGoal(id)}
-            >
-              {label}
-            </Button>
-          ))}
-        </div>
+        {GOAL_BUTTON_GROUPS.map((group) => (
+          <div key={group.title} role="group" aria-label={group.title} style={{ marginTop: 10 }}>
+            <p className="muted" style={{ margin: "0 0 6px", fontSize: 13 }}>
+              <b>{group.title}</b> — {group.hint}
+            </p>
+            <div className="button-row">
+              {group.ids.map((id) => (
+                <Button
+                  key={id}
+                  type="button"
+                  variant={form.contentGoals.includes(id) ? "primary" : "secondary"}
+                  onClick={() => toggleGoal(id)}
+                >
+                  {CONTENT_GOAL_LABELS[id]}
+                </Button>
+              ))}
+            </div>
+          </div>
+        ))}
 
         {weightBuckets.length >= 2 ? (
           <div className="field-card" style={{ marginTop: 14 }}>
@@ -701,16 +732,25 @@ export function Company() {
             <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
               Controla a proporção entre venda e as demais metas em toda geração (inclusive por grupo de ofertas),
               exceto quando "gerar apenas esse grupo" estiver marcado.
+              {weightBuckets.includes("sales")
+                ? " Venda vem das ofertas ativas em Ofertas e assuntos, não dos botões acima: para não gerar posts de oferta, deixe Venda em 0%."
+                : null}
             </p>
+            {hasActivePillars ? (
+              <div className="pill warn" style={{ marginBottom: 10 }}>
+                Pilares ativos: a proporção dos posts segue os pesos da aba Pilares. Estes pesos só valem entre metas do
+                mesmo pilar.
+              </div>
+            ) : null}
             <div style={{ display: "grid", gap: 8 }}>
               {weightBuckets.map((key) => (
                 <div key={key} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <label htmlFor={`goal-weight-${key}`} style={{ flex: 1 }}>
-                    {key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}
+                    {key === "sales" ? SALES_BUCKET_LABEL : CONTENT_GOAL_LABELS[key]}
                   </label>
                   <input
                     id={`goal-weight-${key}`}
-                    aria-label={`Peso: ${key === "sales" ? "Venda" : CONTENT_GOAL_LABELS[key]}`}
+                    aria-label={`Peso: ${key === "sales" ? SALES_BUCKET_LABEL : CONTENT_GOAL_LABELS[key]}`}
                     type="number"
                     min={0}
                     max={100}

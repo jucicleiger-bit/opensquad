@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -360,7 +360,7 @@ describe("Company", () => {
     // bucket and shows no editor at all).
     await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
 
-    const vendaInput = (await screen.findByLabelText("Peso: Venda")) as HTMLInputElement;
+    const vendaInput = (await screen.findByLabelText("Peso: Venda (ofertas ativas)")) as HTMLInputElement;
     const authorityInput = screen.getByLabelText("Peso: Gerar autoridade") as HTMLInputElement;
     expect(vendaInput.value).toBe("50");
     expect(authorityInput.value).toBe("50");
@@ -414,7 +414,7 @@ describe("Company", () => {
     await screen.findByLabelText("Público-alvo sugerido");
     await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
 
-    const vendaInput = (await screen.findByLabelText("Peso: Venda")) as HTMLInputElement;
+    const vendaInput = (await screen.findByLabelText("Peso: Venda (ofertas ativas)")) as HTMLInputElement;
     const authorityInput = screen.getByLabelText("Peso: Gerar autoridade") as HTMLInputElement;
     fireEvent.change(vendaInput, { target: { value: "90" } });
     fireEvent.change(authorityInput, { target: { value: "5" } });
@@ -438,7 +438,7 @@ describe("Company", () => {
     await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
     await userEvent.click(screen.getByRole("button", { name: "Aumentar engajamento" }));
 
-    const vendaInput = (await screen.findByLabelText("Peso: Venda")) as HTMLInputElement;
+    const vendaInput = (await screen.findByLabelText("Peso: Venda (ofertas ativas)")) as HTMLInputElement;
     const authorityInput = screen.getByLabelText("Peso: Gerar autoridade") as HTMLInputElement;
     const engagementInput = screen.getByLabelText("Peso: Aumentar engajamento") as HTMLInputElement;
 
@@ -453,6 +453,62 @@ describe("Company", () => {
     expect(vendaInput.value).toBe("50");
     expect(authorityInput.value).toBe("50");
     expect(screen.getByRole("button", { name: "Salvar e analisar minha marca" })).toBeEnabled();
+  });
+
+  it("groups sale goals apart from weighted content goals and explains where the Venda weight comes from", async () => {
+    stubFetchSequence([
+      { body: projectState({ contentStrategy: { offers: [{ id: "o1", name: "Produto", type: "offer", active: true }] } }) },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    const saleGroup = screen.getByRole("group", { name: /Metas de venda/ });
+    const contentGroup = screen.getByRole("group", { name: /Metas de conteúdo/ });
+    expect(within(saleGroup).getByRole("button", { name: "Vender produtos" })).toBeInTheDocument();
+    expect(within(saleGroup).queryByRole("button", { name: "Gerar autoridade" })).not.toBeInTheDocument();
+    expect(within(contentGroup).getByRole("button", { name: "Gerar autoridade" })).toBeInTheDocument();
+    expect(within(contentGroup).queryByRole("button", { name: "Vender produtos" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
+    expect(await screen.findByLabelText("Peso: Venda (ofertas ativas)")).toBeInTheDocument();
+    expect(screen.getByText(/deixe Venda em 0%/)).toBeInTheDocument();
+  });
+
+  it("leaves Venda out of the weights when the only active offer belongs to a deleted group, matching generation", async () => {
+    stubFetchSequence([
+      {
+        body: projectState({
+          contentStrategy: { offerGroups: [], offers: [{ id: "o1", name: "Produto", type: "offer", active: true, groupId: "apagado" }] },
+        }),
+      },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
+    await userEvent.click(screen.getByRole("button", { name: "Aumentar engajamento" }));
+
+    expect(await screen.findByLabelText("Peso: Gerar autoridade")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Peso: Venda (ofertas ativas)")).not.toBeInTheDocument();
+  });
+
+  it("warns that active Pilares decide the post proportion instead of these weights", async () => {
+    stubFetchSequence([
+      {
+        body: projectState({
+          contentStrategy: {
+            offers: [{ id: "o1", name: "Produto", type: "offer", active: true }],
+            pillars: [{ id: "p1", name: "Ensina", role: "ensina", visualTreatment: "cru", color: "#000", weight: 100, requiresEvidence: false, active: true }],
+          },
+        }),
+      },
+    ]);
+    renderCompany();
+
+    await screen.findByRole("heading", { name: "Empresa / Raio-X" });
+    await userEvent.click(screen.getByRole("button", { name: "Gerar autoridade" }));
+
+    expect(await screen.findByText(/Pilares ativos/)).toBeInTheDocument();
   });
 
   it("imports from pasted text when the site blocks automatic access (Cloudflare, etc.)", async () => {
