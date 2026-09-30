@@ -111,6 +111,11 @@ import {
   deriveCreativePostType,
 } from '../src/content-central.js';
 
+// The publish-due tests pair local wall-clock times with UTC instants written
+// for Brasília (09:00 is 12:00Z). Pin the zone so they don't break on a machine
+// set to another one, such as the operator's PC in Cuiabá.
+process.env.TZ = 'America/Sao_Paulo';
+
 async function withTempProject(fn) {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-'));
   try {
