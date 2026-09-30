@@ -994,6 +994,10 @@ export function connectWhatsAppInstance(projectId: string): Promise<{ qrcode: st
   return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance/connect`, { method: "POST" });
 }
 
+export function disconnectWhatsAppInstance(projectId: string): Promise<{ connected: boolean }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance/disconnect`, { method: "POST" });
+}
+
 export function getWhatsAppInstanceStatus(projectId: string): Promise<{ connected: boolean; state: string }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/whatsapp-instance/status`);
 }

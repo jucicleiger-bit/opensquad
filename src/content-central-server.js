@@ -858,6 +858,14 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, result);
   }
 
+  if (parts.length === 5 && parts[3] === 'whatsapp-instance' && parts[4] === 'disconnect') {
+    const projects = await listCentralProjects(targetDir);
+    const project = projects.find((entry) => entry.projectId === projectId);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const result = await disconnectProjectWhatsAppSession(project);
+    return sendJson(res, 200, result);
+  }
+
   if (parts.length === 4 && parts[3] === 'settings') {
     const body = await readBody(req);
     const project = await updateProjectSettings(projectId, body, targetDir);
@@ -5022,6 +5030,19 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
   const qrcode = `data:image/png;base64,${qrBuffer.toString('base64')}`;
 
   return { qrcode, project: updatedProject };
+}
+
+// WAHA's logout drops the linked phone and restarts the session into
+// SCAN_QR_CODE, so the existing connect button then serves a fresh QR for
+// whichever number replaces it. sessionName stays stored — it's per-project,
+// not per-phone.
+async function disconnectProjectWhatsAppSession(project) {
+  const sessionName = project.whatsapp?.sessionName;
+  if (!sessionName) return { connected: false };
+  const { url, apiKey } = wahaConfig();
+  const res = await fetch(`${url}/api/sessions/${sessionName}/logout`, { method: 'POST', headers: { 'X-Api-Key': apiKey } });
+  if (!res.ok) throw new Error(`WAHA respondeu ${res.status}: ${await res.text()}`);
+  return { connected: false };
 }
 
 // Connection state is never persisted (see Global Constraints) — always

@@ -4174,6 +4174,43 @@ test('GET .../whatsapp-instance/status reports connected true only when WAHA rep
   });
 });
 
+test('POST .../whatsapp-instance/disconnect logs the project session out of WAHA so another number can be scanned', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
+    try {
+      await request(server, '/api/projects', {
+        method: 'POST',
+        body: JSON.stringify({ projectId: 'rota-whatsapp-logout', name: 'Rota WhatsApp Logout' }),
+      });
+      await saveProjectWhatsAppInstance('rota-whatsapp-logout', {
+        sessionName: 'opensquad-rota-whatsapp-logout',
+      }, dir);
+
+      const calls = [];
+      await withMockedFetch(
+        async (url, init) => {
+          calls.push({ url: String(url), method: init?.method, apiKey: init?.headers?.['X-Api-Key'] });
+          return new Response('{}', { status: 201, headers: { 'content-type': 'application/json' } });
+        },
+        async () => {
+          const res = await request(server, '/api/projects/rota-whatsapp-logout/whatsapp-instance/disconnect', { method: 'POST' });
+          assert.equal(res.response.status, 200);
+          assert.equal(res.body.connected, false);
+        },
+      );
+      assert.deepEqual(calls, [{
+        url: 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-logout/logout',
+        method: 'POST',
+        apiKey: 'waha-secret',
+      }]);
+    } finally {
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
+    }
+  });
+});
+
 test('GET .../whatsapp-instance/status reports not_configured without any network call for a project with no session', async () => {
   await withServer(async (dir, server) => {
     await request(server, '/api/projects', {

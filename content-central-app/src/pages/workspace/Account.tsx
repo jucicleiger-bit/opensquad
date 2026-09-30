@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
-import { connectWhatsAppInstance, getWhatsAppInstanceStatus, saveToken } from "@/api/client";
+import { connectWhatsAppInstance, disconnectWhatsAppInstance, getWhatsAppInstanceStatus, saveToken } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { tokenExpiryMeta } from "./tokenDisplay";
@@ -119,6 +119,20 @@ export function Account() {
     }
   }
 
+  async function handleDisconnect() {
+    if (!window.confirm("Desconectar este WhatsApp? Status agendados não serão postados até conectar outro número.")) return;
+    setConnectBusy(true);
+    setConnectError(null);
+    try {
+      await disconnectWhatsAppInstance(project.projectId);
+      setConnected(false);
+    } catch (err) {
+      setConnectError((err as Error).message);
+    } finally {
+      setConnectBusy(false);
+    }
+  }
+
   return (
     <div>
       <h2 style={{ margin: "0 0 var(--space-lg)" }}>Conta e token</h2>
@@ -188,7 +202,12 @@ export function Account() {
 
         <div style={{ marginTop: 12 }}>
           {connected ? (
-            <span className="pill ok">Conectado</span>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="pill ok">Conectado</span>
+              <Button type="button" variant="secondary" onClick={handleDisconnect} disabled={connectBusy}>
+                {connectBusy ? "Desconectando..." : "Desconectar / Trocar número"}
+              </Button>
+            </div>
           ) : qrcode ? (
             <div>
               <img src={qrcode} alt="QR Code WhatsApp" style={{ maxWidth: 220 }} />
