@@ -4865,9 +4865,7 @@ test('generateContentSchedulePlan clamps carouselsPerWeek to 0-7 and maxCarousel
 
     const negative = await generateContentSchedulePlan('carrossel-clamp-config', {
       days: 7,
-      // One period further out than the first call — same project/channel,
-      // so the schedule-overlap guard (see 'refuses to generate over dates
-      // ...' below) doesn't trip on back-to-back clamp-only calls.
+      // One period further out than the first call.
       startDate: '2026-08-31',
       formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
       carouselsPerWeek: -3,
@@ -4978,7 +4976,7 @@ test('a flyer or a commemorative date on the same dates does not block the norma
   });
 });
 
-test('generateContentSchedulePlan refuses to generate over dates the project already has drafted content for', async () => {
+test('a second plan over a day that already has one stacks alongside it with its own contentIds and batch folder', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'agenda-sobreposta',
@@ -4987,41 +4985,26 @@ test('generateContentSchedulePlan refuses to generate over dates the project alr
       approvalEmail: 'aprovacao@example.com',
     }, dir);
 
-    await generateContentSchedulePlan('agenda-sobreposta', {
+    const first = await generateContentSchedulePlan('agenda-sobreposta', {
+      days: 7,
+      startDate: '2026-08-29',
+      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '13:00', intervalMinutes: 0 }],
+    }, dir);
+    // Same start date and length as the first: this used to reuse the first
+    // plan's folder, and any overlap minted the same contentIds (the
+    // king-assessoria-mkt "published but never posted" incident).
+    const second = await generateContentSchedulePlan('agenda-sobreposta', {
       days: 7,
       startDate: '2026-08-29',
       formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '13:00', intervalMinutes: 0 }],
     }, dir);
 
-    // A second plan generated a day later, one day off, still overlaps
-    // 2026-08-30..09-03 on the same channel — this is exactly the
-    // king-assessoria-mkt incident (two 7-day plans a day apart both
-    // covering the same dates, silently colliding on contentId).
-    await assert.rejects(
-      generateContentSchedulePlan('agenda-sobreposta', {
-        days: 7,
-        startDate: '2026-08-30',
-        formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
-      }, dir),
-      /Já existe conteúdo agendado/
-    );
-
-    // A plan for a genuinely free date range, or a different channel over
-    // the same dates, must still work — the guard should never block a
-    // real non-overlapping generation.
-    const laterBatch = await generateContentSchedulePlan('agenda-sobreposta', {
-      days: 2,
-      startDate: '2026-09-10',
-      formats: [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
-    }, dir);
-    assert.equal(laterBatch.items.length, 2);
-
-    const otherChannelBatch = await generateContentSchedulePlan('agenda-sobreposta', {
-      days: 7,
-      startDate: '2026-08-29',
-      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
-    }, dir);
-    assert.equal(otherChannelBatch.items.length, 7);
+    assert.notEqual(second.batchId, first.batchId);
+    assert.equal(second.items[0].scheduledTime, '13:00', 'the operator keeps the time they chose');
+    assert.equal(second.items[0].contentId, 'agenda-sobreposta-2026-08-29-instagram_story-02');
+    const all = await listProjectContent('agenda-sobreposta', dir);
+    assert.equal(all.length, 14, 'the first plan must survive the second');
+    assert.equal(new Set(all.map((item) => item.contentId)).size, all.length, 'no two pieces may share a contentId');
   });
 });
 
