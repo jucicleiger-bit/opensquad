@@ -5191,6 +5191,7 @@ test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configur
       execFileAsync: async (cmd, args, input) => { calls.push({ cmd, args, input }); return { stdout: '' }; },
     });
 
+    calls.splice(0, calls.length, ...calls.filter((c) => c.args[0] === 'secret'));
     assert.equal(calls.length, 3);
     assert.ok(calls.every((c) => c.cmd === 'gh' && c.args[0] === 'secret' && c.args[1] === 'set'));
     assert.ok(calls.some((c) => c.args.includes('META_TOKEN_BOSS_PIZZARIA') && c.input === 'EAAB...'));
@@ -5201,6 +5202,47 @@ test('syncTokenSecretsToGitHub sets three secrets when a gaveta repo is configur
     // to ps/tasklist) — only on the stdin `input` param.
     assert.ok(calls.every((c) => !c.args.includes('EAAB...') && !c.args.includes('123') && !c.args.includes('456')));
     assert.ok(calls.every((c) => !c.args.includes('--body')));
+  } finally {
+    delete process.env.OPENSQUAD_GAVETA_REPO;
+  }
+});
+
+// gh uses whichever account is active; on 2026-09-30 that was a second
+// account with no access to the gaveta repo, so every sync 404'd.
+test('syncTokenSecretsToGitHub sets the secrets as the repo owner\'s gh account, not the active one', async () => {
+  process.env.OPENSQUAD_GAVETA_REPO = 'someuser/gaveta';
+  try {
+    const calls = [];
+    await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...' }, {
+      execFileAsync: async (cmd, args, input, env) => {
+        calls.push({ args, env });
+        return { stdout: args[0] === 'auth' ? 'gho_owner\n' : '' };
+      },
+    });
+
+    assert.deepEqual(calls[0].args, ['auth', 'token', '-u', 'someuser']);
+    const secretCalls = calls.filter((c) => c.args[0] === 'secret');
+    assert.equal(secretCalls.length, 3);
+    assert.ok(secretCalls.every((c) => c.env?.GH_TOKEN === 'gho_owner'));
+  } finally {
+    delete process.env.OPENSQUAD_GAVETA_REPO;
+  }
+});
+
+test('syncTokenSecretsToGitHub falls back to the active gh account when the owner is not logged in', async () => {
+  process.env.OPENSQUAD_GAVETA_REPO = 'some-org/gaveta';
+  try {
+    const secretCalls = [];
+    await syncTokenSecretsToGitHub('boss-pizzaria', { token: 'EAAB...' }, {
+      execFileAsync: async (cmd, args, input, env) => {
+        if (args[0] === 'auth') throw new Error('no oauth token found for some-org');
+        secretCalls.push({ env });
+        return { stdout: '' };
+      },
+    });
+
+    assert.equal(secretCalls.length, 3);
+    assert.ok(secretCalls.every((c) => c.env === undefined));
   } finally {
     delete process.env.OPENSQUAD_GAVETA_REPO;
   }

@@ -293,9 +293,9 @@ function execFileNoStdin(file, args, { timeout, maxBuffer = 10 * 1024 * 1024 } =
 // the raw (non-promisified) execFile so we get the child's stdin stream to
 // write the secret value to, then closes it (`--body` with no value tells gh
 // to read stdin).
-function execFileWithStdin(file, args, input) {
+function execFileWithStdin(file, args, input, env) {
   return new Promise((resolve, reject) => {
-    const child = execFile(file, args, (err, stdout, stderr) => {
+    const child = execFile(file, args, env ? { env } : {}, (err, stdout, stderr) => {
       if (err) return reject(Object.assign(err, { stdout, stderr }));
       resolve({ stdout, stderr });
     });
@@ -313,6 +313,16 @@ export async function syncTokenSecretsToGitHub(projectId, { token, instagramUser
   const repo = process.env.OPENSQUAD_GAVETA_REPO;
   if (!repo) return;
   const run = options.execFileAsync || execFileWithStdin;
+  // gh acts as whichever account is active, and with several logged in that
+  // can be one without access to the repo (2026-09-30: every sync 404'd).
+  // Act as the repo owner's account when gh has it logged in.
+  let env;
+  try {
+    const { stdout } = await run('gh', ['auth', 'token', '-u', repo.split('/')[0]]);
+    if (stdout.trim()) env = { ...process.env, GH_TOKEN: stdout.trim() };
+  } catch {
+    // Owner not logged in (e.g. an org repo): fall back to the active account.
+  }
   const prefix = projectId.toUpperCase().replace(/-/g, '_');
   const entries = [
     [`META_TOKEN_${prefix}`, token],
@@ -320,7 +330,7 @@ export async function syncTokenSecretsToGitHub(projectId, { token, instagramUser
     [`META_PAGE_ID_${prefix}`, pageId || ''],
   ];
   for (const [name, value] of entries) {
-    await run('gh', ['secret', 'set', name, '--repo', repo], value);
+    await run('gh', ['secret', 'set', name, '--repo', repo], value, env);
   }
 }
 
