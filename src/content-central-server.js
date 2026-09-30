@@ -78,6 +78,7 @@ import {
   regenerateContentCarouselSlide,
   enrichBatchItemsWithRealImages,
   formatFlyerProductLines,
+  hasProductList,
   generateContentBatch,
   generateContentSchedulePlan,
   previewContentSchedulePlan,
@@ -2727,7 +2728,7 @@ async function generateAiImageWithNousFal({ content, projectId, targetDir, note,
 // prompt changes. `offset` is how many attachments precede the references
 // (a targeted edit puts the canvas at Anexo 1).
 export function buildCodexAttachmentManifest(references, topic = {}, offset = 0) {
-  if (topic?.source !== 'flyer') return '';
+  if (!hasProductList(topic)) return '';
   const lines = references.map((reference, index) => {
     const position = index + offset + 1;
     return reference.role === 'product_photo'

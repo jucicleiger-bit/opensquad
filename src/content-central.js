@@ -3990,7 +3990,7 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
 // product list rather than a single offer.
 function buildFlyerContentReview({ contentTopic }) {
   const products = Array.isArray(contentTopic?.products) ? contentTopic.products : [];
-  const checks = [`${products.length} produto(s) selecionado(s) para o encarte.`];
+  const checks = [`${products.length} produto(s) na peça.`];
   const warnings = [];
   const semPreco = products.filter((product) => !product.price).map((product) => product.name);
   const semFoto = products.filter((product) => !(product.photoReferenceIds || []).length).map((product) => product.name);
@@ -6772,6 +6772,24 @@ function normalizeTopicIndex(value, count) {
   return ((integer % safeCount) + safeCount) % safeCount;
 }
 
+// Unit (kg/g/pacote/caixa) and de/por original price folded into the price
+// string here — the single place every downstream consumer (image prompts,
+// checks, comparisons) reads a price from, so they get
+// "De R$ 20,00 por R$ 10,00/kg" for free.
+function offerPriceLabel(offer) {
+  const price = normalizeCreativePrice(offer.price);
+  const withUnit = price && offer.priceUnit ? `${price}/${offer.priceUnit}` : price;
+  const original = normalizeCreativePrice(offer.originalPrice);
+  return original && price ? `De ${original} por ${withUnit}` : withUnit;
+}
+
+// A topic whose prices live per product on topic.products instead of in one
+// topic.price: a flyer, or two offers paired into one arte
+// (buildComboOfferTopic).
+export function hasProductList(topic = {}) {
+  return Array.isArray(topic?.products) && topic.products.length > 0;
+}
+
 async function offerToContentTopic(offer, targetDir) {
   const learning = await loadOfferTypeLearning(targetDir, offer.type);
   return {
@@ -6781,16 +6799,7 @@ async function offerToContentTopic(offer, targetDir) {
     source: 'offer',
     offerId: offer.id,
     offerName: offer.name,
-    // Unit (kg/g/pacote/caixa) and de/por original price folded into the
-    // price string here — the single place every downstream consumer
-    // (image prompts, checks, comparisons) reads topic.price from, so they
-    // get "De R$ 20,00 por R$ 10,00/kg" for free.
-    price: (() => {
-      const price = normalizeCreativePrice(offer.price);
-      const withUnit = price && offer.priceUnit ? `${price}/${offer.priceUnit}` : price;
-      const original = normalizeCreativePrice(offer.originalPrice);
-      return original && price ? `De ${original} por ${withUnit}` : withUnit;
-    })(),
+    price: offerPriceLabel(offer),
     items: offer.items,
     cta: offer.cta,
     autoGenerateCta: offer.autoGenerateCta,
@@ -6830,38 +6839,46 @@ function pickComboPartner(offers, primary, project, weekday) {
   return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
-// Builds a single synthetic "offer" pairing two real offers into one combo
-// arte (see pickComboPartner), then delegates entirely to
-// offerToContentTopic — so type: 'combo' resolution (objective, per-type
-// learning, CTA) is the exact same code path a manually-created combo
-// offer already uses. Price is never summed nor picked: both original price
-// labels are joined as text into the `price` field (and repeated in `notes`)
-// so downstream prompt code that treats an empty price as "don't mention a
-// price" still shows both. Only one photo per paired offer is carried over,
-// so the combo image can't end up using two photos from one offer and none
-// from the other (see buildPrimaryAiImageReferences' top-2 slice).
+// Two real offers shown side by side in one arte (see pickComboPartner),
+// each keeping its OWN price — not a kit. This used to merge them into one
+// offer named "A + B" priced "R$ 4,99 + R$ 7,89"; the image model read that
+// as a single bundle and drew one price. Like a flyer, the per-product
+// prices now live on `products` with topic.price blank, so the prompt
+// renders one line per product (see hasProductList). type stays 'combo'
+// only so the segment's registered combo structure is still the one
+// matched. One photo per paired offer, so the image can't end up with two
+// photos from one offer and none from the other (see
+// buildPrimaryAiImageReferences' top-2 slice).
 async function buildComboOfferTopic(a, b, targetDir) {
-  const priceLabel = (offer) => offer.price || 'sem preço informado';
-  const merged = {
+  const products = [a, b].map((offer) => ({
+    offerId: offer.id,
+    name: offer.name || '',
+    price: offerPriceLabel(offer),
+    photoReferenceIds: (offer.photoReferenceIds || []).slice(0, 1),
+  }));
+  const topic = await offerToContentTopic({
     id: `${a.id}+${b.id}`,
     name: `${a.name} + ${b.name}`,
     type: 'combo',
-    price: [a.price, b.price].filter(Boolean).join(' + '),
-    items: [a.items, b.items].filter(Boolean).join(' | '),
+    price: '',
+    items: '',
     cta: '',
     autoGenerateCta: true,
-    notes: [
-      `${a.name} - ${priceLabel(a)} | ${b.name} - ${priceLabel(b)}`,
-      a.notes,
-      b.notes,
-    ].filter(Boolean).join('\n'),
+    notes: [a.notes, b.notes].filter(Boolean).join('\n'),
     productTreatment: a.productTreatment || b.productTreatment,
     backgroundStyle: a.backgroundStyle || b.backgroundStyle,
     layoutStrength: a.layoutStrength,
     pillarId: a.pillarId,
-    photoReferenceIds: [(a.photoReferenceIds || [])[0], (b.photoReferenceIds || [])[0]].filter(Boolean),
+    photoReferenceIds: products.flatMap((product) => product.photoReferenceIds),
+  }, targetDir);
+  return {
+    ...topic,
+    products,
+    objective: `Mostrar ${a.name} e ${b.name} na mesma peça, lado a lado, cada um com o seu próprio preço. Não é combo nem kit: não juntar os produtos num pacote nem num preço único.`,
+    // The 'combo' type's learnings describe kits ("economia percebida") —
+    // the opposite of this piece.
+    learningEntries: [],
   };
-  return offerToContentTopic(merged, targetDir);
 }
 
 // Per-offer-type base instruction, editable through offer-type-learnings.json
@@ -6941,7 +6958,9 @@ function formatContentTopicLines(topic) {
   return [
     `Tipo de publicação: ${topic.label || offerTypeLabel(topic.type)}.`,
     topic.offerName ? `Oferta/assunto obrigatório: ${topic.offerName}.` : `Assunto: ${topic.objective || topic.label}.`,
-    topic.price ? `Preço obrigatório: ${topic.price}. Não alterar, arredondar ou inventar outro preço.` : 'Não inventar preço se nenhum preço foi cadastrado para este assunto.',
+    hasProductList(topic)
+      ? `Produtos e preços obrigatórios, cada produto com o seu próprio preço (não somar nem juntar num preço único): ${formatFlyerProductLines(topic.products, 'sem preço cadastrado').join('; ')}.`
+      : topic.price ? `Preço obrigatório: ${topic.price}. Não alterar, arredondar ou inventar outro preço.` : 'Não inventar preço se nenhum preço foi cadastrado para este assunto.',
     topic.items ? `Itens inclusos/detalhes: ${topic.items}. Cada item listado precisa aparecer visualmente reconhecível na composição — não representar só um ou dois itens e deixar o restante de fora.` : '',
     topic.cta ? `Chamada/CTA obrigatório: ${topic.cta}.` : '',
     !topic.cta && topic.autoGenerateCta ? 'CTA automático: criar uma chamada curta, natural e contextual depois de analisar o assunto, o formato do post e a composição criada. Evitar CTA massivo, genérico ou apelativo.' : '',
@@ -6975,7 +6994,7 @@ function formatPillarLines(pillar) {
 }
 
 function buildContentReview({ channel, aspectRatio, dimensions, contentTopic }) {
-  if (contentTopic?.source === 'flyer') return buildFlyerContentReview({ contentTopic });
+  if (hasProductList(contentTopic)) return buildFlyerContentReview({ contentTopic });
   const checks = [];
   const warnings = [];
   if (isVerticalStoryChannel(channel)) {
@@ -7484,7 +7503,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       strength: layoutStrength,
       referenceId: layoutReference?.id || '',
       referencePath: layoutReference?.relativePath || '',
-      zones: creativeLayoutZones(targetChannel, topic.source === 'flyer'),
+      zones: creativeLayoutZones(targetChannel, hasProductList(topic)),
     },
     background: {
       style: backgroundStyle,
@@ -7566,7 +7585,10 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : '',
     ].filter(Boolean)
     : [];
-  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle;
+  // Two offers side by side (buildComboOfferTopic): its offerName "A + B"
+  // as the exact headline is what made the pair read as one kit.
+  const isOfferPair = topic.source === 'offer' && hasProductList(topic);
+  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle || isOfferPair;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
     || topic.ideaTitle
@@ -7688,6 +7710,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         // overriding the operator's own example in their registered
         // structure. Describe the job, name no phrasing.
         ? `Título: criar uma chamada curta (até 5 palavras) de abertura do encarte, acima da grade de produtos. Se o modelo estrutural cadastrado trouxer um exemplo de chamada, seguir o estilo dele. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
+        : isOfferPair
+        ? `Título: criar uma chamada curta (até 5 palavras) que apresente os produtos juntos (ex.: a categoria ou o momento de uso deles), acima dos produtos. Não juntar os nomes dos produtos num título de kit (ex.: "Produto A + Produto B"). Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
         : isSpecialDateFreeTitle
         ? `Título: criar um título curto (até 8 palavras) com tom caloroso e comemorativo sobre "${freeTitleSubject}" — é um post de celebração da data, não uma oferta nem uma peça comercial. Pode conectar de leve com o negócio/segmento da marca, mas sem soar como anúncio, pitch de venda ou gancho de captação. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo.`
         : isGoalTopic || isAdCreativeFreeTitle
@@ -7704,7 +7728,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // flyer, contradicting the twelve exact per-product prices listed a
       // few lines later in HIERARQUIA. Money-correctness path: defer to the
       // per-product list instead of banning price text outright.
-      topic.source === 'flyer'
+      hasProductList(topic)
         ? 'Preço: não existe um preço único desta peça — cada produto tem seu próprio preço exato, listado em HIERARQUIA; usar exatamente esses preços individuais, um por produto.'
         : (exactPrice ? `Preço exato: ${exactPrice}` : 'Preço: não inserir preço, pois não há preço cadastrado para este criativo.'),
       realUrgency ? `Urgência real cadastrada: ${realUrgency}` : '',
@@ -7713,7 +7737,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
           ? `CTA sutil: "${exactCta}" como texto pequeno, sem botão/selo.`
           : `CTA exato: ${exactCta}`)
         : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte.',
-      topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
+      isOfferPair
+        ? 'Tipo de publicação: produtos lado a lado, cada um com o seu próprio preço — não é combo nem kit.'
+        : topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
       projectCreativeInstagramHandle(project)
         ? `Identificação da marca: ${projectCreativeInstagramHandle(project)} — manter exatamente este @ nos criativos.`
         : '',
@@ -7728,7 +7754,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         // it the moment it joined isFreeTitleTopic above; it's the one piece
         // that least tolerates an invented discount, so it gets the ban
         // explicitly (on Story too, which never had it).
-        : useSalesHookTitle || isFlyerFreeTitle ? 'Não criar urgência, estoque, prazo, desconto ou garantia falsa.' : '',
+        : useSalesHookTitle || isFlyerFreeTitle || isOfferPair ? 'Não criar urgência, estoque, prazo, desconto ou garantia falsa.' : '',
     ]),
     section('ATIVOS OFICIAIS', logoReferences.length ? [
       'Utilizar a logo oficial anexada.',
@@ -7767,10 +7793,10 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : 'Não substituir por outro produto/serviço nem deformar sua identidade real.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
-      ...productReferences.map((reference) => (topic.source === 'flyer'
+      ...productReferences.map((reference) => (hasProductList(topic)
         ? flyerProductLabelFor(topic, reference)
         : `Foto selecionada: ${reference.relativePath}`)),
-    ] : topic.source === 'flyer' ? [
+    ] : hasProductList(topic) ? [
       // A flyer is always a physical-goods price list, so both generic
       // no-photo branches below are wrong for it: one offers to "criar
       // produto/serviço", the other infers a service business from the
@@ -7781,7 +7807,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // this is the common case, not the rare one: a project can hold a
       // shelf full of unclaimed product photos while this encarte's own
       // products have none linked.
-      'Este encarte está sem foto real de produto anexada, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.',
+      `${topic.source === 'flyer' ? 'Este encarte' : 'Esta peça'} está sem foto real de produto anexada, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.`,
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
     ] : hasAnyProductPhotoReference(project) ? [
@@ -7829,7 +7855,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     ]),
     isVerticalStory ? section('ESTRUTURA VERTICAL OBRIGATÓRIA', [
       'Topo: logo + título principal.',
-      topic.source === 'flyer'
+      hasProductList(topic)
         ? 'Centro: grade vertical com todos os produtos da lista, cada um com nome e preço legíveis — nenhum produto isolado como protagonista.'
         : (quantityRules.storyCenterLine || 'Centro: produto principal como protagonista visual.'),
       exactPrice ? 'Parte inferior média: preço em selo compacto e legível, preferencialmente lateral ou abaixo do produto, sem cobrir a área principal.' : '',
@@ -7844,7 +7870,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // a proscriptive struture with an explicit closed element list is what
       // actually holds it, same as it does for Story.
       'Topo: logo e/ou título principal — nenhuma faixa, ribbon ou selo decorativo acima ou ao redor do título.',
-      topic.source === 'flyer'
+      hasProductList(topic)
         ? 'Centro: grade com todos os produtos da lista, cada um com nome e preço legíveis, ocupando juntos a maior área da composição — nenhum produto isolado maior que os outros.'
         : (quantityRules.storyCenterLine || 'Centro: produto real em destaque, ocupando a maior área da composição.'),
       exactPrice ? 'Base: preço em um único selo compacto e legível — não duplicar em outro selo ou faixa.' : '',
@@ -7862,11 +7888,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // either, so without its own line this slot rendered `2. Título “”.`
       isFlyerFreeTitle
         ? '2. Título de abertura do encarte criado pela IA (chamada curta de ofertas acima da grade).'
-        : isGoalTopic || useSalesHookTitle ? '2. Título chamativo criado pela IA (gancho curto e específico do assunto real).' : `2. Título “${exactTitle}”.`,
+        : isGoalTopic || useSalesHookTitle || isOfferPair ? '2. Título chamativo criado pela IA (gancho curto e específico do assunto real).' : `2. Título “${exactTitle}”.`,
       exactPrice ? `3. Preço “${exactPrice}” em selo compacto de alto contraste.` : '',
       exactCta ? (useSubtleCta ? `4. Chamada sutil “${exactCta}” (sem botão).` : `4. CTA “${exactCta}”.`) : '',
       logoReferences.length ? '5. Logo oficial.' : '',
-      topic.source === 'flyer'
+      hasProductList(topic)
         ? 'Nenhum produto individual é protagonista: a grade completa, com todos os produtos e preços, é o elemento central da peça.'
         : 'O produto deve ser o protagonista visual.',
       exactPrice ? 'O selo de preço não pode cobrir parte relevante do produto principal.' : '',
@@ -8214,7 +8240,9 @@ function buildFlyerProductFocus(topic = {}) {
     .filter((product) => !(Array.isArray(product.photoReferenceIds) && product.photoReferenceIds.length))
     .map((product) => product.name);
   return {
-    heroLine: `Encarte de ofertas em grade com todos os ${products.length} produtos abaixo, cada um com seu preço:\n${lines.join('\n')}`,
+    heroLine: topic.source === 'flyer'
+      ? `Encarte de ofertas em grade com todos os ${products.length} produtos abaixo, cada um com seu preço:\n${lines.join('\n')}`
+      : `Os ${products.length} produtos abaixo lado a lado, com o mesmo destaque, cada um com o seu próprio preço junto dele (não é combo/kit: nada de preço único ou somado):\n${lines.join('\n')}`,
     assetLines: [
       'Cada produto da lista ocupa o seu próprio espaço na grade, com o nome e o preço legíveis ao lado ou abaixo dele.',
       // Only when at least one product actually has a photo. Unconditional,
@@ -8237,7 +8265,9 @@ function buildFlyerProductFocus(topic = {}) {
     ].filter(Boolean),
     visualLines: [
       `A peça mostra todos os ${products.length} produtos da lista, nenhum produto em destaque exclusivo sobre os outros.`,
-      'Composição de encarte: grade organizada, leitura rápida, preços com peso visual alto.',
+      topic.source === 'flyer'
+        ? 'Composição de encarte: grade organizada, leitura rápida, preços com peso visual alto.'
+        : 'Leitura rápida, cada preço com peso visual alto e colado ao seu próprio produto.',
     ],
     restrictionLines: [
       'Escrever cada preço exatamente como escrito na lista: não arredondar, não alterar centavos, não converter e não inventar preço.',
@@ -8255,7 +8285,7 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
   // is equally the subject. The multi-product hero logic below would pick
   // one and instruct the model not to swap it, which is the exact opposite
   // of what an encarte needs.
-  if (topic.source === 'flyer') return buildFlyerProductFocus(topic);
+  if (hasProductList(topic)) return buildFlyerProductFocus(topic);
   const multiProduct = multiProductFocus(topic);
   if (multiProduct) {
     const item = multiProduct.item;
@@ -8399,7 +8429,7 @@ function buildCreativePreflight(topic = {}, channel = '', rawReferences = [], se
   if (originalTitle && normalizedTitle !== originalTitle) {
     warnings.push(`Título "${originalTitle}" foi normalizado para "${normalizedTitle}" antes da geração para melhorar leitura e evitar erro de plural.`);
   }
-  if (!normalizeCreativePrice(topic.price)) warnings.push('Oferta sem preço válido; a imagem não deve inventar preço.');
+  if (!normalizeCreativePrice(topic.price) && !hasProductList(topic)) warnings.push('Oferta sem preço válido; a imagem não deve inventar preço.');
   const quantity = detectOfferQuantity(topic);
   if (quantity > 1) checks.push(`Oferta com quantidade detectada (${quantity}); prompt deve comunicar visualmente a quantidade do combo.`);
   if (isVerticalStoryChannel(channel)) {
@@ -8567,7 +8597,7 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   // for in so many words.
   const productPhotos = linkedPhotos.length
     ? linkedPhotos
-    : options.topic?.source === 'goal' || options.topic?.source === 'flyer'
+    : options.topic?.source === 'goal' || hasProductList(options.topic)
       ? []
       : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, productPhotoLimit);
   const postType = deriveCreativePostType(options.topic);
@@ -10080,7 +10110,9 @@ function buildCaptionDraft(project, dayNumber, contentTopic = null) {
     return [
       `Dia ${dayNumber}: ${contentTopic.label || offerTypeLabel(contentTopic.type)} para ${project.name}.`,
       `Assunto: ${contentTopic.offerName || contentTopic.ideaTitle || contentTopic.objective || contentTopic.label}.`,
-      contentTopic.price ? `Preço: ${contentTopic.price}.` : 'Preço: não informar preço se não estiver cadastrado.',
+      hasProductList(contentTopic)
+        ? `Preços (um por produto, não somar): ${formatFlyerProductLines(contentTopic.products, 'sem preço cadastrado').join('; ')}.`
+        : contentTopic.price ? `Preço: ${contentTopic.price}.` : 'Preço: não informar preço se não estiver cadastrado.',
       contentTopic.items ? `Itens/detalhes: ${contentTopic.items}.` : '',
       `Gancho: [criar chamada curta alinhada ao assunto]`,
       `Corpo: [explicar a oferta/assunto sem inventar informações]`,

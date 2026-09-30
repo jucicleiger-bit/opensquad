@@ -5674,12 +5674,46 @@ test('a group with comboChance=100 always pairs the drawn offer with a same-grou
     assert.equal(topic.type, 'combo');
     assert.ok(topic.offerName.includes('Pizza Calabresa'));
     assert.ok(topic.offerName.includes('Pizza Marguerita'));
-    assert.ok(topic.notes.includes('R$45'));
-    assert.ok(topic.notes.includes('R$50'));
-    // The price field itself must carry both prices too — leaving it empty
-    // would make downstream "no price registered" prompt logic contradict
-    // the notes text, which does mention both (see finding 2).
-    assert.equal(topic.price, 'R$45 + R$50');
+    // Two products side by side, each with its own price — never one merged
+    // "R$45 + R$50" price, which the image model drew as a single kit price.
+    assert.equal(topic.price, '');
+    assert.deepEqual(
+      topic.products.map((product) => `${product.name} ${product.price}`).sort(),
+      ['Pizza Calabresa R$45', 'Pizza Marguerita R$50'],
+    );
+  });
+});
+
+test('a paired offer arte shows both products with their own prices instead of one merged combo price', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'par-hortifruti', name: 'Mercado Par', handle: '@mercadopar' }, dir);
+    const { group } = await saveProjectOfferGroup('par-hortifruti', { name: 'Hortifruti', comboChance: 100 }, dir);
+    await saveProjectOffer('par-hortifruti', { name: 'Alface', price: 'R$ 4,99', groupId: group.id }, dir);
+    await saveProjectOffer('par-hortifruti', { name: 'Cenoura', price: 'R$ 7,89', priceUnit: 'kg', groupId: group.id }, dir);
+    await updateProjectBrandInput('par-hortifruti', { segmentGroup: 'Negocios locais e lojas', segmentCategory: 'Mercado' }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado', 'combo', 'vertical', dir);
+
+    const batch = await generateContentBatch('par-hortifruti', {
+      days: 1,
+      startDate: '2026-08-03',
+      channel: 'instagram_story',
+      groupIds: [group.id],
+      offersOnly: true,
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'par-hortifruti');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'par-hortifruti', {
+      imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/par.png', mimeType: 'image/png' }; },
+    }, getCentralPaths(dir, 'par-hortifruti'));
+    const prompt = calls[0].content.image.prompt;
+
+    assert.match(prompt, /Alface — R\$ 4,99/);
+    assert.match(prompt, /Cenoura — R\$ 7,89\/kg/);
+    assert.doesNotMatch(prompt, /Preço exato:/, 'no single price for the whole piece');
+    assert.doesNotMatch(prompt, /R\$ 4,99 \+ R\$ 7,89/, 'prices must never be joined into one');
+    assert.doesNotMatch(prompt, /Título exato: Alface \+ Cenoura/, 'the pair must not be titled as a kit');
+    assert.doesNotMatch(prompt, /Criar oferta de combo/);
+    assert.match(prompt, /não é combo nem kit/i);
   });
 });
 
