@@ -11,11 +11,13 @@
 const DAY_MS = 24 * 60 * 60 * 1000;
 const RETRY_GAP_MS = 20 * 60 * 1000;
 
-// ponytail: fixed -03:00 (Brazil dropped DST in 2019); switch to an
-// Intl-based zone lookup if a client outside São Paulo's offset shows up.
+// ponytail: fixed -04:00, Cuiabá, where the operator schedules from (Brazil
+// dropped DST in 2019). Must match TZ in the gaveta repo's publish.yml and
+// in the local server's .env; switch to an Intl-based zone lookup if
+// clients in other offsets need their own wall clock.
 function dueAt(item) {
   if (!item.scheduledDate) return null;
-  const at = new Date(`${item.scheduledDate}T${item.scheduledTime || '00:00'}:00-03:00`);
+  const at = new Date(`${item.scheduledDate}T${item.scheduledTime || '00:00'}:00-04:00`);
   return Number.isNaN(at.getTime()) ? null : at;
 }
 
