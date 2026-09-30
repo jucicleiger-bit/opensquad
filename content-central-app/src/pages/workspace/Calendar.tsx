@@ -8,7 +8,6 @@ import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
 import { addMonths, buildMonthGrid, monthLabel, startOfMonth, toDateKey, weekdayLabels } from "./calendarUtils";
 import { ContentPipeline } from "./ContentPipeline";
-import { TopicIdeasBank } from "./TopicIdeasBank";
 import { bucketForItem, channelLabel, imageSource, isFeedChannel, statusMeta } from "./contentDisplay";
 import styles from "./Calendar.module.css";
 
@@ -21,7 +20,7 @@ interface ActionState {
 const IDLE_ACTION_STATE: ActionState = { busy: false, error: null, message: null };
 
 export function Calendar() {
-  const { project, refreshProject } = useOutletContext<WorkspaceContext>();
+  const { project } = useOutletContext<WorkspaceContext>();
   const [items, setItems] = useState<ContentItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(() => startOfMonth(new Date()));
@@ -205,8 +204,6 @@ export function Calendar() {
           <EmptyState title="Selecione um post no calendário" description="Clique em um card de um dia para ver a prévia completa e as ações." />
         </div>
       )}
-
-      <TopicIdeasBank project={project} refreshProject={refreshProject} />
     </div>
   );
 }

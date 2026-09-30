@@ -92,13 +92,13 @@ describe("Calendar", () => {
     expect(screen.getByRole("button", { name: "Publicar agora" })).toBeInTheDocument();
   });
 
-  it("shows the topic idea bank at the end of the calendar", async () => {
+  it("leaves the topic idea bank to Agenda e geração, not the calendar", async () => {
     stubFetchSequence([{ body: PROJECT_STATE_WITH_TOPICS }, { body: { content: [] } }]);
 
     renderProjectCalendar();
 
-    expect(await screen.findByText("Banco de assuntos")).toBeInTheDocument();
-    expect(screen.getByText(/Como escolher melhor antes de comprar/)).toBeInTheDocument();
+    expect(await screen.findByText("Selecione um post no calendário")).toBeInTheDocument();
+    expect(screen.queryByText("Banco de assuntos")).not.toBeInTheDocument();
   });
 
   it("only shows items that are already approved, not ones still awaiting approval", async () => {
