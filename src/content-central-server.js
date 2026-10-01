@@ -127,8 +127,8 @@ import {
   simulateTestPost,
   updateProjectImageRules,
   validateMetaToken,
-  MAX_FLYER_PRODUCTS,
-  flyerProductLabelFor,
+  productPhotoLimitFor,
+  productPhotoLabelFor,
 } from './content-central.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
@@ -2728,26 +2728,30 @@ async function generateAiImageWithNousFal({ content, projectId, targetDir, note,
 // prompt changes. `offset` is how many attachments precede the references
 // (a targeted edit puts the canvas at Anexo 1).
 export function buildCodexAttachmentManifest(references, topic = {}, offset = 0) {
-  if (!hasProductList(topic)) return '';
+  // An offer with flavors has the same problem as a flyer: several product
+  // photos that only mean something once each is tied to its flavor's name.
+  const hasFlavors = Boolean(topic?.flavors?.length);
+  if (!hasProductList(topic) && !hasFlavors) return '';
   const lines = references.map((reference, index) => {
     const position = index + offset + 1;
     return reference.role === 'product_photo'
-      ? `Anexo ${position}: ${flyerProductLabelFor(topic, reference)}`
+      ? `Anexo ${position}: ${productPhotoLabelFor(topic, reference)}`
       : `Anexo ${position}: ${reference.role} — ${reference.relativePath || reference.filename || reference.id || 'referência'}.`;
   });
   if (!lines.length) return '';
   return [
     'Os anexos desta mensagem estão nesta ordem exata:',
     ...lines,
-    'Cada foto de produto acima pertence ao produto nomeado nela. Colocar cada uma no espaço da grade daquele produto, preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um produto pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.',
+    hasFlavors
+      ? 'Cada foto de produto acima pertence ao sabor/variação nomeado nela. Mostrar cada um preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.'
+      : 'Cada foto de produto acima pertence ao produto nomeado nela. Colocar cada uma no espaço da grade daquele produto, preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um produto pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.',
   ].join('\n');
 }
 
 export function selectImageReferencesForCodex(imageReferences, topic = {}) {
-  const productPhotoLimit = topic?.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2;
   return [
     ...imageReferences.filter((reference) => reference.role === 'brand_asset').slice(0, 1),
-    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, productPhotoLimit),
+    ...imageReferences.filter((reference) => reference.role === 'product_photo').slice(0, productPhotoLimitFor(topic)),
     ...imageReferences.filter((reference) => reference.role === 'layout_model').slice(0, 2),
   ];
 }

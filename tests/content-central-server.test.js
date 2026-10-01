@@ -5370,3 +5370,26 @@ test('POST /api/segment-learnings/entries route respects scope: "offerType" from
     }
   });
 });
+
+test('selectImageReferencesForCodex forwards one photo per flavor for an offer with flavors', () => {
+  const brand = { role: 'brand_asset', absolutePath: '/brand.png' };
+  const photos = Array.from({ length: 4 }, (_, index) => ({ role: 'product_photo', absolutePath: `/sabor${index + 1}.png` }));
+  const topic = { source: 'offer', flavors: [{ name: 'A' }, { name: 'B' }, { name: 'C' }] };
+  assert.deepEqual(selectImageReferencesForCodex([brand, ...photos], topic), [brand, photos[0], photos[1], photos[2]]);
+});
+
+test('buildCodexAttachmentManifest names the flavor each attached photo belongs to', () => {
+  const brand = { id: 'logo', role: 'brand_asset', relativePath: 'assets/logo.png' };
+  const chocolate = { id: 'ref-choc', role: 'product_photo', relativePath: 'assets/references/chocolate.png' };
+  const morango = { id: 'ref-mor', role: 'product_photo', relativePath: 'assets/references/morango.png' };
+  const topic = {
+    source: 'offer',
+    offerName: 'Trento',
+    flavors: [{ name: 'Chocolate', photoReferenceId: 'ref-choc' }, { name: 'Morango', photoReferenceId: 'ref-mor' }],
+  };
+  const manifest = buildCodexAttachmentManifest([brand, chocolate, morango], topic, 0);
+  assert.match(manifest, /Anexo 2:.*sabor\/variação "Chocolate"/);
+  assert.match(manifest, /Anexo 3:.*sabor\/variação "Morango"/);
+  assert.doesNotMatch(manifest, /grade/, 'a flavored offer is not a flyer grid');
+  assert.equal(buildCodexAttachmentManifest([brand, chocolate], { source: 'offer' }, 0), '', 'plain offers still get no manifest');
+});
