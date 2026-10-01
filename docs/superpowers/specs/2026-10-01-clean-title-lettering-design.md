@@ -33,6 +33,21 @@ O que mudou em relação ao texto abaixo:
   peça é criado para a marca, não copiado do modelo.
 - No formulário: "Desenhada (padrão)" e "Limpa".
 
+- **Fundo trabalhado.** O fundo rico que o operador gostava era efeito
+  colateral de a IA tratar a estrutura como referência de estilo. Com a
+  estrutura restrita à posição dos blocos, a trava de "Fundo: Simples" ("cor
+  sólida ou gradiente suave") passou a ser seguida ao pé da letra e as artes
+  saíram com degradê liso. O briefing agora pede o acabamento por conta
+  própria: formas gráficas grandes (ondas, faixas, curvas, brilho, base sob
+  o produto) nas cores da marca, sem cenário. Vale para ofertas de marcas
+  com duas cores ou mais; marca com uma cor só e encarte continuam com o
+  fundo liso.
+- **A opção "Limpa" é um visual inteiro.** Vendo os dois lado a lado, o
+  operador gostou da arte desenhada sobre o fundo trabalhado e da arte limpa
+  como ela saiu da primeira vez, sobre o fundo liso. Por isso a letra limpa
+  também deixa de fora o fundo trabalhado. No formulário: "Desenhada
+  (padrão)" e "Limpa (fundo mais liso)".
+
 O restante (estrutura só como estrutura, manifesto de anexos, instrução
 geral) continua valendo como descrito.
 
