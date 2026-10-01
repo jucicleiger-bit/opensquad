@@ -10406,6 +10406,28 @@ test('simple_brand background style allows a soft gradient between two registere
     // still inside the brand colours and still without scenery.
     assert.match(prompt, /ou tons muito próximos\), com formas gráficas nas cores da marca por cima — sem cenário, objetos de contexto, ambientação ou textura elaborada/i);
     assert.match(prompt, /Fundo trabalhado, não chapado: sobre a cor da marca, formas gráficas grandes/i);
+
+    // The clean title is a whole look, not only a letter: shown both side by
+    // side, the operator liked the drawn piece on its worked background and
+    // the clean piece exactly as it first came out — on the plain brand
+    // background. So asking for the clean letter also drops the worked finish.
+    const savedOffer = (await listCentralProjects(dir))
+      .find((entry) => entry.projectId === 'fundo-simples-gradiente').contentStrategy.offers[0];
+    await saveProjectOffer('fundo-simples-gradiente', { ...savedOffer, titleStyle: 'clean' }, dir, new Date('2026-09-16T12:00:00.000Z'));
+    const cleanCalls = [];
+    await simulateTestPost('fundo-simples-gradiente', {
+      channel: 'instagram_feed',
+      testSeed: 'fundo-simples-gradiente-limpo',
+      offerId: savedOffer.id,
+      imageGenerator: async (payload) => {
+        cleanCalls.push(payload);
+        return { url: 'https://cdn.example.com/mussarela-limpa.png', mimeType: 'image/png' };
+      },
+    }, dir, new Date('2026-09-16T12:05:00.000Z'));
+    const cleanPrompt = cleanCalls[0].content.image.prompt;
+    assert.match(cleanPrompt, /Letra do título: LIMPA/);
+    assert.match(cleanPrompt, /cor sólida ou gradiente suave usando só as cores da marca \(#F01818 e #F0D890, ou tons muito próximos\) — sem cenário/i);
+    assert.doesNotMatch(cleanPrompt, /Fundo trabalhado|com formas gráficas nas cores da marca/i);
     // Gradient + a real product photo attached: the model must be told which
     // side of the gradient goes near the product, using the photo's own
     // colors — otherwise the background/photo pairing is arbitrary instead

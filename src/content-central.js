@@ -7744,9 +7744,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // which structure happened to be attached. Two registered colours only (a
   // single one was promised a flat fill), and never a flyer: a price grid
   // over a busy background is the case the lock was built for.
+  // Nor with a clean title: shown both looks side by side, the operator liked
+  // the drawn piece on this worked background and the clean piece as it first
+  // came out, on the plain one — the clean option is that whole look.
   const workedBrandBackground = creativeSpec.background?.style === 'simple_brand'
     && Boolean(secondBrandColor)
-    && topic.source !== 'flyer';
+    && topic.source !== 'flyer'
+    && creativeSpec.title?.style !== 'clean';
   // Which single layout/visual reference to use is already rotated upstream
   // in buildPrimaryAiImageReferences (seeded per test run), so selectedReferences
   // contains at most one of each here.

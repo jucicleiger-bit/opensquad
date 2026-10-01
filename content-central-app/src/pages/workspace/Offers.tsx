@@ -810,7 +810,7 @@ export function Offers() {
                     onChange={(e) => setForm({ ...form, titleStyle: e.target.value as TitleStyle })}
                   >
                     <option value="lettering">Desenhada (padrão)</option>
-                    <option value="clean">Limpa</option>
+                    <option value="clean">Limpa (fundo mais liso)</option>
                   </select>
                 </div>
               </div>
