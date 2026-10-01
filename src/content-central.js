@@ -2170,13 +2170,23 @@ export const MAX_OFFER_FLAVORS = 6;
 
 export function normalizeOfferFlavors(value) {
   if (!Array.isArray(value)) return [];
+  // A photo can only be labeled as one flavor (see productPhotoLabelFor), so
+  // a flavor reusing an earlier flavor's photo is treated as photo-less
+  // rather than left with a photo the model is never told is its own.
+  const claimedPhotos = new Set();
   return value
     .map((flavor) => ({
       name: String(flavor?.name || '').trim(),
       photoReferenceId: String(flavor?.photoReferenceId || '').trim() || null,
     }))
     .filter((flavor) => flavor.name)
-    .slice(0, MAX_OFFER_FLAVORS);
+    .slice(0, MAX_OFFER_FLAVORS)
+    .map((flavor) => {
+      if (!flavor.photoReferenceId) return flavor;
+      if (claimedPhotos.has(flavor.photoReferenceId)) return { ...flavor, photoReferenceId: null };
+      claimedPhotos.add(flavor.photoReferenceId);
+      return flavor;
+    });
 }
 
 // The one place that says how many product photos a piece may carry — it

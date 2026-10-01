@@ -11062,6 +11062,16 @@ test('normalizeOfferFlavors trims names, drops unnamed rows, nulls an empty phot
   assert.equal(normalizeOfferFlavors(Array.from({ length: 9 }, (_, i) => ({ name: `S${i}` }))).length, MAX_OFFER_FLAVORS);
 });
 
+// Seen live: the operator picked the morango photo again for "leite". One
+// photo can only be labeled as one flavor, so the second flavor reached the
+// model with neither a photo of its own nor the "no photo, name only" line.
+test('normalizeOfferFlavors keeps a photo on the first flavor that claims it and leaves a later flavor photo-less', () => {
+  assert.deepEqual(
+    normalizeOfferFlavors([{ name: 'Morango', photoReferenceId: 'ref-1' }, { name: 'Leite', photoReferenceId: 'ref-1' }]),
+    [{ name: 'Morango', photoReferenceId: 'ref-1' }, { name: 'Leite', photoReferenceId: null }],
+  );
+});
+
 test('productPhotoLimitFor: flyer takes every product, a flavored offer one photo per flavor, anything else 2', () => {
   assert.equal(productPhotoLimitFor({ source: 'flyer' }), MAX_FLYER_PRODUCTS);
   assert.equal(productPhotoLimitFor({ source: 'offer', flavors: [{ name: 'A' }, { name: 'B' }, { name: 'C' }] }), 3);
