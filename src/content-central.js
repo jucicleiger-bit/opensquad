@@ -2164,6 +2164,29 @@ export async function generateSpecialDateContent(projectId, options = {}, target
 
 const FLYER_BATCH_PREFIX = 'flyer';
 export const MAX_FLYER_PRODUCTS = 12;
+// One arte showing every flavor/variation of a single offer side by side
+// under one price. Six is where a single feed piece stops being legible.
+export const MAX_OFFER_FLAVORS = 6;
+
+export function normalizeOfferFlavors(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((flavor) => ({
+      name: String(flavor?.name || '').trim(),
+      photoReferenceId: String(flavor?.photoReferenceId || '').trim() || null,
+    }))
+    .filter((flavor) => flavor.name)
+    .slice(0, MAX_OFFER_FLAVORS);
+}
+
+// The one place that says how many product photos a piece may carry — it
+// used to be repeated in buildPrimaryAiImageReferences,
+// buildChatGptFinalCardPrompt and selectImageReferencesForCodex, and a cap
+// left behind in any one of them silently drops photos.
+export function productPhotoLimitFor(topic) {
+  if (topic?.source === 'flyer') return MAX_FLYER_PRODUCTS;
+  return topic?.flavors?.length || 2;
+}
 // Date.now() alone can repeat within the same millisecond — writeJson's
 // own temp-file naming elsewhere in this file hit exactly this
 // (reproduced 100% of the time with concurrent carousel slide writes) and
@@ -6792,6 +6815,7 @@ export function hasProductList(topic = {}) {
 
 async function offerToContentTopic(offer, targetDir) {
   const learning = await loadOfferTypeLearning(targetDir, offer.type);
+  const flavors = normalizeOfferFlavors(offer.flavors);
   return {
     id: offer.id,
     type: offer.type,
@@ -6809,7 +6833,12 @@ async function offerToContentTopic(offer, targetDir) {
     layoutStrength: offer.layoutStrength,
     objective: await offerObjective(offer, targetDir),
     pillarId: offer.pillarId || null,
-    photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
+    flavors,
+    // With flavors, the piece is built from the flavor photos, not the
+    // offer's general "angles of the product" photos.
+    photoReferenceIds: flavors.length
+      ? flavors.map((flavor) => flavor.photoReferenceId).filter(Boolean)
+      : Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
     learningEntries: learning.entries.filter((entry) => entry.bucket === 'approved').map((entry) => entry.text),
   };
 }
@@ -6820,20 +6849,21 @@ async function offerToContentTopic(offer, targetDir) {
 // "always one product, one arte". Chance is per-group (see comboChance on
 // normalizeProjectOfferGroup); 0/missing group = today's unchanged
 // behavior. Never fires for an offer that is already a manual combo
-// (type: 'combo') — combos never nest.
+// (type: 'combo') — combos never nest — nor for an offer with flavors,
+// whose arte is already the full set of its own variations.
 function fitsWeekday(offer, weekday) {
   return !weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday);
 }
 
 function pickComboPartner(offers, primary, project, weekday) {
-  if (primary.type === 'combo' || primary.uniqueProposal || !primary.groupId) return null;
+  if (primary.type === 'combo' || primary.uniqueProposal || primary.flavors?.length || !primary.groupId) return null;
   const group = normalizeProjectOfferGroups(project?.contentStrategy?.offerGroups || [])
     .find((entry) => entry.id === primary.groupId);
   const chance = group?.comboChance || 0;
   if (chance <= 0 || Math.random() * 100 >= chance) return null;
   const candidates = offers.filter((offer) => (
     offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo'
-    && !offer.uniqueProposal && fitsWeekday(offer, weekday)
+    && !offer.uniqueProposal && !offer.flavors?.length && fitsWeekday(offer, weekday)
   ));
   if (!candidates.length) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
@@ -6961,6 +6991,7 @@ function formatContentTopicLines(topic) {
     hasProductList(topic)
       ? `Produtos e preços obrigatórios, cada produto com o seu próprio preço (não somar nem juntar num preço único): ${formatFlyerProductLines(topic.products, 'sem preço cadastrado').join('; ')}.`
       : topic.price ? `Preço obrigatório: ${topic.price}. Não alterar, arredondar ou inventar outro preço.` : 'Não inventar preço se nenhum preço foi cadastrado para este assunto.',
+    topic.flavors?.length ? `Sabores/variações disponíveis, todos pelo mesmo preço: ${topic.flavors.map((flavor) => flavor.name).join(', ')}.` : '',
     topic.items ? `Itens inclusos/detalhes: ${topic.items}. Cada item listado precisa aparecer visualmente reconhecível na composição — não representar só um ou dois itens e deixar o restante de fora.` : '',
     topic.cta ? `Chamada/CTA obrigatório: ${topic.cta}.` : '',
     !topic.cta && topic.autoGenerateCta ? 'CTA automático: criar uma chamada curta, natural e contextual depois de analisar o assunto, o formato do post e a composição criada. Evitar CTA massivo, genérico ou apelativo.' : '',
@@ -7417,10 +7448,12 @@ function normalizeBackgroundStyle(value) {
 // feeds REFERÊNCIA PRINCIPAL's generic zone list, which used to restate
 // "produto/benefício como protagonista" right under the flyer's own
 // numbered grid brief, contradicting it in the same section.
-function creativeLayoutZones(channel, isFlyer = false) {
+function creativeLayoutZones(channel, isFlyer = false, hasFlavors = false) {
   const centerLabel = isFlyer
     ? 'grade com todos os produtos e preços da oferta lado a lado, nenhum produto isolado como protagonista'
-    : 'produto/benefício como protagonista';
+    : hasFlavors
+      ? 'todos os sabores/variações lado a lado, com o mesmo destaque, nenhum isolado como protagonista'
+      : 'produto/benefício como protagonista';
   if (isVerticalStoryChannel(channel)) {
     return [
       'Topo (0-18%): logo e título dentro da área segura.',
@@ -7503,7 +7536,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
       strength: layoutStrength,
       referenceId: layoutReference?.id || '',
       referencePath: layoutReference?.relativePath || '',
-      zones: creativeLayoutZones(targetChannel, hasProductList(topic)),
+      zones: creativeLayoutZones(targetChannel, hasProductList(topic), Boolean(topic.flavors?.length)),
     },
     background: {
       style: backgroundStyle,
@@ -7613,7 +7646,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // Mirrors the limit in buildPrimaryAiImageReferences — a flyer describes
   // every product photo it was sent, everything else describes at most two.
   const productReferences = selectedReferences.filter((reference) => reference.role === 'product_photo')
-    .slice(0, topic.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2);
+    .slice(0, productPhotoLimitFor(topic));
+  const hasFlavors = Boolean(topic.flavors?.length);
   // Only trust a photo as "this exact real product" when it's the one this
   // topic/offer explicitly linked (see buildPrimaryAiImageReferences) — a
   // pool-matched photo (legacy pizza/esfiha keyword fallback) doesn't get
@@ -7793,10 +7827,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : 'Não substituir por outro produto/serviço nem deformar sua identidade real.',
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
-      ...productReferences.map((reference) => (hasProductList(topic)
-        ? flyerProductLabelFor(topic, reference)
-        : `Foto selecionada: ${reference.relativePath}`)),
-    ] : hasProductList(topic) ? [
+      ...productReferences.map((reference) => productPhotoLabelFor(topic, reference)),
+    ] : hasFlavors ? productFocus.assetLines : hasProductList(topic) ? [
       // A flyer is always a physical-goods price list, so both generic
       // no-photo branches below are wrong for it: one offers to "criar
       // produto/serviço", the other infers a service business from the
@@ -7857,7 +7889,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Topo: logo + título principal.',
       hasProductList(topic)
         ? 'Centro: grade vertical com todos os produtos da lista, cada um com nome e preço legíveis — nenhum produto isolado como protagonista.'
-        : (quantityRules.storyCenterLine || 'Centro: produto principal como protagonista visual.'),
+        : hasFlavors
+          ? `Centro: todos os ${topic.flavors.length} sabores/variações lado a lado, com o mesmo destaque, cada um com o nome legível — nenhum isolado como protagonista.`
+          : (quantityRules.storyCenterLine || 'Centro: produto principal como protagonista visual.'),
       exactPrice ? 'Parte inferior média: preço em selo compacto e legível, preferencialmente lateral ou abaixo do produto, sem cobrir a área principal.' : '',
       exactCta
         ? `Rodapé: chamada “${exactCta}” em texto pequeno, sem botão — logo/fechamento limpo domina.`
@@ -7872,7 +7906,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Topo: logo e/ou título principal — nenhuma faixa, ribbon ou selo decorativo acima ou ao redor do título.',
       hasProductList(topic)
         ? 'Centro: grade com todos os produtos da lista, cada um com nome e preço legíveis, ocupando juntos a maior área da composição — nenhum produto isolado maior que os outros.'
-        : (quantityRules.storyCenterLine || 'Centro: produto real em destaque, ocupando a maior área da composição.'),
+        : hasFlavors
+          ? `Centro: todos os ${topic.flavors.length} sabores/variações lado a lado, com o mesmo destaque, cada um com o nome legível, ocupando juntos a maior área da composição — nenhum isolado como protagonista.`
+          : (quantityRules.storyCenterLine || 'Centro: produto real em destaque, ocupando a maior área da composição.'),
       exactPrice ? 'Base: preço em um único selo compacto e legível — não duplicar em outro selo ou faixa.' : '',
       exactCta
         ? `Rodapé: chamada “${exactCta}” em texto ou botão simples — não repetir como selo/ícone extra. Se for botão, deixar respiro visível entre ele e a borda inferior.`
@@ -7894,7 +7930,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       logoReferences.length ? '5. Logo oficial.' : '',
       hasProductList(topic)
         ? 'Nenhum produto individual é protagonista: a grade completa, com todos os produtos e preços, é o elemento central da peça.'
-        : 'O produto deve ser o protagonista visual.',
+        : hasFlavors
+          ? 'Nenhum sabor/variação é protagonista sozinho: o conjunto lado a lado é o elemento central da peça.'
+          : 'O produto deve ser o protagonista visual.',
       exactPrice ? 'O selo de preço não pode cobrir parte relevante do produto principal.' : '',
     ]),
     section('REFERÊNCIA PRINCIPAL', layoutReference ? [
@@ -8227,6 +8265,42 @@ export function flyerProductLabelFor(topic = {}, reference = {}) {
     : `Foto sem produto correspondente na lista — não usar como produto da grade: ${reference.relativePath}`;
 }
 
+// Same reason as flyerProductLabelFor: the photos arrive in
+// reference-registration order, so without a name on each one the model
+// can't tell which flavor a photo is.
+export function productPhotoLabelFor(topic = {}, reference = {}) {
+  if (hasProductList(topic)) return flyerProductLabelFor(topic, reference);
+  const flavor = (topic.flavors || []).find((entry) => entry.photoReferenceId === reference.id);
+  return flavor
+    ? `Foto do sabor/variação "${flavor.name}": ${reference.relativePath}`
+    : `Foto selecionada: ${reference.relativePath}`;
+}
+
+// One product in several flavors/variations, one price for all. Unlike a
+// paired offer or a flyer, the headline and the price seal stay the offer's
+// own — only the "single hero product" framing gives way to the full set.
+function buildFlavorProductFocus(topic = {}) {
+  const flavors = topic.flavors || [];
+  const names = flavors.map((flavor) => flavor.name).join(', ');
+  const missingPhoto = flavors.filter((flavor) => !flavor.photoReferenceId).map((flavor) => flavor.name);
+  return {
+    heroLine: `1. Os ${flavors.length} sabores/variações de ${topic.offerName} lado a lado, com o mesmo destaque, cada um com o seu nome legível embaixo: ${names}. É o mesmo produto em versões diferentes, com um preço único para todos — não é combo nem kit.`,
+    assetLines: [
+      missingPhoto.length < flavors.length
+        ? 'Usar a foto real anexada de cada sabor/variação — cada foto vem rotulada com o nome a que pertence. Não trocar a foto de um pela de outro.'
+        : '',
+      missingPhoto.length
+        ? `Sem foto real anexada: ${missingPhoto.join(', ')} — mostrar só o nome escrito, sem desenhar embalagem inventada.`
+        : '',
+    ].filter(Boolean),
+    visualLines: [`A peça mostra todos os ${flavors.length} sabores/variações, nenhum em destaque exclusivo sobre os outros.`],
+    restrictionLines: [
+      'Não omitir nenhum sabor/variação da lista e não acrescentar nenhum que não esteja nela.',
+      'O preço aparece uma única vez, valendo para todos — não repetir nem somar preço por sabor/variação.',
+    ],
+  };
+}
+
 // An encarte is a grid, not a hero shot. Every selected product gets its
 // own numbered slot with its own exact price; naming the total count makes
 // a dropped product a visible failure rather than a silent one. Prices go
@@ -8286,6 +8360,7 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
   // one and instruct the model not to swap it, which is the exact opposite
   // of what an encarte needs.
   if (hasProductList(topic)) return buildFlyerProductFocus(topic);
+  if (topic.flavors?.length) return buildFlavorProductFocus(topic);
   const multiProduct = multiProductFocus(topic);
   if (multiProduct) {
     const item = multiProduct.item;
@@ -8372,7 +8447,8 @@ function detectCreativeProductFocus(topic = {}, hasLinkedProductPhoto = false, p
 
 function buildCreativeQuantityRules(topic = {}, productFocus = {}, exactTitle = '') {
   const quantity = detectOfferQuantity(topic);
-  if (!quantity || quantity < 2) {
+  // A flavored offer is N variations of one product, never an N-unit combo.
+  if (topic.flavors?.length || !quantity || quantity < 2) {
     return {
       heroLine: '',
       storyCenterLine: '',
@@ -8541,7 +8617,10 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   const claimedByOtherOffers = new Set(
     (options.allOffers || [])
       .filter((offer) => offer.id !== options.topic?.offerId)
-      .flatMap((offer) => offer.photoReferenceIds || [])
+      .flatMap((offer) => [
+        ...(offer.photoReferenceIds || []),
+        ...(offer.flavors || []).map((flavor) => flavor.photoReferenceId),
+      ])
   );
   const selected = [];
   for (const reference of references) {
@@ -8553,9 +8632,10 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   const brandAssets = selected.filter((reference) => reference.role === 'brand_asset').slice(0, 1);
   const productPool = selected.filter((reference) => reference.role === 'product_photo' && !claimedByOtherOffers.has(reference.id));
   // A flyer is the one piece that legitimately needs every linked photo:
-  // each product on the encarte grid shows its own. Single-hero pieces keep
-  // the 2-photo cap that stops the prompt from fighting over protagonists.
-  const productPhotoLimit = options.topic?.source === 'flyer' ? MAX_FLYER_PRODUCTS : 2;
+  // each product on the encarte grid shows its own — and an offer with
+  // flavors needs one per flavor. Single-hero pieces keep the 2-photo cap
+  // that stops the prompt from fighting over protagonists.
+  const productPhotoLimit = productPhotoLimitFor(options.topic);
   // A topic/offer with its own explicitly linked photo(s) — e.g. a reseller
   // with dozens of visually distinct real products (phone models, shoes,
   // etc.) — must always show THAT exact product, never a guess from a
@@ -8597,7 +8677,9 @@ function buildPrimaryAiImageReferences(references, options = {}) {
   // for in so many words.
   const productPhotos = linkedPhotos.length
     ? linkedPhotos
-    : options.topic?.source === 'goal' || hasProductList(options.topic)
+    // A flavored offer whose flavors have no photo is the same case: a pool
+    // photo isn't any of its flavors.
+    : options.topic?.source === 'goal' || hasProductList(options.topic) || options.topic?.flavors?.length
       ? []
       : prioritizeReferencesByTopic(productPool, topicFocus).slice(0, productPhotoLimit);
   const postType = deriveCreativePostType(options.topic);
@@ -9641,6 +9723,9 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     // reference's `id`. Accepts either the array or (legacy/simple callers)
     // a single photoReferenceId, so both shapes normalize to the same field.
     photoReferenceIds: normalizePhotoReferenceIds(input?.photoReferenceIds ?? input?.photoReferenceId),
+    // Flavors/variations of this one product (same price for all), each
+    // with its own photo — the arte shows them all side by side.
+    flavors: normalizeOfferFlavors(input?.flavors),
     createdAt,
     updatedAt: now.toISOString(),
   };

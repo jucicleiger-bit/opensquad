@@ -109,6 +109,10 @@ import {
   updateProjectImageRules,
   validateMetaToken,
   deriveCreativePostType,
+  MAX_FLYER_PRODUCTS,
+  MAX_OFFER_FLAVORS,
+  normalizeOfferFlavors,
+  productPhotoLimitFor,
 } from '../src/content-central.js';
 
 // The publish-due tests pair local wall-clock times with UTC instants written
@@ -11046,5 +11050,97 @@ test('a normal multi-item offer still gets the single-hero brief', async () => {
     assert.ok(storyPrompt.includes('Centro: produto principal como protagonista visual.'));
     assert.ok(storyPrompt.includes('Centro (18-68%): produto/benefício como protagonista.'));
     assert.ok(!storyPrompt.includes('grade com todos os produtos'), 'the flyer grid wording must not leak into a normal vertical offer');
+  });
+});
+
+test('normalizeOfferFlavors trims names, drops unnamed rows, nulls an empty photo and caps at 6', () => {
+  assert.deepEqual(normalizeOfferFlavors(undefined), []);
+  assert.deepEqual(
+    normalizeOfferFlavors([{ name: ' Chocolate ', photoReferenceId: ' ref-1 ' }, { name: '  ', photoReferenceId: 'ref-2' }, { name: 'Coco' }]),
+    [{ name: 'Chocolate', photoReferenceId: 'ref-1' }, { name: 'Coco', photoReferenceId: null }],
+  );
+  assert.equal(normalizeOfferFlavors(Array.from({ length: 9 }, (_, i) => ({ name: `S${i}` }))).length, MAX_OFFER_FLAVORS);
+});
+
+test('productPhotoLimitFor: flyer takes every product, a flavored offer one photo per flavor, anything else 2', () => {
+  assert.equal(productPhotoLimitFor({ source: 'flyer' }), MAX_FLYER_PRODUCTS);
+  assert.equal(productPhotoLimitFor({ source: 'offer', flavors: [{ name: 'A' }, { name: 'B' }, { name: 'C' }] }), 3);
+  assert.equal(productPhotoLimitFor({ source: 'offer' }), 2);
+  assert.equal(productPhotoLimitFor(undefined), 2);
+});
+
+test('an offer with flavors is saved with them and is never paired into an automatic combo, in either role', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'sabores-combo', name: 'Sabores Combo' }, dir);
+    const { group } = await saveProjectOfferGroup('sabores-combo', { name: 'Doces', comboChance: 100 }, dir);
+    const { offer } = await saveProjectOffer('sabores-combo', {
+      name: 'Trento', price: 'R$ 3,99', groupId: group.id,
+      flavors: [{ name: 'Chocolate' }, { name: 'Morango' }],
+    }, dir);
+    assert.deepEqual(offer.flavors, [{ name: 'Chocolate', photoReferenceId: null }, { name: 'Morango', photoReferenceId: null }]);
+    await saveProjectOffer('sabores-combo', { name: 'Bala', price: 'R$ 1,00', groupId: group.id }, dir);
+
+    const batch = await generateContentBatch('sabores-combo', {
+      days: 2, startDate: '2026-08-03', channel: 'instagram_feed', groupIds: [group.id], offersOnly: true,
+    }, dir);
+    assert.ok(batch.items.every((item) => item.contentTopic.type !== 'combo'));
+    const trento = batch.items.find((item) => item.contentTopic.offerName === 'Trento');
+    assert.deepEqual(trento.contentTopic.flavors.map((flavor) => flavor.name), ['Chocolate', 'Morango']);
+  });
+});
+
+test('an offer with 3 flavors sends all 3 labeled photos and a side-by-side, single-price brief to the image model', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'sabores-arte', name: 'Sabores Arte', handle: '@saboresarte', approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await updateProjectBrandInput('sabores-arte', { segmentGroup: 'Negocios locais e lojas', segmentCategory: 'Mercado' }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado', 'offer', 'feed', dir);
+    const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
+    const photos = [];
+    for (const flavor of ['chocolate', 'morango', 'coco']) {
+      photos.push(await saveProjectAsset('sabores-arte', {
+        kind: 'reference', filename: `trento-${flavor}.jpg`, dataUrl, role: 'product_photo',
+        usageRoles: ['product_photo'], referenceCategory: 'real_product', weight: 'high',
+        instruction: `Foto real do produto: Trento — sabor ${flavor}`,
+      }, dir));
+    }
+    await saveProjectOffer('sabores-arte', {
+      name: 'Trento', price: 'R$ 3,99',
+      flavors: [
+        { name: 'Chocolate', photoReferenceId: photos[0].metadata.id },
+        { name: 'Morango', photoReferenceId: photos[1].metadata.id },
+        { name: 'Coco', photoReferenceId: photos[2].metadata.id },
+        { name: 'Limão' },
+      ],
+    }, dir);
+
+    const batch = await generateContentBatch('sabores-arte', {
+      days: 1, startDate: '2026-08-03', channel: 'instagram_feed', offersOnly: true,
+    }, dir);
+    const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'sabores-arte');
+    const calls = [];
+    await enrichBatchItemsWithRealImages(batch, project, 'sabores-arte', {
+      imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/sabores.png', mimeType: 'image/png' }; },
+    }, getCentralPaths(dir, 'sabores-arte'));
+
+    const image = calls[0].content.image;
+    assert.deepEqual(
+      image.references.filter((reference) => reference.role === 'product_photo').map((reference) => reference.id).sort(),
+      photos.map((photo) => photo.metadata.id).sort(),
+      'all three flavor photos must reach the model, not just two',
+    );
+    const prompt = image.prompt;
+    assert.match(prompt, /Chocolate, Morango, Coco, Limão/);
+    assert.match(prompt, /lado a lado/);
+    assert.match(prompt, /preço único/);
+    assert.match(prompt, /Preço exato: R\$ 3,99/);
+    assert.match(prompt, /Foto do sabor\/variação "Chocolate": assets\/references\/trento-chocolate\.jpg/);
+    assert.match(prompt, /Foto do sabor\/variação "Coco": assets\/references\/trento-coco\.jpg/);
+    assert.match(prompt, /Sem foto real anexada: Limão/);
+    assert.doesNotMatch(prompt, /Foto selecionada:/);
+    assert.doesNotMatch(prompt, /em destaque como produto principal/);
+    assert.doesNotMatch(prompt, /O produto deve ser o protagonista visual/);
+    assert.doesNotMatch(prompt, /produto\/benefício como protagonista/);
   });
 });

@@ -157,7 +157,12 @@ In `buildPrimaryAiImageReferences`:
 ```js
 test('an offer with 3 flavors sends all 3 labeled photos and a side-by-side, single-price brief to the image model', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'sabores-arte', name: 'Sabores Arte', handle: '@saboresarte' }, dir);
+    await createCentralProject({
+      projectId: 'sabores-arte', name: 'Sabores Arte', handle: '@saboresarte', approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    // An 'offer' post type needs a registered creative template, or generation is skipped.
+    await updateProjectBrandInput('sabores-arte', { segmentGroup: 'Negocios locais e lojas', segmentCategory: 'Mercado' }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado', 'offer', 'feed', dir);
     const dataUrl = `data:image/png;base64,${Buffer.from('img').toString('base64')}`;
     const photos = [];
     for (const flavor of ['chocolate', 'morango', 'coco']) {
