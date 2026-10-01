@@ -41,6 +41,7 @@ const thumbStyle = {
 const thumbImgStyle = { width: "100%", height: "100%", objectFit: "cover" } as const;
 type ProductTreatment = "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset";
 type BackgroundStyle = "elaborate" | "simple_brand";
+type TitleStyle = "clean" | "lettering";
 // Mirrors MAX_OFFER_FLAVORS in src/content-central.js.
 const MAX_OFFER_FLAVORS = 6;
 // `file` is a photo picked in the form but not uploaded yet.
@@ -66,6 +67,7 @@ const EMPTY_FORM = {
   productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
   backgroundStyle: "simple_brand" as BackgroundStyle,
+  titleStyle: "clean" as TitleStyle,
 };
 
 function suggestProductDirection(name: string, items: string, isCatalog: boolean) {
@@ -428,6 +430,7 @@ export function Offers() {
         : "faithful_enhance",
       layoutStrength: offer.layoutStrength === "balanced" || offer.layoutStrength === "free" ? offer.layoutStrength : "strict",
       backgroundStyle: offer.backgroundStyle === "elaborate" ? offer.backgroundStyle : "simple_brand",
+      titleStyle: offer.titleStyle === "lettering" ? offer.titleStyle : "clean",
     });
     setError(null);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -797,6 +800,17 @@ export function Offers() {
                   >
                     <option value="simple_brand">Simples (cores da marca)</option>
                     <option value="elaborate">Elaborado (cenário/ambientação)</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="offer-title-style">Letra do título</label>
+                  <select
+                    id="offer-title-style"
+                    value={form.titleStyle}
+                    onChange={(e) => setForm({ ...form, titleStyle: e.target.value as TitleStyle })}
+                  >
+                    <option value="clean">Limpa (padrão)</option>
+                    <option value="lettering">Desenhada</option>
                   </select>
                 </div>
               </div>

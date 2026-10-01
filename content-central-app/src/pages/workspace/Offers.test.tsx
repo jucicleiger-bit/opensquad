@@ -152,6 +152,26 @@ describe("Offers", () => {
     expect(payload.backgroundStyle).toBe("elaborate");
   });
 
+  it("defaults the title letter to clean and sends the drawn option when selected", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {}, offer: { ...RODIZIO_OFFER, titleStyle: "lettering" } } },
+      { body: projectState([{ ...RODIZIO_OFFER, titleStyle: "lettering" }]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    expect(screen.getByLabelText("Letra do título")).toHaveValue("clean");
+
+    await userEvent.type(screen.getByLabelText("Nome"), "Mussarela fatiada");
+    await userEvent.selectOptions(screen.getByLabelText("Letra do título"), "lettering");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    expect(JSON.parse(saveCall[1].body as string).titleStyle).toBe("lettering");
+  });
+
   it("saves an offer flagged as a unique proposal (never combined into a combo) and shows a pill for it", async () => {
     const uniqueOffer = { ...RODIZIO_OFFER, name: "Pizza Exclusiva", uniqueProposal: true };
     stubFetchSequence([

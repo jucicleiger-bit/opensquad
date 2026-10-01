@@ -107,6 +107,7 @@ export interface ProjectOffer {
   flavors?: OfferFlavor[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
   backgroundStyle?: "elaborate" | "simple_brand" | "";
+  titleStyle?: "clean" | "lettering" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
   priceUnit?: string;
 }
@@ -1156,6 +1157,7 @@ export interface SaveOfferInput {
   flavors?: OfferFlavor[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
   backgroundStyle?: "elaborate" | "simple_brand" | "";
+  titleStyle?: "clean" | "lettering" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
   priceUnit?: string;
 }
