@@ -7849,6 +7849,46 @@ test('listSystemAlerts flags an expired token and one about to expire, but not a
   });
 });
 
+test('listSystemAlerts flags a connected WhatsApp whose session dropped, but not one that is reconnecting', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'wa-sem-conexao', name: 'Sem Conexão', handle: '@semconexao' }, dir);
+    let asked = 0;
+    const states = (value) => async () => { asked += 1; return value; };
+
+    // No project has WhatsApp connected: WAHA is not even asked.
+    assert.deepEqual(await listSystemAlerts(dir, { whatsappSessionStates: states({}) }), []);
+    assert.equal(asked, 0);
+
+    for (const projectId of ['wa-caiu', 'wa-reconectando', 'wa-ok', 'wa-sumiu']) {
+      await createCentralProject({ projectId, name: projectId, handle: `@${projectId}` }, dir);
+      await saveProjectWhatsAppInstance(projectId, { sessionName: `opensquad-${projectId}` }, dir);
+    }
+    const alerts = await listSystemAlerts(dir, {
+      whatsappSessionStates: states({
+        'opensquad-wa-caiu': 'FAILED',
+        'opensquad-wa-reconectando': 'STARTING',
+        'opensquad-wa-ok': 'WORKING',
+      }),
+    });
+    assert.deepEqual(
+      alerts.filter((alert) => alert.type === 'whatsapp_disconnected').map((alert) => alert.projectId).sort(),
+      ['wa-caiu', 'wa-sumiu'],
+    );
+
+    // WAHA unreachable is not a dropped session, and never breaks the alert list.
+    assert.deepEqual(await listSystemAlerts(dir, { whatsappSessionStates: async () => { throw new Error('timeout'); } }), []);
+    // Callers that do not know WAHA (no option) keep working as before.
+    assert.deepEqual(await listSystemAlerts(dir), []);
+
+    const emails = [];
+    await sendDueAlertEmails(dir, {
+      emailSender: async (email) => emails.push(email.subject),
+      whatsappSessionStates: states({ 'opensquad-wa-caiu': 'SCAN_QR_CODE', 'opensquad-wa-reconectando': 'WORKING', 'opensquad-wa-ok': 'WORKING', 'opensquad-wa-sumiu': 'WORKING' }),
+    });
+    assert.deepEqual(emails, ['🔴 [Opensquad] wa-caiu — WhatsApp desconectado']);
+  });
+});
+
 test('listSystemAlerts flags an unresolved publish failure and clears once it publishes successfully', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({

@@ -4927,7 +4927,7 @@ export async function listCentralProjects(targetDir = process.cwd()) {
 // "Sem token configurado" and "sem validade" (permanent token) are not
 // alerts — only 'expirado'/'vence_em_breve' are, matching the same status
 // saveProjectToken already computes.
-export async function listSystemAlerts(targetDir = process.cwd()) {
+export async function listSystemAlerts(targetDir = process.cwd(), options = {}) {
   const paths = getCentralPaths(targetDir);
   const projectIds = await readExistingProjectIds(targetDir);
   const projects = [];
@@ -4937,7 +4937,34 @@ export async function listSystemAlerts(targetDir = process.cwd()) {
   }
   const alerts = [];
 
+  // Live WAHA session states ({ sessionName: status }), injected by the
+  // server — this module knows nothing about WAHA. Asked once for every
+  // project, and only when some project actually has WhatsApp connected.
+  // Without it a session WhatsApp dropped stays invisible until the next
+  // Status fails to publish, hours later.
+  let whatsappStates = null;
+  if (typeof options.whatsappSessionStates === 'function' && projects.some((project) => project.whatsapp?.configured)) {
+    try {
+      whatsappStates = await options.whatsappSessionStates();
+    } catch {
+      // ponytail: WAHA unreachable raises no alert (it is routinely slow
+      // right after the PC wakes); a real outage still shows up as
+      // publish_failed. Add a "server down" alert if that proves too late.
+    }
+  }
+
   for (const project of projects) {
+    // STARTING is the few seconds of an automatic reconnect, not a drop.
+    const whatsappState = whatsappStates?.[project.whatsapp?.sessionName];
+    if (whatsappStates && project.whatsapp?.configured && whatsappState !== 'WORKING' && whatsappState !== 'STARTING') {
+      alerts.push({
+        type: 'whatsapp_disconnected',
+        projectId: project.projectId,
+        projectName: project.name,
+        message: 'WhatsApp desconectado — o Status não é publicado até ler o QR code de novo na aba "Conta e token".',
+      });
+    }
+
     if (project.contentStrategy?.topicIdeas?.warning) {
       alerts.push({
         type: 'topic_ideas_fallback',
@@ -5004,9 +5031,10 @@ function alertNotificationKey(alert) {
 }
 
 function alertEmailSubject(alert) {
-  const icon = alert.type === 'token_expired' ? '🔴' : alert.type === 'token_expiring' ? '🟡' : '⚠️';
+  const icon = alert.type === 'token_expired' || alert.type === 'whatsapp_disconnected' ? '🔴' : alert.type === 'token_expiring' ? '🟡' : '⚠️';
   const topic = alert.type === 'publish_failed' ? 'falha ao publicar'
     : alert.type === 'media_upload_failed' ? 'falha ao hospedar imagem'
+    : alert.type === 'whatsapp_disconnected' ? 'WhatsApp desconectado'
     : 'token da Meta';
   return `${icon} [Opensquad] ${alert.projectName} — ${topic}`;
 }
@@ -5025,7 +5053,7 @@ function alertEmailBody(alert) {
 // cooldown from before it was fixed.
 export async function sendDueAlertEmails(targetDir = process.cwd(), options = {}) {
   if (typeof options.emailSender !== 'function') return { sent: [] };
-  const alerts = await listSystemAlerts(targetDir);
+  const alerts = await listSystemAlerts(targetDir, options);
   const paths = getCentralPaths(targetDir);
   const statePath = join(paths.root, 'alert-notifications.json');
   const notified = await readJson(statePath, {});

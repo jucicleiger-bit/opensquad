@@ -490,7 +490,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
   if (method === 'GET' && route === '/api/state') return sendJson(res, 200, {
     projects: await listCentralProjects(targetDir),
     globalRules: await getGlobalRules(targetDir),
-    alerts: await listSystemAlerts(targetDir),
+    alerts: await listSystemAlerts(targetDir, { whatsappSessionStates: listWahaSessionStates }),
   });
 
   // Segment templates (e.g. "embalagens") — pre-approved art reused across
@@ -5010,6 +5010,31 @@ function wahaConfig() {
   return { url: url.replace(/\/$/, ''), apiKey };
 }
 
+// The session only ever posts Status, so the group traffic of the client's
+// account (often dozens of busy groups) is pure load for WAHA to store and
+// emit — ignored.
+const WAHA_SESSION_CONFIG = { ignore: { groups: true } };
+
+// Every session's live status in one call, for the "WhatsApp desconectado"
+// alert. /api/state awaits this and the panel polls it every 3s, hence the
+// short timeout (WAHA has taken over a minute to answer right after the PC
+// wakes) and the shared answer — a failure is shared too, so a hanging WAHA
+// costs one timeout per window instead of one per poll.
+let wahaSessionStatesCache = null;
+function listWahaSessionStates() {
+  const ttlMs = Number(process.env.OPENSQUAD_WAHA_STATUS_CACHE_MS ?? 60000);
+  if (wahaSessionStatesCache && Date.now() - wahaSessionStatesCache.at < ttlMs) return wahaSessionStatesCache.promise;
+  const promise = (async () => {
+    const { url, apiKey } = wahaConfig();
+    const res = await fetch(`${url}/api/sessions?all=true`, { headers: { 'X-Api-Key': apiKey }, signal: AbortSignal.timeout(5000) });
+    if (!res.ok) throw new Error(`WAHA respondeu ${res.status}: ${await res.text()}`);
+    return Object.fromEntries((await res.json()).map((session) => [session.name, session.status]));
+  })();
+  promise.catch(() => {});
+  wahaSessionStatesCache = { at: Date.now(), promise };
+  return promise;
+}
+
 // Creates the session on first connect, restarts it if it fell over
 // (FAILED/STOPPED), or just re-fetches its current QR otherwise — same
 // button, same route, all three cases. A session already WORKING is left
@@ -5025,7 +5050,7 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
     const createRes = await fetch(`${url}/api/sessions`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: sessionName, config: {} }),
+      body: JSON.stringify({ name: sessionName, config: WAHA_SESSION_CONFIG }),
     });
     if (!createRes.ok) throw new Error(`WAHA respondeu ${createRes.status}: ${await createRes.text()}`);
     const startRes = await fetch(`${url}/api/sessions/${sessionName}/start`, { method: 'POST', headers });
@@ -5050,6 +5075,15 @@ async function connectProjectWhatsAppSession(projectId, project, targetDir) {
   if (status === 'WORKING') return { qrcode: null, project: updatedProject };
 
   if (status === 'FAILED' || status === 'STOPPED') {
+    // A session created before WAHA_SESSION_CONFIG existed picks it up here,
+    // while it is down anyway — never on a WORKING one, since the update
+    // stops the session to apply it.
+    const configRes = await fetch(`${url}/api/sessions/${sessionName}`, {
+      method: 'PUT',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config: WAHA_SESSION_CONFIG }),
+    });
+    if (!configRes.ok) throw new Error(`WAHA respondeu ${configRes.status}: ${await configRes.text()}`);
     const restartRes = await fetch(`${url}/api/sessions/${sessionName}/restart`, { method: 'POST', headers });
     if (!restartRes.ok) throw new Error(`WAHA respondeu ${restartRes.status}: ${await restartRes.text()}`);
   }
@@ -5496,6 +5530,7 @@ function startAlertEmailScheduler(targetDir) {
   const intervalMs = Number(process.env.OPENSQUAD_ALERT_EMAIL_CHECK_INTERVAL_MS || 900000);
   const sweep = () => sendDueAlertEmails(targetDir, {
     emailSender: sendAlertEmailViaGoogleWorkspace,
+    whatsappSessionStates: listWahaSessionStates,
   }).catch((err) => console.error('[content-central] alert email sweep failed:', err.message));
   const timer = setInterval(sweep, intervalMs);
   sweep();

@@ -4016,9 +4016,43 @@ test('POST .../whatsapp-instance/connect creates a new WAHA session and stores i
       assert.equal(calls.length, 4);
       const createCall = calls.find((c) => c.url === 'https://waha.example.com/api/sessions');
       assert.equal(JSON.parse(createCall.init.body).name, 'opensquad-rota-whatsapp-connect');
+      assert.deepEqual(JSON.parse(createCall.init.body).config, { ignore: { groups: true } });
     } finally {
       delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
       delete process.env.OPENSQUAD_WAHA_APIKEY;
+    }
+  });
+});
+
+test('GET /api/state alerts when a connected project\'s WAHA session is no longer WORKING', async () => {
+  await withServer(async (dir, server) => {
+    process.env.OPENSQUAD_WAHA_ADMIN_URL = 'https://waha.example.com';
+    process.env.OPENSQUAD_WAHA_APIKEY = 'waha-secret';
+    process.env.OPENSQUAD_WAHA_STATUS_CACHE_MS = '0';
+    try {
+      for (const projectId of ['alerta-wa-caiu', 'alerta-wa-ok']) {
+        await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId, name: projectId }) });
+        await saveProjectWhatsAppInstance(projectId, { sessionName: `opensquad-${projectId}` }, dir);
+      }
+
+      const calls = [];
+      await withMockedFetch(async (url) => {
+        calls.push(String(url));
+        return new Response(JSON.stringify([
+          { name: 'opensquad-alerta-wa-caiu', status: 'FAILED' },
+          { name: 'opensquad-alerta-wa-ok', status: 'WORKING' },
+        ]), { status: 200, headers: { 'content-type': 'application/json' } });
+      }, async () => {
+        const res = await request(server, '/api/state');
+        const whatsappAlerts = res.body.alerts.filter((alert) => alert.type === 'whatsapp_disconnected');
+        assert.deepEqual(whatsappAlerts.map((alert) => alert.projectId), ['alerta-wa-caiu']);
+      });
+
+      assert.deepEqual(calls, ['https://waha.example.com/api/sessions?all=true']);
+    } finally {
+      delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
+      delete process.env.OPENSQUAD_WAHA_APIKEY;
+      delete process.env.OPENSQUAD_WAHA_STATUS_CACHE_MS;
     }
   });
 });
@@ -4088,8 +4122,13 @@ test('POST .../whatsapp-instance/connect restarts a FAILED session before fetchi
         assert.equal(res.body.qrcode, `data:image/png;base64,${Buffer.from([9, 9]).toString('base64')}`);
       });
 
-      assert.equal(calls.length, 3);
-      assert.equal(calls[1].url, 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-restart/restart');
+      // status, config update (a session created before group traffic was
+      // ignored picks the setting up while it is down), restart, QR.
+      assert.equal(calls.length, 4);
+      assert.equal(calls[1].init.method, 'PUT');
+      assert.equal(calls[1].url, 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-restart');
+      assert.deepEqual(JSON.parse(calls[1].init.body), { config: { ignore: { groups: true } } });
+      assert.equal(calls[2].url, 'https://waha.example.com/api/sessions/opensquad-rota-whatsapp-restart/restart');
     } finally {
       delete process.env.OPENSQUAD_WAHA_ADMIN_URL;
       delete process.env.OPENSQUAD_WAHA_APIKEY;
