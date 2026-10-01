@@ -41,7 +41,7 @@ Spec: `docs/superpowers/specs/2026-10-01-clean-title-lettering-design.md`
 test('buildTitleLetteringLines: clean by default, the brand typography when set, drawn only on request — ornaments banned in all three', () => {
   const clean = buildTitleLetteringLines(undefined).join('\n');
   assert.match(clean, /Letra do título: LIMPA — letra de fôrma sem serifa/);
-  assert.match(clean, /sem contorno em volta, sem efeito 3D/);
+  assert.match(clean, /em cor chapada; sem contorno, 3D, degradê/);
   assert.match(clean, /Nenhuma palavra do título em letra manuscrita/);
   assert.match(clean, /Nada ao redor do título: sem tracinhos, faíscas, gotas/);
 
@@ -101,26 +101,30 @@ After `formatBrandVisualSystemLines`:
 // and a brand's "Tipografia fixa" label on its own was ignored — a project
 // set to condensada comercial with very subtle shadows still got rounded
 // gradient letters with ticks.
-const TITLE_ORNAMENT_LINE = 'Nada ao redor do título: sem tracinhos, faíscas, gotas, respingos, raios, estrelas, brilhos ou sublinhado em pincelada encostados ou em volta das letras — só as palavras do título.';
+// Kept short on purpose: the brief has a length budget (a long prompt dilutes
+// every rule in it), so each line names things once.
+const TITLE_ORNAMENT_LINE = 'Nada ao redor do título: sem tracinhos, faíscas, gotas, raios, estrelas, brilhos ou sublinhado em pincelada — só as palavras.';
 
 export function buildTitleLetteringLines(titleStyle, visualSystem = {}) {
   if (titleStyle === 'lettering') {
     return [
-      'Letra do título: DESENHADA — nesta oferta o operador pediu uma letra com personalidade (lettering, pincel ou manuscrita), coerente com o produto. Vale só para o título: subtítulo, benefícios e preço continuam em letra de fôrma limpa.',
+      'Letra do título: DESENHADA — nesta oferta o operador pediu letra com personalidade (lettering, pincel ou manuscrita) no título; subtítulo, benefícios e preço seguem em letra de fôrma limpa.',
       TITLE_ORNAMENT_LINE,
     ];
   }
   const brandTypography = brandVisualLabel(BRAND_VISUAL_TYPOGRAPHY_LABELS, normalizeBrandVisualSystem(visualSystem).typography);
   return [
-    brandTypography
-      ? `Letra do título: LIMPA — letra de fôrma na tipografia da marca (${brandTypography}), sem enfeite.`
-      : 'Letra do título: LIMPA — letra de fôrma sem serifa, pesada, como em anúncio impresso profissional.',
-    'Letras preenchidas em cor chapada: sem contorno em volta, sem efeito 3D, relevo ou extrusão, sem degradê ou brilho dentro da letra, sem sombra pesada.',
-    'Nenhuma palavra do título em letra manuscrita, cursiva, de pincel, cartoon ou desenhada à mão.',
+    `Letra do título: LIMPA — letra de fôrma ${brandTypography ? `na tipografia da marca (${brandTypography})` : 'sem serifa, pesada'}, em cor chapada; sem contorno, 3D, degradê, brilho ou sombra pesada.`,
+    'Nenhuma palavra do título em letra manuscrita, cursiva, de pincel ou cartoon.',
     TITLE_ORNAMENT_LINE,
   ];
 }
 ```
+
+(The first draft of these lines was longer and pushed the brief past the
+length budget pinned by "AI final prompt is compiled into concise creative
+brief and limited references"; they were cut to this, and that budget moves
+from 7500 to 8000 with the reason recorded next to it.)
 
 `normalizeProjectOffer`, after `backgroundStyle`:
 
@@ -212,7 +216,7 @@ Also update the pinned literal in the existing `buildSegmentLayoutReferences` te
       // for how they look — and half of them are finished AI-made ads with
       // drawn lettering and ticks around the headline. "Não copiar cores"
       // alone left the model free to lift exactly that.
-      'O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos. Não copiar dele o desenho das letras, contornos e efeitos do título, enfeites ao redor do título, texturas, fundo nem acabamento.',
+      'O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos. Não copiar dele as letras, os enfeites do título, texturas, fundo nem acabamento.',
 ```
 
 - the `Regra de níveis` line ends `…apenas para integrar; hierarquia, margens e a posição de título, preço, logo e CTA continuam controlados pelo template.`

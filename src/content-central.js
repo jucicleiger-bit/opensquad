@@ -6840,6 +6840,7 @@ async function offerToContentTopic(offer, targetDir) {
     notes: offer.notes,
     productTreatment: offer.productTreatment,
     backgroundStyle: offer.backgroundStyle,
+    titleStyle: offer.titleStyle,
     layoutStrength: offer.layoutStrength,
     objective: await offerObjective(offer, targetDir),
     pillarId: offer.pillarId || null,
@@ -6907,6 +6908,7 @@ async function buildComboOfferTopic(a, b, targetDir) {
     notes: [a.notes, b.notes].filter(Boolean).join('\n'),
     productTreatment: a.productTreatment || b.productTreatment,
     backgroundStyle: a.backgroundStyle || b.backgroundStyle,
+    titleStyle: a.titleStyle || b.titleStyle,
     layoutStrength: a.layoutStrength,
     pillarId: a.pillarId,
     photoReferenceIds: products.flatMap((product) => product.photoReferenceIds),
@@ -7398,6 +7400,34 @@ function formatBrandVisualSystemLines(input = {}) {
   ].filter(Boolean);
 }
 
+// What the operator calls "cara de IA" on a headline is two separate things:
+// the ticks/sparks/droplets drawn around it, and a display letter that is
+// outlined, extruded, gradient-filled or hand-lettered. The ornaments are
+// banned on every piece; the drawn letter is a per-offer opt-in (see
+// normalizeTitleStyle). Written as a positive spec with a closed list because
+// neither softer signal held: "evitar visual genérico de IA" names nothing,
+// and a brand's "Tipografia fixa" label on its own was ignored — a project
+// set to condensada comercial with very subtle shadows still got rounded
+// gradient letters with ticks.
+// Kept short on purpose: the brief has a length budget (a long prompt dilutes
+// every rule in it), so each line names things once.
+const TITLE_ORNAMENT_LINE = 'Nada ao redor do título: sem tracinhos, faíscas, gotas, raios, estrelas, brilhos ou sublinhado em pincelada — só as palavras.';
+
+export function buildTitleLetteringLines(titleStyle, visualSystem = {}) {
+  if (titleStyle === 'lettering') {
+    return [
+      'Letra do título: DESENHADA — nesta oferta o operador pediu letra com personalidade (lettering, pincel ou manuscrita) no título; subtítulo, benefícios e preço seguem em letra de fôrma limpa.',
+      TITLE_ORNAMENT_LINE,
+    ];
+  }
+  const brandTypography = brandVisualLabel(BRAND_VISUAL_TYPOGRAPHY_LABELS, normalizeBrandVisualSystem(visualSystem).typography);
+  return [
+    `Letra do título: LIMPA — letra de fôrma ${brandTypography ? `na tipografia da marca (${brandTypography})` : 'sem serifa, pesada'}, em cor chapada; sem contorno, 3D, degradê, brilho ou sombra pesada.`,
+    'Nenhuma palavra do título em letra manuscrita, cursiva, de pincel ou cartoon.',
+    TITLE_ORNAMENT_LINE,
+  ];
+}
+
 function buildSuggestedBrandVisualSystem(project = {}, now = new Date()) {
   const input = normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name));
   const identity = normalizeBrandIdentity(project.brandIdentity || { logoPath: project.brand?.logoPath });
@@ -7452,6 +7482,12 @@ function normalizeLayoutStrength(value, hasLayoutReference = false) {
 // legacy data to map from.
 function normalizeBackgroundStyle(value) {
   return String(value || '').trim().toLowerCase() === 'elaborate' ? 'elaborate' : 'simple_brand';
+}
+
+// Same shape as normalizeBackgroundStyle: only 'lettering' is a real opt-in,
+// every other value (missing, invalid, already 'clean') is the clean title.
+function normalizeTitleStyle(value) {
+  return String(value || '').trim().toLowerCase() === 'lettering' ? 'lettering' : 'clean';
 }
 
 // isFlyer swaps the single-protagonist center label for a grid label — this
@@ -7550,6 +7586,11 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
     },
     background: {
       style: backgroundStyle,
+    },
+    // The drawn title is an offer-form opt-in; every other source has no UI
+    // for it and always gets the clean title.
+    title: {
+      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : 'clean',
     },
     references: selectedReferences.map((reference) => ({
       id: reference.id || '',
@@ -7927,6 +7968,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       'Margem interna generosa em todos os lados: nenhum texto, selo, ícone, botão, @ ou logo pode tocar, ultrapassar ou ser cortado pela borda da imagem — vale pro rodapé inteiro, não só pro CTA.',
       'Se algum texto (item, @ da marca, chamada) não couber inteiro dentro da margem no tamanho de fonte legível, encurtar o texto ou reduzir a fonte — nunca deixar vazar, quebrar de forma estranha ou sair cortado da arte.',
     ]),
+    section('LETRA DO TÍTULO', buildTitleLetteringLines(creativeSpec.title?.style, project.brand?.visualSystem)),
     section('HIERARQUIA', [
       quantityRules.heroLine || productFocus.heroLine || (productReferences.length ? '1. Produto/foto real em destaque.' : '1. Produto ou benefício principal em destaque.'),
       quantityRules.heroLine && productFocus.heroLine ? productFocus.heroLine : '',
@@ -7949,8 +7991,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       `Layout principal: ${layoutReference.relativePath}`,
       layoutReference.instruction ? `Direção do usuário: ${cleanPromptText(layoutReference.instruction)}` : '',
       `Força estrutural: ${creativeSpec.layout.strength.toUpperCase()}. O modelo é obrigatório para composição, hierarquia, enquadramento, distribuição dos elementos e tratamento do preço.`,
+      // The operator registers these structures for where things go, never
+      // for how they look — and half of them are finished AI-made ads with
+      // drawn lettering and ticks around the headline. "Não copiar cores"
+      // alone left the model free to lift exactly that.
+      'O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos. Não copiar dele as letras, os enfeites do título, texturas, fundo nem acabamento.',
       isPhotoIntegrationTreatment(creativeSpec.product.treatment)
-        ? 'Regra de níveis: produto vem do asset real; suporte fotográfico pode ser gerado apenas para integrar; design, hierarquia, margens, tipografia, preço, logo e CTA continuam controlados pelo template.'
+        ? 'Regra de níveis: produto vem do asset real; suporte fotográfico pode ser gerado apenas para integrar; hierarquia, margens e a posição de título, preço, logo e CTA continuam controlados pelo template.'
         : '',
       ...creativeSpec.layout.zones,
       // On top of the generic channel-shaped zones above, the structure's
@@ -7981,6 +8028,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : '',
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
+    // "tipografia" used to sit in every "pode variar" list below, handing
+    // the model the one thing LETRA DO TÍTULO now fixes.
     section('LIBERDADE CRIATIVA', [
       creativeSpec.background?.style === 'simple_brand'
         ? (topBrandColor
@@ -7999,17 +8048,17 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
         ? (creativeSpec.background?.style === 'simple_brand'
-          ? 'Pode variar luz, tipografia e acabamento apenas como apoio simples; fundo continua travado pela regra de fundo acima, não a de "apoio simples" — não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
-          : 'Pode variar fundo, luz, tipografia e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.')
+          ? 'Pode variar luz e acabamento apenas como apoio simples; fundo continua travado pela regra de fundo acima, não a de "apoio simples" — não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
+          : 'Pode variar fundo, luz e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.')
         : productLockedToPhoto
           ? (creativeSpec.background?.style === 'simple_brand'
-            ? 'Pode variar enquadramento, luz e tipografia apenas para valorizar o produto real; fundo continua travado pela regra de fundo acima, liso e na cor da marca.'
-            : 'Pode variar enquadramento, fundo, luz e tipografia apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.')
+            ? 'Pode variar enquadramento e luz apenas para valorizar o produto real; fundo continua travado pela regra de fundo acima, liso e na cor da marca.'
+            : 'Pode variar enquadramento, fundo e luz apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.')
         : layoutReference && creativeSpec.layout.strength === 'strict'
-        ? 'Pode variar fundo, luz, tipografia e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
+        ? 'Pode variar fundo, luz e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
         : creativeSpec.background?.style === 'simple_brand'
-          ? 'Pode variar enquadramento, luz, tipografia e elementos coerentes com o segmento.'
-          : 'Pode variar enquadramento, fundo, luz, tipografia e elementos coerentes com o segmento.',
+          ? 'Pode variar enquadramento, luz e elementos coerentes com o segmento.'
+          : 'Pode variar enquadramento, fundo, luz e elementos coerentes com o segmento.',
       variation.length
         ? `Variação desejada: ${variation.join(' ')}`
         : creativeSpec.background?.style === 'simple_brand'
@@ -9710,6 +9759,11 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     backgroundStyle: ['elaborate', 'simple_brand'].includes(String(input?.backgroundStyle || '').trim())
       ? String(input.backgroundStyle).trim()
       : '',
+    // A drawn/hand-lettered title is an explicit per-offer opt-in; anything
+    // else is the default clean title (see buildTitleLetteringLines).
+    titleStyle: ['clean', 'lettering'].includes(String(input?.titleStyle || '').trim())
+      ? String(input.titleStyle).trim()
+      : '',
     active: input?.active === false ? false : true,
     // A unique/flagship product the operator never wants blended into a
     // combo arte with another product — blocks it in both combo-pairing
@@ -10062,7 +10116,7 @@ function automaticReferenceRule(category) {
 // ever worth competing for a slot against the project's own references.
 const SEGMENT_PRODUCT_REFERENCE_INSTRUCTION = 'Refer\u00eancia de produto real aprovada no aprendizado de segmento: use como inspira\u00e7\u00e3o de como esse alimento/produto realmente se parece (textura, montagem, plausibilidade) \u2014 n\u00e3o copie esta foto espec\u00edfica, o prato, o fundo ou a marca dela.';
 
-const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.';
+const SEGMENT_LAYOUT_REFERENCE_INSTRUCTION = 'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto, cores, estilo das letras nem enfeites da imagem de referência.';
 
 // Approved reference images from the project's own Aprendizado de Segmento
 // nodes (Setor/Nicho/Especialidade) — reused as real composition

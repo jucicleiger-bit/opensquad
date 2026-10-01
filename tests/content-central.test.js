@@ -113,6 +113,8 @@ import {
   MAX_OFFER_FLAVORS,
   normalizeOfferFlavors,
   productPhotoLimitFor,
+  buildCreativeSpec,
+  buildTitleLetteringLines,
 } from '../src/content-central.js';
 
 // The publish-due tests pair local wall-clock times with UTC instants written
@@ -1407,7 +1409,7 @@ test('buildSegmentLayoutReferences returns every approved creative image, newest
     assert.ok(references.every((r) => r.weight === 'medium'));
     assert.equal(
       references[0].instruction,
-      'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto ou cores da imagem de referência.'
+      'Modelo de composição aprovado no aprendizado de segmento: usar como referência de distribuição dos elementos (título, blocos de benefício, selo, hierarquia). Não copiar marca, produto, cores, estilo das letras nem enfeites da imagem de referência.'
     );
     await access(references[0].absolutePath);
   });
@@ -3908,7 +3910,10 @@ test('AI final prompt is compiled into concise creative brief and limited refere
     // the backgroundStyle lock line, the straight-price-badge lock, and the
     // combined food/anti-clip-art line (all legitimate, separately-reviewed
     // additions merged together) push a normal prompt further still.
-    assert.ok(prompt.length < 7500, `prompt.length was ${prompt.length}`);
+    // Then from 7500: the LETRA DO TÍTULO section and the "modelo serve só
+    // para a estrutura" line — the operator's fix for ticks and drawn
+    // lettering on headlines, already cut to three short lines plus one.
+    assert.ok(prompt.length < 8000, `prompt.length was ${prompt.length}`);
     assert.equal((prompt.match(/9:16 Vertical/g) || []).length <= 2, true);
     assert.equal(references.filter((reference) => reference.role === 'product_photo').length, 2);
     assert.equal(references.filter((reference) => reference.role === 'layout_model').length, 1);
@@ -11152,5 +11157,85 @@ test('an offer with 3 flavors sends all 3 labeled photos and a side-by-side, sin
     assert.doesNotMatch(prompt, /em destaque como produto principal/);
     assert.doesNotMatch(prompt, /O produto deve ser o protagonista visual/);
     assert.doesNotMatch(prompt, /produto\/benefício como protagonista/);
+  });
+});
+
+test('buildTitleLetteringLines: clean by default, the brand typography when set, drawn only on request — ornaments banned in all three', () => {
+  const clean = buildTitleLetteringLines(undefined).join('\n');
+  assert.match(clean, /Letra do título: LIMPA — letra de fôrma sem serifa/);
+  assert.match(clean, /em cor chapada; sem contorno, 3D, degradê/);
+  assert.match(clean, /Nenhuma palavra do título em letra manuscrita/);
+  assert.match(clean, /Nada ao redor do título: sem tracinhos, faíscas, gotas/);
+
+  const branded = buildTitleLetteringLines('clean', { typography: 'commercial_condensed' }).join('\n');
+  assert.match(branded, /tipografia da marca \(condensada comercial\)/);
+  assert.doesNotMatch(branded, /sem serifa/, 'a serif brand must not be told "sem serifa"');
+
+  const drawn = buildTitleLetteringLines('lettering', { typography: 'commercial_condensed' }).join('\n');
+  assert.match(drawn, /Letra do título: DESENHADA/);
+  assert.match(drawn, /Nada ao redor do título/);
+  assert.doesNotMatch(drawn, /LIMPA/);
+});
+
+test('only an offer can ask for a drawn title — every other source resolves to clean', () => {
+  const spec = (contentTopic) => buildCreativeSpec({ contentTopic }, {}, 'instagram_feed', []).title.style;
+  assert.equal(spec({ source: 'offer', titleStyle: 'lettering' }), 'lettering');
+  assert.equal(spec({ source: 'offer', titleStyle: 'qualquer coisa' }), 'clean');
+  assert.equal(spec({ source: 'offer' }), 'clean');
+  assert.equal(spec({ source: 'goal', titleStyle: 'lettering' }), 'clean');
+  assert.equal(spec({ source: 'special_date', titleStyle: 'lettering' }), 'clean');
+});
+
+test('an offer keeps a valid titleStyle and drops an invalid one', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'letra-oferta', name: 'Letra Oferta' }, dir);
+    const drawn = await saveProjectOffer('letra-oferta', { name: 'A', price: 'R$ 1,00', titleStyle: 'lettering' }, dir);
+    assert.equal(drawn.offer.titleStyle, 'lettering');
+    const invalid = await saveProjectOffer('letra-oferta', { name: 'B', price: 'R$ 1,00', titleStyle: 'neon' }, dir);
+    assert.equal(invalid.offer.titleStyle, '');
+  });
+});
+
+// The operator's complaint, seen on real pieces from three projects: ticks
+// and droplets drawn around the headline and a hand-lettered/outlined display
+// letter on nearly every arte. The brief never said how the title is drawn,
+// handed "tipografia" to the model as free, and attached a structure model
+// (half of them finished AI-made ads carrying exactly those ornaments) with
+// nothing telling the model to take only the positions from it.
+test('the image brief fixes a clean title, bans ornaments around it and treats the structure model as structure only — a drawn title only when the offer asks', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({
+      projectId: 'letra-limpa', name: 'Letra Limpa', handle: '@letralimpa', approvalEmail: 'aprovacao@example.com',
+    }, dir);
+    await updateProjectBrandInput('letra-limpa', { segmentGroup: 'Negocios locais e lojas', segmentCategory: 'Mercado' }, dir);
+    await registerCreativeTemplate('group:negocios-locais-e-lojas/category:mercado', 'offer', 'vertical', dir);
+    const { offer } = await saveProjectOffer('letra-limpa', { name: 'Mussarela fatiada', price: 'R$ 44,90' }, dir);
+
+    const contentFor = async (startDate) => {
+      const batch = await generateContentBatch('letra-limpa', {
+        days: 1, startDate, channel: 'instagram_story', offersOnly: true,
+      }, dir);
+      const project = (await listCentralProjects(dir)).find((entry) => entry.projectId === 'letra-limpa');
+      const calls = [];
+      await enrichBatchItemsWithRealImages(batch, project, 'letra-limpa', {
+        imageGenerator: async (payload) => { calls.push(payload); return { url: 'https://cdn.example.com/letra.png', mimeType: 'image/png' }; },
+      }, getCentralPaths(dir, 'letra-limpa'));
+      return calls[0].content;
+    };
+
+    const clean = await contentFor('2026-08-03');
+    assert.equal(clean.creativeSpec.title.style, 'clean');
+    assert.match(clean.image.prompt, /LETRA DO TÍTULO/);
+    assert.match(clean.image.prompt, /Letra do título: LIMPA/);
+    assert.match(clean.image.prompt, /Nada ao redor do título: sem tracinhos, faíscas, gotas/);
+    assert.match(clean.image.prompt, /O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos/);
+    assert.doesNotMatch(clean.image.prompt, /Pode variar[^\n]*tipografia/, 'typography is no longer handed to the model as free');
+
+    await saveProjectOffer('letra-limpa', { ...offer, titleStyle: 'lettering' }, dir);
+    const drawn = await contentFor('2026-08-04');
+    assert.equal(drawn.creativeSpec.title.style, 'lettering');
+    assert.match(drawn.image.prompt, /Letra do título: DESENHADA/);
+    assert.match(drawn.image.prompt, /Nada ao redor do título/, 'the ornament ban holds for a drawn title too');
+    assert.doesNotMatch(drawn.image.prompt, /Letra do título: LIMPA/);
   });
 });
