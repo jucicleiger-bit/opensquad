@@ -347,6 +347,52 @@ describe("Offers", () => {
     expect(payload.notes).toContain("protege");
   });
 
+  it("saves an offer's flavors, uploading each flavor's photo and linking it to the flavor", async () => {
+    const savedOffer = { ...RODIZIO_OFFER, name: "Trento" };
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-chocolate" } } } },
+      { body: { project: {}, offer: savedOffer } },
+      { body: projectState([savedOffer]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Trento");
+    await userEvent.click(screen.getByRole("button", { name: "+ Adicionar sabor" }));
+    await userEvent.click(screen.getByRole("button", { name: "+ Adicionar sabor" }));
+    await userEvent.click(screen.getByRole("button", { name: "+ Adicionar sabor" }));
+    await userEvent.type(screen.getByLabelText("Nome do sabor 1"), "Chocolate");
+    await userEvent.upload(screen.getByLabelText("Foto do sabor 1"), new File(["x"], "chocolate.png", { type: "image/png" }));
+    await userEvent.type(screen.getByLabelText("Nome do sabor 2"), "Morango");
+    await userEvent.click(screen.getByRole("button", { name: "Remover sabor 3" }));
+    expect(screen.queryByLabelText("Nome do sabor 3")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    await screen.findByRole("button", { name: /Sem grupo/ });
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/assets");
+    expect(JSON.parse(calls[1][1].body as string).instruction).toBe("Foto real do produto: Trento — sabor Chocolate");
+    expect(JSON.parse(calls[2][1].body as string).flavors).toEqual([
+      { name: "Chocolate", photoReferenceId: "foto-chocolate" },
+      { name: "Morango", photoReferenceId: null },
+    ]);
+  });
+
+  it("stops offering to add a flavor once the offer has 6", async () => {
+    stubFetchSequence([{ body: projectState() }]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    for (let i = 0; i < 6; i += 1) {
+      await userEvent.click(screen.getByRole("button", { name: "+ Adicionar sabor" }));
+    }
+    expect(screen.getByLabelText("Nome do sabor 6")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "+ Adicionar sabor" })).not.toBeInTheDocument();
+  });
+
   it("uploads the offer photo with scope 'offer' so it never lands in the shared references gallery", async () => {
     const savedOffer = { ...RODIZIO_OFFER, photoReferenceIds: ["foto-pizza"] };
     stubFetchSequence([

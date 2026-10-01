@@ -104,6 +104,7 @@ export interface ProjectOffer {
   groupId?: string | null;
   daysOfWeek?: string[];
   photoReferenceIds?: string[];
+  flavors?: OfferFlavor[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
   backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";
@@ -1133,6 +1134,9 @@ export function approveBrandXray(
   });
 }
 
+// A flavor/variation of one offer (same price for all) and its own real photo.
+export type OfferFlavor = { name: string; photoReferenceId: string | null };
+
 export interface SaveOfferInput {
   id?: string;
   name: string;
@@ -1149,6 +1153,7 @@ export interface SaveOfferInput {
   active?: boolean;
   uniqueProposal?: boolean;
   photoReferenceIds?: string[];
+  flavors?: OfferFlavor[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
   backgroundStyle?: "elaborate" | "simple_brand" | "";
   layoutStrength?: "strict" | "balanced" | "free" | "";

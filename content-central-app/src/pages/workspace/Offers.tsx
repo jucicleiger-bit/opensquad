@@ -17,6 +17,7 @@ import {
   saveOffer,
   saveOfferGroup,
   suggestOfferDirection,
+  type OfferFlavor,
   type OfferGroup,
   type ProjectOffer,
   type SiteOfferCandidate,
@@ -40,6 +41,10 @@ const thumbStyle = {
 const thumbImgStyle = { width: "100%", height: "100%", objectFit: "cover" } as const;
 type ProductTreatment = "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset";
 type BackgroundStyle = "elaborate" | "simple_brand";
+// Mirrors MAX_OFFER_FLAVORS in src/content-central.js.
+const MAX_OFFER_FLAVORS = 6;
+// `file` is a photo picked in the form but not uploaded yet.
+type FlavorRow = OfferFlavor & { file?: File };
 
 const EMPTY_FORM = {
   name: "",
@@ -57,6 +62,7 @@ const EMPTY_FORM = {
   active: true,
   uniqueProposal: false,
   photoReferenceIds: [] as string[],
+  flavors: [] as FlavorRow[],
   productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
   backgroundStyle: "simple_brand" as BackgroundStyle,
@@ -218,6 +224,13 @@ export function Offers() {
     return references.find((reference) => reference.id === photoReferenceId)?.previewUrl || null;
   }
 
+  function updateFlavor(index: number, patch: Partial<FlavorRow>) {
+    setForm((current) => ({
+      ...current,
+      flavors: current.flavors.map((flavor, i) => (i === index ? { ...flavor, ...patch } : flavor)),
+    }));
+  }
+
   function removePhoto(photoReferenceId: string) {
     setForm((current) => ({ ...current, photoReferenceIds: current.photoReferenceIds.filter((id) => id !== photoReferenceId) }));
   }
@@ -332,7 +345,8 @@ export function Offers() {
       return;
     }
     const photoFiles = Array.from(photoInputRef.current?.files || []);
-    if (isCatalog && !photoFiles.length && !form.photoReferenceIds.length) {
+    const hasFlavorPhoto = form.flavors.some((flavor) => flavor.file || flavor.photoReferenceId);
+    if (isCatalog && !photoFiles.length && !form.photoReferenceIds.length && !hasFlavorPhoto) {
       setError("Cadastre pelo menos uma foto real do produto.");
       return;
     }
@@ -354,7 +368,28 @@ export function Offers() {
         });
         if (uploaded.asset.metadata?.id) uploadedIds.push(uploaded.asset.metadata.id);
       }
-      const payload = { ...form, photoReferenceIds: [...form.photoReferenceIds, ...uploadedIds] };
+      const flavors: OfferFlavor[] = [];
+      for (const { file, ...flavor } of form.flavors) {
+        const name = flavor.name.trim();
+        if (!name) continue;
+        let photoReferenceId = flavor.photoReferenceId;
+        if (file) {
+          const uploaded = await saveAsset(project.projectId, {
+            kind: "reference",
+            filename: file.name,
+            dataUrl: await fileToDataUrl(file),
+            role: "product_photo",
+            usageRoles: ["product_photo"],
+            referenceCategory: "real_product",
+            useInNextGeneration: true,
+            scope: "offer",
+            instruction: `Foto real do produto: ${form.name} — sabor ${name}`,
+          });
+          photoReferenceId = uploaded.asset.metadata?.id || photoReferenceId;
+        }
+        flavors.push({ name, photoReferenceId });
+      }
+      const payload = { ...form, photoReferenceIds: [...form.photoReferenceIds, ...uploadedIds], flavors };
       await saveOffer(project.projectId, editingId ? { ...payload, id: editingId } : payload);
       setForm({ ...EMPTY_FORM, groupId: defaultGroupId });
       if (photoInputRef.current) photoInputRef.current.value = "";
@@ -385,6 +420,7 @@ export function Offers() {
       active: offer.active !== false,
       uniqueProposal: offer.uniqueProposal || false,
       photoReferenceIds: offer.photoReferenceIds || [],
+      flavors: (offer.flavors || []).map((flavor) => ({ ...flavor })),
       productTreatment: offer.productTreatment === "exact_asset"
         || offer.productTreatment === "creative_redraw"
         || offer.productTreatment === "faithful_enhance_photo_integration"
@@ -627,6 +663,57 @@ export function Offers() {
                   ) : null,
                 )}
               </div>
+            ) : null}
+
+            <label style={{ marginTop: 12 }}>Sabores / variações (opcional)</label>
+            <p className="muted" style={{ margin: "4px 0 8px", fontSize: 12 }}>
+              Quando o mesmo produto existe em vários sabores, cores ou modelos pelo mesmo preço: cadastre cada um com a
+              sua foto e a arte mostra todos juntos, lado a lado. Até {MAX_OFFER_FLAVORS}.
+            </p>
+            {form.flavors.map((flavor, index) => (
+              <div key={index} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
+                {flavor.photoReferenceId && photoPreviewUrl(flavor.photoReferenceId) ? (
+                  <div style={thumbStyle}>
+                    <img
+                      src={photoPreviewUrl(flavor.photoReferenceId)!}
+                      alt={flavor.name || "Foto do sabor"}
+                      style={thumbImgStyle}
+                      loading="lazy"
+                    />
+                  </div>
+                ) : null}
+                <input
+                  aria-label={`Nome do sabor ${index + 1}`}
+                  placeholder="Ex: Chocolate"
+                  value={flavor.name}
+                  onChange={(e) => updateFlavor(index, { name: e.target.value })}
+                  style={{ flex: "1 1 160px" }}
+                />
+                <input
+                  type="file"
+                  accept="image/*"
+                  aria-label={`Foto do sabor ${index + 1}`}
+                  onChange={(e) => updateFlavor(index, { file: e.target.files?.[0] })}
+                  style={{ flex: "1 1 220px" }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  aria-label={`Remover sabor ${index + 1}`}
+                  onClick={() => setForm((current) => ({ ...current, flavors: current.flavors.filter((_, i) => i !== index) }))}
+                >
+                  Remover
+                </Button>
+              </div>
+            ))}
+            {form.flavors.length < MAX_OFFER_FLAVORS ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => setForm((current) => ({ ...current, flavors: [...current.flavors, { name: "", photoReferenceId: null }] }))}
+              >
+                + Adicionar sabor
+              </Button>
             ) : null}
 
             <div className="row">
