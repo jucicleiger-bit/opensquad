@@ -7735,6 +7735,18 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // real users even though it followed the lock correctly; a gradient still
   // respects "só cores da marca" as long as it never leaves that palette.
   const secondBrandColor = brandColorsForBackground.find((color) => color !== topBrandColor) || '';
+  // While the structure model was read as a style reference its finish —
+  // waves, bands, glow — rubbed off on the background, and the lock below
+  // was only loosely followed. Narrowed to structure, the lock was followed
+  // to the letter and real pieces came back with a bare gradient, which the
+  // operator noticed at once ("fundo menos trabalhado que era antes"). So
+  // the finish is asked for in the brief itself and no longer depends on
+  // which structure happened to be attached. Two registered colours only (a
+  // single one was promised a flat fill), and never a flyer: a price grid
+  // over a busy background is the case the lock was built for.
+  const workedBrandBackground = creativeSpec.background?.style === 'simple_brand'
+    && Boolean(secondBrandColor)
+    && topic.source !== 'flyer';
   // Which single layout/visual reference to use is already rotated upstream
   // in buildPrimaryAiImageReferences (seeded per test run), so selectedReferences
   // contains at most one of each here.
@@ -7939,6 +7951,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       productReferences.length
         ? 'Esse apoio visual nunca pode disputar atenção com o produto, ocupar mais área que ele ou virar cenário grande do segmento.'
         : '',
+      workedBrandBackground
+        ? 'Fundo trabalhado, não chapado: sobre a cor da marca, formas gráficas grandes (ondas, faixas, curvas, brilho, base sob o produto) nas cores da marca, com profundidade e acabamento de campanha.'
+        : '',
       ...quantityRules.visualLines,
       // Food businesses used to get ONLY the rice/food-texture note below,
       // skipping this line entirely — so a food creative had no defense
@@ -8052,7 +8067,7 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       creativeSpec.background?.style === 'simple_brand'
         ? (topBrandColor
           ? (secondBrandColor
-            ? `Fundo obrigatório: cor sólida ou gradiente suave usando só as cores da marca (${topBrandColor} e ${secondBrandColor}, ou tons muito próximos) — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`
+            ? `Fundo obrigatório: cor sólida ou gradiente suave usando só as cores da marca (${topBrandColor} e ${secondBrandColor}, ou tons muito próximos)${workedBrandBackground ? ', com formas gráficas nas cores da marca por cima' : ''} — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`
             : `Fundo obrigatoriamente liso, preenchido com a cor principal da marca (${topBrandColor} ou tom muito próximo) — sem cenário, objetos de contexto, ambientação, gradiente escuro ou textura elaborada. Essa regra vale mesmo se o modelo estrutural, o sistema visual ou o restante da instrução sugerir outro tipo de fundo.`)
           : 'Fundo obrigatoriamente liso e simples, usando apenas as cores da marca — sem cenário, objetos de contexto, ambientação ou textura elaborada. Essa regra vale mesmo se o modelo estrutural ou o restante da instrução sugerir outro tipo de fundo.')
         : '',

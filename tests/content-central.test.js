@@ -8838,6 +8838,7 @@ test('a flyer honours the background style chosen for the piece, and defaults to
     const simpleContent = await specFor(simple);
     assert.equal(simpleContent.creativeSpec.background.style, 'simple_brand');
     assert.match(simpleContent.image.prompt, /cores da marca/i);
+    assert.doesNotMatch(simpleContent.image.prompt, /Fundo trabalhado|com formas gráficas nas cores da marca/i, 'a price grid keeps the plain background the lock was built for');
 
     // Without a choice the flyer keeps the free background it has today.
     const freeContent = await specFor(free);
@@ -10338,6 +10339,7 @@ test('simple_brand background style names the actual extracted logo color instea
     assert.match(prompt, /preenchido com a cor principal da marca \(#F01818 ou tom muito próximo\)/i);
     assert.match(prompt, /fundo deve ser liso, na cor principal da marca \(#F01818\)/i);
     assert.doesNotMatch(prompt, /usando apenas as cores da marca — sem cenário/i);
+    assert.doesNotMatch(prompt, /Fundo trabalhado/i, 'one registered colour keeps the flat fill it was promised');
   });
 });
 
@@ -10397,6 +10399,13 @@ test('simple_brand background style allows a soft gradient between two registere
     assert.match(prompt, /cor sólida ou gradiente suave usando só as cores da marca \(#F01818 e #F0D890, ou tons muito próximos\)/i);
     assert.match(prompt, /fundo pode ser cor sólida ou gradiente suave, só com as cores da marca \(#F01818 e #F0D890\)/i);
     assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso, preenchido com a cor principal/i);
+    // Once the structure model stopped being read as a style reference, this
+    // lock was followed to the letter and real pieces came back with a bare
+    // gradient — the operator's first remark was that the background was
+    // less worked than before. The finish is asked for in the brief itself,
+    // still inside the brand colours and still without scenery.
+    assert.match(prompt, /ou tons muito próximos\), com formas gráficas nas cores da marca por cima — sem cenário, objetos de contexto, ambientação ou textura elaborada/i);
+    assert.match(prompt, /Fundo trabalhado, não chapado: sobre a cor da marca, formas gráficas grandes/i);
     // Gradient + a real product photo attached: the model must be told which
     // side of the gradient goes near the product, using the photo's own
     // colors — otherwise the background/photo pairing is arbitrary instead
@@ -10683,6 +10692,7 @@ test('elaborate background style leaves the free-form background prompt unchange
     assert.equal(content.creativeSpec.background.style, 'elaborate');
     assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso e simples/i);
     assert.doesNotMatch(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
+    assert.doesNotMatch(prompt, /Fundo trabalhado/i);
   });
 });
 
@@ -10713,6 +10723,7 @@ test('non-offer generation (goal topic) never gets the simple_brand background l
     assert.equal(content.creativeSpec.background.style, 'elaborate');
     assert.doesNotMatch(prompt, /Fundo obrigatoriamente liso e simples/i);
     assert.doesNotMatch(prompt, /Não criar cenário, ambientação ou objetos de contexto no fundo/i);
+    assert.doesNotMatch(prompt, /Fundo trabalhado/i);
   });
 });
 
