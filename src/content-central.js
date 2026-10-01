@@ -9780,7 +9780,10 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     price: normalizeCreativePrice(input?.price),
     // "De" price for a de/por promo — optional, only meaningful together with `price`.
     originalPrice: normalizeCreativePrice(input?.originalPrice),
-    priceUnit: ['kg', 'g', 'pacote', 'caixa'].includes(String(input?.priceUnit || '').trim())
+    // Mirrors PRICE_UNIT_LABELS in content-central-app/src/api/client.ts — a
+    // unit missing here is silently saved as "no unit". The value is printed
+    // on the art as-is ("R$ 9,90/dúzia"), hence the accents.
+    priceUnit: ['kg', 'g', '100g', 'un', 'L', 'dúzia', 'pacote', 'caixa', 'fardo', 'bandeja', 'maço', 'lata', 'garrafa'].includes(String(input?.priceUnit || '').trim())
       ? String(input.priceUnit).trim()
       : '',
     items: String(input?.items || '').trim(),

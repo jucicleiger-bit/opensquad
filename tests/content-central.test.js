@@ -5693,6 +5693,18 @@ test('a group with comboChance=100 always pairs the drawn offer with a same-grou
   });
 });
 
+test('an offer keeps a known price unit and drops an unknown one', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'unidades', name: 'Mercado Unidades', handle: '@unidades' }, dir);
+    for (const unit of ['un', '100g', 'L', 'dúzia', 'fardo', 'bandeja', 'maço', 'lata', 'garrafa']) {
+      const { offer } = await saveProjectOffer('unidades', { name: `Produto ${unit}`, price: 'R$ 9,90', priceUnit: unit }, dir);
+      assert.equal(offer.priceUnit, unit);
+    }
+    const { offer } = await saveProjectOffer('unidades', { name: 'Produto tonel', price: 'R$ 9,90', priceUnit: 'tonel' }, dir);
+    assert.equal(offer.priceUnit, '');
+  });
+});
+
 test('a paired offer arte shows both products with their own prices instead of one merged combo price', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'par-hortifruti', name: 'Mercado Par', handle: '@mercadopar' }, dir);

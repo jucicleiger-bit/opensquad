@@ -112,13 +112,24 @@ export interface ProjectOffer {
   priceUnit?: string;
 }
 
-// ponytail: fixed set per what was asked — add more if a project needs it
+// ponytail: fixed set per what was asked — add more if a project needs it.
+// Keys must also be in the server allowlist (normalizeProjectOffer in
+// src/content-central.js) or the unit is dropped on save.
 export const PRICE_UNIT_LABELS: Record<string, string> = {
   "": "Sem unidade",
   kg: "Quilo",
   g: "Grama",
+  "100g": "100 gramas",
+  un: "Unidade",
+  L: "Litro",
+  dúzia: "Dúzia",
   pacote: "Pacote",
   caixa: "Caixa",
+  fardo: "Fardo",
+  bandeja: "Bandeja",
+  maço: "Maço",
+  lata: "Lata",
+  garrafa: "Garrafa",
 };
 
 export const WEEKDAY_LABELS: Record<string, string> = {
