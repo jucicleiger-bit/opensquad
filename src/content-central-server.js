@@ -1751,11 +1751,12 @@ function buildTargetedEditPrompt({ content, note }) {
 
 export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAttempts = 1, reviewFeedback = '', rescueMode = false, targetedEdit = false } = {}) {
   if (targetedEdit && !rescueMode && note) return buildTargetedEditPrompt({ content, note });
-  const referencePaths = Array.isArray(content.image?.references)
-    ? content.image.references
-      .filter((reference) => String(reference.mimeType || '').startsWith('image/'))
-      .map((reference) => `${reference.absolutePath} (${reference.role}, peso ${reference.weight}: ${reference.instruction || 'sem instrução'})`)
+  const references = Array.isArray(content.image?.references)
+    ? content.image.references.filter((reference) => String(reference.mimeType || '').startsWith('image/'))
     : [];
+  const referencePaths = references
+    .map((reference) => `${reference.absolutePath} (${reference.role}, peso ${reference.weight}: ${reference.instruction || 'sem instrução'})`);
+  const hasLayoutModel = references.some((reference) => reference.role === 'layout_model');
   const aspectRatio = content.image?.aspectRatio || 'portrait';
   const dimensions = content.image?.dimensions
     ? `${content.image.dimensions.width}x${content.image.dimensions.height}`
@@ -1774,11 +1775,17 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     content.channel === 'facebook_feed' ? 'Este é um Facebook Feed: gerar arte de Feed, não Story.' : '',
     referencePaths.length ? 'Se disponíveis, use as imagens de referência abaixo como base visual real, sem copiar textos, marcas ou preços não autorizados:' : '',
     referencePaths.length ? referencePaths.join('\n') : '',
+    // A structure model is a finished ad sitting among the references, and
+    // the line above calls every reference a "base visual" — which is how
+    // its lettering and the ticks around its headline ended up on new pieces.
+    hasLayoutModel ? 'O modelo de layout (layout_model) acima serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos. Não é referência de estilo — não copiar dele o desenho das letras, os enfeites ao redor do título, as cores, o fundo, as texturas, o produto nem os textos.' : '',
     referencePaths.length ? 'As fotos de produto (product_photo) são a referência de realismo obrigatória: preserve a mesma qualidade de foto real — iluminação verdadeira de ambiente real (não estúdio genérico), textura e material reais do produto/serviço mostrado, ângulo de câmera de foto tirada por pessoa, pequenas imperfeições naturais. Pode ajustar o que o assunto pedir, mas a FOTOGRAFIA precisa parecer tirada da mesma sessão da referência, não uma composição publicitária genérica gerada do zero.' : '',
     rescueMode ? 'No modo resgate, mantenha o modelo de layout como estrutura de zonas e hierarquia. Adapte sua proporção ao canal sem copiar moldura externa, textos, marca ou produto da referência.' : '',
     'Gere um criativo final completo e bonito: layout, produto, título, preço, CTA e logo integrados na própria imagem.',
     'Não haverá overlay automático de texto depois. Tipografia, preço, CTA e logo precisam ficar bonitos, legíveis e naturais dentro da arte.',
-    'Use as referências como direção visual/produto/estilo, mas não copie textos, preços, logos ou marcas das referências.',
+    hasLayoutModel
+      ? 'Use as referências como direção visual/produto/estilo — menos o modelo de layout, que é só estrutura —, mas não copie textos, preços, logos ou marcas das referências.'
+      : 'Use as referências como direção visual/produto/estilo, mas não copie textos, preços, logos ou marcas das referências.',
     // Confirmed live (2026-08-07): the raw image_gen output doesn't always
     // land on the exact target aspect ratio, and when it doesn't, the
     // pipeline pads the gap with a blurred/stretched extension of the image
@@ -1801,7 +1808,7 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     reviewFeedback ? `Tentativa ${attempt} de ${maxAttempts}: refazer porque o Agente Revisor bloqueou a tentativa anterior. Corrigir obrigatoriamente:\n${reviewFeedback}` : '',
     rescueMode ? 'Regra final do modo resgate: preservar Story 9:16 real e adaptar as zonas do modelo estrutural ao canvas; nunca abandonar silenciosamente o modelo.' : '',
     'Evite aparência de IA: nada de plástico, brilho falso, simetria perfeita demais, letras embaralhadas, texto falso ou texto duplicado.',
-    'Detalhes que denunciam IA e devem ser evitados: materiais artificiais, geometria incoerente, superfícies sem imperfeições, saturação exagerada e luz de estúdio genérica sem contexto real.',
+    'Detalhes que denunciam IA e devem ser evitados: materiais artificiais, geometria incoerente, superfícies sem imperfeições, saturação exagerada, luz de estúdio genérica sem contexto real e enfeites decorativos em volta do título (tracinhos, faíscas, gotas, raios).',
     'Prefira: iluminação natural coerente com a cena, materiais/texturas plausíveis, pequenas imperfeições e profundidade de campo realista para o segmento do projeto.',
   ].filter(Boolean).join('\n');
 }
@@ -2731,21 +2738,29 @@ export function buildCodexAttachmentManifest(references, topic = {}, offset = 0)
   // An offer with flavors has the same problem as a flyer: several product
   // photos that only mean something once each is tied to its flavor's name.
   const hasFlavors = Boolean(topic?.flavors?.length);
-  if (!hasProductList(topic) && !hasFlavors) return '';
+  const namesProducts = hasProductList(topic) || hasFlavors;
+  // A structure model is a finished ad; unlabeled among the attachments it
+  // reads as a style reference. Saying which attachment it is, and what it
+  // is for, is what keeps its lettering and ornaments off the new piece.
+  const hasLayoutModel = references.some((reference) => reference.role === 'layout_model');
+  if (!namesProducts && !hasLayoutModel) return '';
   const lines = references.map((reference, index) => {
     const position = index + offset + 1;
-    return reference.role === 'product_photo'
-      ? `Anexo ${position}: ${productPhotoLabelFor(topic, reference)}`
-      : `Anexo ${position}: ${reference.role} — ${reference.relativePath || reference.filename || reference.id || 'referência'}.`;
+    const path = reference.relativePath || reference.filename || reference.id || 'referência';
+    if (reference.role === 'product_photo') return `Anexo ${position}: ${productPhotoLabelFor(topic, reference)}`;
+    if (reference.role === 'layout_model') return `Anexo ${position}: modelo de estrutura — ${path}. Usar só para posição, tamanho e ordem dos blocos; não copiar letras, enfeites, cores, fundo, produto nem textos dele.`;
+    return `Anexo ${position}: ${reference.role} — ${path}.`;
   });
   if (!lines.length) return '';
   return [
     'Os anexos desta mensagem estão nesta ordem exata:',
     ...lines,
-    hasFlavors
-      ? 'Cada foto de produto acima pertence ao sabor/variação nomeado nela. Mostrar cada um preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.'
-      : 'Cada foto de produto acima pertence ao produto nomeado nela. Colocar cada uma no espaço da grade daquele produto, preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um produto pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.',
-  ].join('\n');
+    !namesProducts
+      ? ''
+      : hasFlavors
+        ? 'Cada foto de produto acima pertence ao sabor/variação nomeado nela. Mostrar cada um preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.'
+        : 'Cada foto de produto acima pertence ao produto nomeado nela. Colocar cada uma no espaço da grade daquele produto, preservando a embalagem, o rótulo e a marca reais da foto. Não trocar a foto de um produto pela de outro e não substituir nenhuma delas por um produto genérico desenhado do zero.',
+  ].filter(Boolean).join('\n');
 }
 
 export function selectImageReferencesForCodex(imageReferences, topic = {}) {

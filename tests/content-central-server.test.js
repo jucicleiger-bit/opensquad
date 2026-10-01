@@ -5393,3 +5393,38 @@ test('buildCodexAttachmentManifest names the flavor each attached photo belongs 
   assert.doesNotMatch(manifest, /grade/, 'a flavored offer is not a flyer grid');
   assert.equal(buildCodexAttachmentManifest([brand, chocolate], { source: 'offer' }, 0), '', 'plain offers still get no manifest');
 });
+
+// The wrapper around the brief used to call every reference a "base visual"
+// and a "direção visual/produto/estilo" — the structure model included, so
+// its lettering and the ticks around its headline were fair game.
+test('the generation prompt narrows a layout model to structure, and leaves other references as style direction', () => {
+  const content = (references) => ({
+    channel: 'instagram_story',
+    formatLabel: 'Instagram Stories',
+    image: { aspectRatio: 'portrait', dimensions: { width: 1080, height: 1920 }, prompt: 'FORMATO\n- Story vertical 9:16.', references },
+  });
+  const logo = { absolutePath: 'C:/tmp/logo.png', role: 'brand_asset', weight: 'high', instruction: 'Logo oficial', mimeType: 'image/png' };
+  const layout = { absolutePath: 'C:/tmp/im-9.png', role: 'layout_model', weight: 'medium', instruction: 'Modelo', mimeType: 'image/png' };
+
+  const withLayout = buildAiImageGenerationPrompt({ content: content([logo, layout]), note: '' });
+  assert.match(withLayout, /O modelo de layout \(layout_model\) acima serve só para a estrutura/);
+  assert.match(withLayout, /menos o modelo de layout, que é só estrutura/);
+  assert.match(withLayout, /enfeites decorativos em volta do título/);
+
+  const withoutLayout = buildAiImageGenerationPrompt({ content: content([logo]), note: '' });
+  assert.doesNotMatch(withoutLayout, /modelo de layout/);
+  assert.match(withoutLayout, /Use as referências como direção visual\/produto\/estilo, mas não copie/);
+  assert.match(withoutLayout, /enfeites decorativos em volta do título/);
+});
+
+test('buildCodexAttachmentManifest labels a structure model as structure-only for an ordinary offer', () => {
+  const brand = { id: 'logo', role: 'brand_asset', relativePath: 'assets/logo.png' };
+  const photo = { id: 'p1', role: 'product_photo', relativePath: 'assets/references/p1.png' };
+  const layout = { id: 'layout', role: 'layout_model', relativePath: 'segment/im-9.png' };
+
+  const manifest = buildCodexAttachmentManifest([brand, photo, layout], { source: 'offer' }, 0);
+  assert.match(manifest, /Anexo 2: Foto selecionada: assets\/references\/p1\.png/);
+  assert.match(manifest, /Anexo 3: modelo de estrutura — segment\/im-9\.png\. Usar só para posição, tamanho e ordem dos blocos/);
+  assert.doesNotMatch(manifest, /grade/, 'the flyer sentence must not leak into an ordinary offer');
+  assert.equal(buildCodexAttachmentManifest([brand, photo], { source: 'offer' }, 0), '', 'no structure model, no manifest — as before');
+});
