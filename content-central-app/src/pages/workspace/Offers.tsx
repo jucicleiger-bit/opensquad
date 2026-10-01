@@ -67,7 +67,7 @@ const EMPTY_FORM = {
   productTreatment: "faithful_enhance" as ProductTreatment,
   layoutStrength: "strict" as "strict" | "balanced" | "free",
   backgroundStyle: "simple_brand" as BackgroundStyle,
-  titleStyle: "clean" as TitleStyle,
+  titleStyle: "lettering" as TitleStyle,
 };
 
 function suggestProductDirection(name: string, items: string, isCatalog: boolean) {
@@ -430,7 +430,7 @@ export function Offers() {
         : "faithful_enhance",
       layoutStrength: offer.layoutStrength === "balanced" || offer.layoutStrength === "free" ? offer.layoutStrength : "strict",
       backgroundStyle: offer.backgroundStyle === "elaborate" ? offer.backgroundStyle : "simple_brand",
-      titleStyle: offer.titleStyle === "lettering" ? offer.titleStyle : "clean",
+      titleStyle: offer.titleStyle === "clean" ? offer.titleStyle : "lettering",
     });
     setError(null);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -809,8 +809,8 @@ export function Offers() {
                     value={form.titleStyle}
                     onChange={(e) => setForm({ ...form, titleStyle: e.target.value as TitleStyle })}
                   >
-                    <option value="clean">Limpa (padrão)</option>
-                    <option value="lettering">Desenhada</option>
+                    <option value="lettering">Desenhada (padrão)</option>
+                    <option value="clean">Limpa</option>
                   </select>
                 </div>
               </div>

@@ -1808,7 +1808,7 @@ export function buildAiImageGenerationPrompt({ content, note, attempt = 1, maxAt
     reviewFeedback ? `Tentativa ${attempt} de ${maxAttempts}: refazer porque o Agente Revisor bloqueou a tentativa anterior. Corrigir obrigatoriamente:\n${reviewFeedback}` : '',
     rescueMode ? 'Regra final do modo resgate: preservar Story 9:16 real e adaptar as zonas do modelo estrutural ao canvas; nunca abandonar silenciosamente o modelo.' : '',
     'Evite aparência de IA: nada de plástico, brilho falso, simetria perfeita demais, letras embaralhadas, texto falso ou texto duplicado.',
-    'Detalhes que denunciam IA e devem ser evitados: materiais artificiais, geometria incoerente, superfícies sem imperfeições, saturação exagerada, luz de estúdio genérica sem contexto real e enfeites decorativos em volta do título (tracinhos, faíscas, gotas, raios).',
+    'Detalhes que denunciam IA e devem ser evitados: materiais artificiais, geometria incoerente, superfícies sem imperfeições, saturação exagerada, luz de estúdio genérica sem contexto real e marcas de destaque soltas em volta de títulos e preços (tracinhos, risquinhos, faíscas).',
     'Prefira: iluminação natural coerente com a cena, materiais/texturas plausíveis, pequenas imperfeições e profundidade de campo realista para o segmento do projeto.',
   ].filter(Boolean).join('\n');
 }

@@ -11160,30 +11160,38 @@ test('an offer with 3 flavors sends all 3 labeled photos and a side-by-side, sin
   });
 });
 
-test('buildTitleLetteringLines: clean by default, the brand typography when set, drawn only on request — ornaments banned in all three', () => {
-  const clean = buildTitleLetteringLines(undefined).join('\n');
+// After seeing clean titles on real pieces the operator took back half of the
+// first request: the drawn letter is what they liked ("algumas escritas faziam
+// complemento ao criativo"), and only the loose ticks bothered them. So the
+// drawn letter is the default again, the clean one is the opt-in, and the
+// ticks are banned in both.
+test('buildTitleLetteringLines: a free, drawn letter by default and a clean one on request — loose accent marks banned in both', () => {
+  const accentBan = /Sem marcas de destaque soltas \(burst lines\) em volta de título, preço, selos ou qualquer texto: nada de tracinhos, risquinhos, faíscas/;
+
+  const free = buildTitleLetteringLines(undefined, { typography: 'commercial_condensed' }).join('\n');
+  assert.match(free, /Letra do título: livre — pode ser desenhada/);
+  assert.match(free, accentBan);
+  assert.doesNotMatch(free, /LIMPA|cor chapada/);
+  assert.equal(buildTitleLetteringLines('lettering').join('\n'), buildTitleLetteringLines(undefined).join('\n'));
+
+  const clean = buildTitleLetteringLines('clean').join('\n');
   assert.match(clean, /Letra do título: LIMPA — letra de fôrma sem serifa/);
   assert.match(clean, /em cor chapada; sem contorno, 3D, degradê/);
   assert.match(clean, /Nenhuma palavra do título em letra manuscrita/);
-  assert.match(clean, /Nada ao redor do título: sem tracinhos, faíscas, gotas/);
+  assert.match(clean, accentBan);
 
   const branded = buildTitleLetteringLines('clean', { typography: 'commercial_condensed' }).join('\n');
   assert.match(branded, /tipografia da marca \(condensada comercial\)/);
   assert.doesNotMatch(branded, /sem serifa/, 'a serif brand must not be told "sem serifa"');
-
-  const drawn = buildTitleLetteringLines('lettering', { typography: 'commercial_condensed' }).join('\n');
-  assert.match(drawn, /Letra do título: DESENHADA/);
-  assert.match(drawn, /Nada ao redor do título/);
-  assert.doesNotMatch(drawn, /LIMPA/);
 });
 
-test('only an offer can ask for a drawn title — every other source resolves to clean', () => {
+test('only an offer can ask for a clean title — everything else keeps the free, drawn letter', () => {
   const spec = (contentTopic) => buildCreativeSpec({ contentTopic }, {}, 'instagram_feed', []).title.style;
-  assert.equal(spec({ source: 'offer', titleStyle: 'lettering' }), 'lettering');
-  assert.equal(spec({ source: 'offer', titleStyle: 'qualquer coisa' }), 'clean');
-  assert.equal(spec({ source: 'offer' }), 'clean');
-  assert.equal(spec({ source: 'goal', titleStyle: 'lettering' }), 'clean');
-  assert.equal(spec({ source: 'special_date', titleStyle: 'lettering' }), 'clean');
+  assert.equal(spec({ source: 'offer', titleStyle: 'clean' }), 'clean');
+  assert.equal(spec({ source: 'offer', titleStyle: 'qualquer coisa' }), 'lettering');
+  assert.equal(spec({ source: 'offer' }), 'lettering');
+  assert.equal(spec({ source: 'goal', titleStyle: 'clean' }), 'lettering');
+  assert.equal(spec({ source: 'special_date', titleStyle: 'clean' }), 'lettering');
 });
 
 test('an offer keeps a valid titleStyle and drops an invalid one', async () => {
@@ -11196,13 +11204,12 @@ test('an offer keeps a valid titleStyle and drops an invalid one', async () => {
   });
 });
 
-// The operator's complaint, seen on real pieces from three projects: ticks
-// and droplets drawn around the headline and a hand-lettered/outlined display
-// letter on nearly every arte. The brief never said how the title is drawn,
-// handed "tipografia" to the model as free, and attached a structure model
-// (half of them finished AI-made ads carrying exactly those ornaments) with
-// nothing telling the model to take only the positions from it.
-test('the image brief fixes a clean title, bans ornaments around it and treats the structure model as structure only — a drawn title only when the offer asks', async () => {
+// The operator's complaint, seen on real pieces from three projects: loose
+// ticks and droplets drawn around headlines and prices. Nothing in the brief
+// banned them, and the structure model (half of them finished AI-made ads
+// carrying exactly those marks) was attached with nothing telling the model
+// to take only the positions from it.
+test('the image brief bans loose accent marks and treats the structure model as structure only — the letter stays free unless the offer asks for a clean one', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
       projectId: 'letra-limpa', name: 'Letra Limpa', handle: '@letralimpa', approvalEmail: 'aprovacao@example.com',
@@ -11223,19 +11230,21 @@ test('the image brief fixes a clean title, bans ornaments around it and treats t
       return calls[0].content;
     };
 
-    const clean = await contentFor('2026-08-03');
-    assert.equal(clean.creativeSpec.title.style, 'clean');
-    assert.match(clean.image.prompt, /LETRA DO TÍTULO/);
-    assert.match(clean.image.prompt, /Letra do título: LIMPA/);
-    assert.match(clean.image.prompt, /Nada ao redor do título: sem tracinhos, faíscas, gotas/);
-    assert.match(clean.image.prompt, /O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos/);
-    assert.doesNotMatch(clean.image.prompt, /Pode variar[^\n]*tipografia/, 'typography is no longer handed to the model as free');
+    const free = await contentFor('2026-08-03');
+    assert.equal(free.creativeSpec.title.style, 'lettering');
+    assert.match(free.image.prompt, /LETRA DO TÍTULO/);
+    assert.match(free.image.prompt, /Letra do título: livre — pode ser desenhada/);
+    assert.match(free.image.prompt, /Sem marcas de destaque soltas \(burst lines\) em volta de título, preço, selos ou qualquer texto/);
+    assert.match(free.image.prompt, /O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos/);
+    assert.match(free.image.prompt, /Pode variar[^\n]*tipografia/, 'typography stays free for the default drawn title');
+    assert.doesNotMatch(free.image.prompt, /Letra do título: LIMPA/);
 
-    await saveProjectOffer('letra-limpa', { ...offer, titleStyle: 'lettering' }, dir);
-    const drawn = await contentFor('2026-08-04');
-    assert.equal(drawn.creativeSpec.title.style, 'lettering');
-    assert.match(drawn.image.prompt, /Letra do título: DESENHADA/);
-    assert.match(drawn.image.prompt, /Nada ao redor do título/, 'the ornament ban holds for a drawn title too');
-    assert.doesNotMatch(drawn.image.prompt, /Letra do título: LIMPA/);
+    await saveProjectOffer('letra-limpa', { ...offer, titleStyle: 'clean' }, dir);
+    const clean = await contentFor('2026-08-04');
+    assert.equal(clean.creativeSpec.title.style, 'clean');
+    assert.match(clean.image.prompt, /Letra do título: LIMPA/);
+    assert.match(clean.image.prompt, /Sem marcas de destaque soltas/, 'the accent-mark ban holds for a clean title too');
+    assert.doesNotMatch(clean.image.prompt, /Pode variar[^\n]*tipografia/, 'a clean title takes typography out of what the model may vary');
+    assert.doesNotMatch(clean.image.prompt, /Letra do título: livre/);
   });
 });

@@ -5409,12 +5409,12 @@ test('the generation prompt narrows a layout model to structure, and leaves othe
   const withLayout = buildAiImageGenerationPrompt({ content: content([logo, layout]), note: '' });
   assert.match(withLayout, /O modelo de layout \(layout_model\) acima serve só para a estrutura/);
   assert.match(withLayout, /menos o modelo de layout, que é só estrutura/);
-  assert.match(withLayout, /enfeites decorativos em volta do título/);
+  assert.match(withLayout, /marcas de destaque soltas em volta de títulos e preços/);
 
   const withoutLayout = buildAiImageGenerationPrompt({ content: content([logo]), note: '' });
   assert.doesNotMatch(withoutLayout, /modelo de layout/);
   assert.match(withoutLayout, /Use as referências como direção visual\/produto\/estilo, mas não copie/);
-  assert.match(withoutLayout, /enfeites decorativos em volta do título/);
+  assert.match(withoutLayout, /marcas de destaque soltas em volta de títulos e preços/);
 });
 
 test('buildCodexAttachmentManifest labels a structure model as structure-only for an ordinary offer', () => {

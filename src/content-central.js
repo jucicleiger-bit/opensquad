@@ -7400,31 +7400,40 @@ function formatBrandVisualSystemLines(input = {}) {
   ].filter(Boolean);
 }
 
-// What the operator calls "cara de IA" on a headline is two separate things:
-// the ticks/sparks/droplets drawn around it, and a display letter that is
-// outlined, extruded, gradient-filled or hand-lettered. The ornaments are
-// banned on every piece; the drawn letter is a per-offer opt-in (see
-// normalizeTitleStyle). Written as a positive spec with a closed list because
-// neither softer signal held: "evitar visual genérico de IA" names nothing,
-// and a brand's "Tipografia fixa" label on its own was ignored — a project
-// set to condensada comercial with very subtle shadows still got rounded
-// gradient letters with ticks.
-// Kept short on purpose: the brief has a length budget (a long prompt dilutes
-// every rule in it), so each line names things once.
-const TITLE_ORNAMENT_LINE = 'Nada ao redor do título: sem tracinhos, faíscas, gotas, raios, estrelas, brilhos ou sublinhado em pincelada — só as palavras.';
+// What the operator first called "cara de IA" on a headline turned out to be
+// two separate things, and they only wanted one of them gone. The loose
+// ticks/sparks/droplets drawn around titles and prices ("pinguinhos") bother
+// them on every piece and are banned on every piece. The drawn display letter
+// — outlined, with volume, sometimes hand-lettered — they like: a first
+// version made a clean letter the default, and on seeing real pieces they
+// asked for the drawn one back ("algumas escritas faziam complemento ao
+// criativo"), noting the whole piece had gone plainer with it. So the letter
+// is free by default and the clean one is a per-offer opt-in (see
+// normalizeTitleStyle).
+// The ban names the marks themselves because the softer signal never held:
+// "evitar visual genérico de IA" names nothing. It stays narrow on purpose —
+// loose accent marks, not every flourish — so a thematic element that
+// belongs to the piece (a splash behind a chocolate title) is not swept up.
+// Kept short: the brief has a length budget, and a long prompt dilutes every
+// rule in it.
+const ACCENT_MARKS_LINE = 'Sem marcas de destaque soltas (burst lines) em volta de título, preço, selos ou qualquer texto: nada de tracinhos, risquinhos, faíscas, raiozinhos, estrelinhas ou gotinhas ao redor.';
 
 export function buildTitleLetteringLines(titleStyle, visualSystem = {}) {
-  if (titleStyle === 'lettering') {
+  if (titleStyle !== 'clean') {
     return [
-      'Letra do título: DESENHADA — nesta oferta o operador pediu letra com personalidade (lettering, pincel ou manuscrita) no título; subtítulo, benefícios e preço seguem em letra de fôrma limpa.',
-      TITLE_ORNAMENT_LINE,
+      'Letra do título: livre — pode ser desenhada, com volume, contorno e cor, no estilo que mais combina com o produto e complementa o criativo.',
+      ACCENT_MARKS_LINE,
     ];
   }
+  // The brand's own typography is named here because the "Tipografia fixa"
+  // label in DIREÇÃO VISUAL was ignored on its own — a project set to
+  // condensada comercial with very subtle shadows still got rounded gradient
+  // letters.
   const brandTypography = brandVisualLabel(BRAND_VISUAL_TYPOGRAPHY_LABELS, normalizeBrandVisualSystem(visualSystem).typography);
   return [
     `Letra do título: LIMPA — letra de fôrma ${brandTypography ? `na tipografia da marca (${brandTypography})` : 'sem serifa, pesada'}, em cor chapada; sem contorno, 3D, degradê, brilho ou sombra pesada.`,
     'Nenhuma palavra do título em letra manuscrita, cursiva, de pincel ou cartoon.',
-    TITLE_ORNAMENT_LINE,
+    ACCENT_MARKS_LINE,
   ];
 }
 
@@ -7484,10 +7493,11 @@ function normalizeBackgroundStyle(value) {
   return String(value || '').trim().toLowerCase() === 'elaborate' ? 'elaborate' : 'simple_brand';
 }
 
-// Same shape as normalizeBackgroundStyle: only 'lettering' is a real opt-in,
-// every other value (missing, invalid, already 'clean') is the clean title.
+// Same shape as normalizeBackgroundStyle: only 'clean' is a real opt-in,
+// every other value (missing, invalid, already 'lettering') is the free,
+// drawn title.
 function normalizeTitleStyle(value) {
-  return String(value || '').trim().toLowerCase() === 'lettering' ? 'lettering' : 'clean';
+  return String(value || '').trim().toLowerCase() === 'clean' ? 'clean' : 'lettering';
 }
 
 // isFlyer swaps the single-protagonist center label for a grid label — this
@@ -7587,10 +7597,10 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
     background: {
       style: backgroundStyle,
     },
-    // The drawn title is an offer-form opt-in; every other source has no UI
-    // for it and always gets the clean title.
+    // The clean title is an offer-form opt-in; every other source has no UI
+    // for it and keeps the free, drawn title.
     title: {
-      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : 'clean',
+      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : 'lettering',
     },
     references: selectedReferences.map((reference) => ({
       id: reference.id || '',
@@ -7737,6 +7747,14 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     extractPromptLine(originalPrompt, 'Composição obrigatória desta tentativa:'),
     extractPromptLine(originalPrompt, 'Ângulo da copy/imagem:'),
   ].map(cleanPromptText).filter(Boolean).slice(0, 2);
+  // What the model may vary between pieces. "tipografia" is in every list by
+  // default — the operator likes a drawn title — and drops out only when the
+  // offer asked for a clean one, where LETRA DO TÍTULO fixes it instead.
+  const cleanTitle = creativeSpec.title?.style === 'clean';
+  const vary = (...items) => {
+    const allowed = cleanTitle ? items.filter((item) => item !== 'tipografia') : items;
+    return `${allowed.slice(0, -1).join(', ')} e ${allowed.at(-1)}`;
+  };
   return [
     section('FORMATO', [
       imageFormatInstructionForChannel(targetChannel),
@@ -7993,9 +8011,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       `Força estrutural: ${creativeSpec.layout.strength.toUpperCase()}. O modelo é obrigatório para composição, hierarquia, enquadramento, distribuição dos elementos e tratamento do preço.`,
       // The operator registers these structures for where things go, never
       // for how they look — and half of them are finished AI-made ads with
-      // drawn lettering and ticks around the headline. "Não copiar cores"
-      // alone left the model free to lift exactly that.
-      'O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos. Não copiar dele as letras, os enfeites do título, texturas, fundo nem acabamento.',
+      // ticks around the headline. Phrased as "the look is made for this
+      // brand" rather than as a list of things not to copy: the first
+      // wording ("não copiar … texturas, fundo nem acabamento") came back
+      // with noticeably plainer backgrounds, which the operator did not want.
+      'O modelo serve só para a estrutura: posição, tamanho, ordem e proporção dos blocos. O visual da peça (letras, fundo, acabamento) é criado para esta marca, não copiado do modelo.',
       isPhotoIntegrationTreatment(creativeSpec.product.treatment)
         ? 'Regra de níveis: produto vem do asset real; suporte fotográfico pode ser gerado apenas para integrar; hierarquia, margens e a posição de título, preço, logo e CTA continuam controlados pelo template.'
         : '',
@@ -8028,8 +8048,6 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : '',
       visualReference ? `Referência visual secundária opcional: ${visualReference.relativePath}` : '',
     ] : ['Sem layout principal selecionado; resolver composição livremente seguindo formato, hierarquia e direção visual.']),
-    // "tipografia" used to sit in every "pode variar" list below, handing
-    // the model the one thing LETRA DO TÍTULO now fixes.
     section('LIBERDADE CRIATIVA', [
       creativeSpec.background?.style === 'simple_brand'
         ? (topBrandColor
@@ -8048,17 +8066,17 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         : '',
       productLockedToPhoto && layoutReference && creativeSpec.layout.strength === 'strict'
         ? (creativeSpec.background?.style === 'simple_brand'
-          ? 'Pode variar luz e acabamento apenas como apoio simples; fundo continua travado pela regra de fundo acima, não a de "apoio simples" — não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.'
-          : 'Pode variar fundo, luz e acabamento apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.')
+          ? `Pode variar ${vary('luz', 'tipografia', 'acabamento')} apenas como apoio simples; fundo continua travado pela regra de fundo acima, não a de "apoio simples" — não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.`
+          : `Pode variar ${vary('fundo', 'luz', 'tipografia', 'acabamento')} apenas como apoio simples; não pode criar cenário grande, produto secundário dominante nem mudar as zonas, a ordem de leitura ou a hierarquia do modelo estrutural.`)
         : productLockedToPhoto
           ? (creativeSpec.background?.style === 'simple_brand'
-            ? 'Pode variar enquadramento e luz apenas para valorizar o produto real; fundo continua travado pela regra de fundo acima, liso e na cor da marca.'
-            : 'Pode variar enquadramento, fundo e luz apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.')
+            ? `Pode variar ${vary('enquadramento', 'luz', 'tipografia')} apenas para valorizar o produto real; fundo continua travado pela regra de fundo acima, liso e na cor da marca.`
+            : `Pode variar ${vary('enquadramento', 'fundo', 'luz', 'tipografia')} apenas para valorizar o produto real; manter fundo simples, limpo e guiado pelas cores da marca.`)
         : layoutReference && creativeSpec.layout.strength === 'strict'
-        ? 'Pode variar fundo, luz e acabamento, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.'
+        ? `Pode variar ${vary('fundo', 'luz', 'tipografia', 'acabamento')}, mas não pode mudar as zonas, a ordem de leitura nem a hierarquia do modelo estrutural.`
         : creativeSpec.background?.style === 'simple_brand'
-          ? 'Pode variar enquadramento, luz e elementos coerentes com o segmento.'
-          : 'Pode variar enquadramento, fundo, luz e elementos coerentes com o segmento.',
+          ? `Pode variar ${vary('enquadramento', 'luz', 'tipografia', 'elementos coerentes com o segmento')}.`
+          : `Pode variar ${vary('enquadramento', 'fundo', 'luz', 'tipografia', 'elementos coerentes com o segmento')}.`,
       variation.length
         ? `Variação desejada: ${variation.join(' ')}`
         : creativeSpec.background?.style === 'simple_brand'
@@ -9759,8 +9777,8 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     backgroundStyle: ['elaborate', 'simple_brand'].includes(String(input?.backgroundStyle || '').trim())
       ? String(input.backgroundStyle).trim()
       : '',
-    // A drawn/hand-lettered title is an explicit per-offer opt-in; anything
-    // else is the default clean title (see buildTitleLetteringLines).
+    // A clean title is an explicit per-offer opt-in; anything else is the
+    // default free, drawn title (see buildTitleLetteringLines).
     titleStyle: ['clean', 'lettering'].includes(String(input?.titleStyle || '').trim())
       ? String(input.titleStyle).trim()
       : '',
