@@ -3,6 +3,39 @@
 Data: 2026-10-01
 Branch: `worktree-sabores` (ambiente de teste; nada vai para o master sem pedido explícito)
 
+## Revisão (2026-10-01, tarde) — o que vale hoje
+
+Depois de ver artes reais com a letra limpa, o operador mudou a decisão:
+
+- A **letra desenhada** é o que ele gostava ("algumas escritas faziam
+  complemento ao criativo"). Ela volta a ser o **padrão**; a letra limpa
+  passa a ser a opção marcada na oferta.
+- O que incomoda são **só os pinguinhos**, e eles saem de toda arte, com
+  qualquer letra — no título, no preço, nos selos e em qualquer texto.
+- O **fundo** tinha ficado menos trabalhado junto com a letra limpa; ele não
+  queria isso.
+
+O que mudou em relação ao texto abaixo:
+
+- `titleStyle`: só `'clean'` é opt-in; qualquer outro valor é a letra livre
+  (`'lettering'`). Tópicos sem oferta ficam com a letra livre, não com a
+  limpa.
+- Seção LETRA DO TÍTULO, modo livre: uma linha liberando a letra desenhada
+  ("com volume, contorno e cor, no estilo que mais combina com o produto e
+  complementa o criativo") e a linha dos pinguinhos.
+- A proibição ficou estreita de propósito: "marcas de destaque soltas (burst
+  lines) em volta de título, preço, selos ou qualquer texto". Saíram dela
+  "brilhos" e "sublinhado em pincelada", que fazem parte da letra desenhada.
+- "tipografia" volta às listas "pode variar…" no modo livre e sai só no
+  modo limpo.
+- A linha da estrutura em REFERÊNCIA PRINCIPAL deixou de listar o que não
+  copiar ("texturas, fundo nem acabamento") e passou a dizer que o visual da
+  peça é criado para a marca, não copiado do modelo.
+- No formulário: "Desenhada (padrão)" e "Limpa".
+
+O restante (estrutura só como estrutura, manifesto de anexos, instrução
+geral) continua valendo como descrito.
+
 ## Problema
 
 As artes geradas saem com "cara de IA" no título. O operador nomeou dois
