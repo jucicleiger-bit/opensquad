@@ -111,6 +111,67 @@ describe("Dashboard", () => {
     expect(screen.getByRole("link", { name: "Resolver" })).toHaveAttribute("href", "/projects/boss-pizzaria/conta");
   });
 
+  it("closes an alert on the server and removes it from the banner", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "empty" } }],
+          globalRules: {},
+          alerts: [
+            {
+              type: "whatsapp_disconnected",
+              key: "whatsapp_disconnected:boss-pizzaria",
+              projectId: "boss-pizzaria",
+              projectName: "Boss Pizzaria",
+              message: "WhatsApp desconectado.",
+            },
+          ],
+        },
+      },
+      { body: { dismissed: true } },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Fechar" }));
+
+    expect(screen.queryByText(/WhatsApp desconectado\./)).not.toBeInTheDocument();
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/alerts/dismiss",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ key: "whatsapp_disconnected:boss-pizzaria" }) }),
+    );
+  });
+
+  it("says why when an alert cannot be closed, and keeps it on screen", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "empty" } }],
+          globalRules: {},
+          alerts: [
+            { type: "publish_failed", key: "publish_failed:boss-pizzaria:c1", projectId: "boss-pizzaria", projectName: "Boss Pizzaria", message: "Falha ao publicar." },
+          ],
+        },
+      },
+      { body: { error: "Not found" }, ok: false },
+    ]);
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Fechar" }));
+
+    expect(await screen.findByText(/Não foi possível fechar o alerta: Not found/)).toBeInTheDocument();
+    expect(screen.getByText(/Falha ao publicar\./)).toBeInTheDocument();
+  });
+
   it("shows an empty state when there are no projects", async () => {
     stubFetch({ projects: [], globalRules: {} });
 

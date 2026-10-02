@@ -94,6 +94,7 @@ import {
   listProjectContent,
   listCreativeStructureSources,
   listSystemAlerts,
+  dismissSystemAlert,
   loadOfferTypeLearning,
   loadProject,
   OFFER_TYPES,
@@ -569,6 +570,12 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     await saveOfferTypeBaseInstruction(targetDir, body.type, body.baseInstruction);
     return sendJson(res, 200, { type: body.type, baseInstruction: body.baseInstruction });
+  }
+
+  if (method === 'POST' && route === '/api/alerts/dismiss') {
+    const body = await readBody(req);
+    await dismissSystemAlert(body.key, targetDir);
+    return sendJson(res, 200, { dismissed: true });
   }
 
   if (method === 'POST' && route === '/api/projects') {

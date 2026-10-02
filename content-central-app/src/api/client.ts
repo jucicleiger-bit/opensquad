@@ -338,6 +338,7 @@ export interface ProjectSummary {
 
 export interface SystemAlert {
   type: "token_expired" | "token_expiring" | "publish_failed" | "media_upload_failed" | "topic_ideas_fallback" | "whatsapp_disconnected";
+  key: string;
   projectId: string;
   projectName: string;
   message: string;
@@ -454,6 +455,10 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export function getState(): Promise<StateResponse> {
   return api<StateResponse>("/api/state");
+}
+
+export function dismissAlert(key: string): Promise<{ dismissed: boolean }> {
+  return api("/api/alerts/dismiss", { method: "POST", body: JSON.stringify({ key }) });
 }
 
 export function getProjectContent(projectId: string): Promise<{ content: ContentItem[] }> {

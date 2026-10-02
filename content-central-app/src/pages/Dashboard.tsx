@@ -7,6 +7,7 @@ import {
   createProject,
   createProspectFromScreenshot,
   deleteProject,
+  dismissAlert,
   duplicateProject,
   fileToDataUrl,
   getState,
@@ -51,6 +52,7 @@ export function Dashboard() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [dismissError, setDismissError] = useState<string | null>(null);
   const [duplicatingProject, setDuplicatingProject] = useState<ProjectSummary | null>(null);
   const [duplicateForm, setDuplicateForm] = useState(EMPTY_DUPLICATE_FORM);
   const [duplicating, setDuplicating] = useState(false);
@@ -103,6 +105,20 @@ export function Dashboard() {
       cancelled = true;
     };
   }, []);
+
+  // Closed on the server, not just here: the same alert must stay closed on
+  // the next load and stop its daily email. If the call fails the alert
+  // stays on screen and says why — a server still running older code has
+  // no such route, and a button that silently does nothing reads as broken.
+  async function handleDismissAlert(key: string) {
+    setDismissError(null);
+    try {
+      await dismissAlert(key);
+      setAlerts((current) => current.filter((entry) => entry.key !== key));
+    } catch (err) {
+      setDismissError(`Não foi possível fechar o alerta: ${(err as Error).message}. Reinicie o servidor e tente de novo.`);
+    }
+  }
 
   async function handleCreate(event: FormEvent) {
     event.preventDefault();
@@ -346,18 +362,24 @@ export function Dashboard() {
                 <span className="muted">
                   <b>{alert.projectName}:</b> {alert.message}
                 </span>
-                <Link
-                  to={`/projects/${alert.projectId}/${
-                    alert.type === "publish_failed" || alert.type === "media_upload_failed" ? "calendario" : "conta"
-                  }`}
-                >
-                  <Button type="button" variant="secondary">
-                    Resolver
+                <div style={{ display: "flex", gap: "var(--space-sm)", alignItems: "center" }}>
+                  <Link
+                    to={`/projects/${alert.projectId}/${
+                      alert.type === "publish_failed" || alert.type === "media_upload_failed" ? "calendario" : "conta"
+                    }`}
+                  >
+                    <Button type="button" variant="secondary">
+                      Resolver
+                    </Button>
+                  </Link>
+                  <Button type="button" variant="ghost" onClick={() => handleDismissAlert(alert.key)}>
+                    Fechar
                   </Button>
-                </Link>
+                </div>
               </div>
             ))}
           </div>
+          {dismissError ? <div className="pill bad" style={{ marginTop: "var(--space-sm)" }}>{dismissError}</div> : null}
         </div>
       ) : null}
 

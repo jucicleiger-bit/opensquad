@@ -2229,6 +2229,12 @@ test('content central API surfaces an expiring-token alert in /api/state', async
     const alert = state.body.alerts.find((a) => a.projectId === 'alerta-token');
     assert.ok(alert);
     assert.equal(alert.type, 'token_expiring');
+
+    // The panel's "Fechar" button: the alert is gone on the next load.
+    const dismissed = await request(server, '/api/alerts/dismiss', { method: 'POST', body: JSON.stringify({ key: alert.key }) });
+    assert.equal(dismissed.response.status, 200);
+    const after = await request(server, '/api/state');
+    assert.equal(after.body.alerts.some((a) => a.projectId === 'alerta-token'), false);
   });
 });
 

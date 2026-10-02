@@ -5023,7 +5023,34 @@ export async function listSystemAlerts(targetDir = process.cwd(), options = {}) 
     }
   }
 
-  return alerts;
+  for (const alert of alerts) alert.key = alertNotificationKey(alert);
+
+  // An alert the operator closed stays hidden, in the panel and in the
+  // emails, for as long as that same issue is open. Once the issue goes away
+  // its dismissal is forgotten, so the next occurrence alerts again — a
+  // WhatsApp closed today must still warn about next month's drop.
+  // ponytail: no lock around this file; a dismiss landing during the rare
+  // prune write below can be lost (the alert just reappears). Lock if seen.
+  const dismissedPath = join(paths.root, ALERT_DISMISSED_FILE);
+  const dismissed = await readJson(dismissedPath, []);
+  if (dismissed.length === 0) return alerts;
+  const openKeys = new Set(alerts.map((alert) => alert.key));
+  // WAHA not answering says nothing about whether WhatsApp is back, so that
+  // dismissal is kept rather than forgotten on every slow answer.
+  const stillOpen = dismissed.filter((key) => openKeys.has(key)
+    || (!whatsappStates && key.startsWith('whatsapp_disconnected:')));
+  if (stillOpen.length !== dismissed.length) await writeJson(dismissedPath, stillOpen);
+  return alerts.filter((alert) => !stillOpen.includes(alert.key));
+}
+
+const ALERT_DISMISSED_FILE = 'alert-dismissed.json';
+
+export async function dismissSystemAlert(key, targetDir = process.cwd()) {
+  const value = String(key || '').trim();
+  if (!value) throw new Error('Alerta não informado');
+  const dismissedPath = join(getCentralPaths(targetDir).root, ALERT_DISMISSED_FILE);
+  const dismissed = await readJson(dismissedPath, []);
+  if (!dismissed.includes(value)) await writeJson(dismissedPath, [...dismissed, value]);
 }
 
 function alertNotificationKey(alert) {

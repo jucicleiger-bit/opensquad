@@ -74,6 +74,7 @@ import {
   saveLearningEntry,
   saveOfferTypeBaseInstruction,
   sendDueAlertEmails,
+  dismissSystemAlert,
   listProjectReferences,
   listProjectContent,
   publishSingleContent,
@@ -7886,6 +7887,33 @@ test('listSystemAlerts flags a connected WhatsApp whose session dropped, but not
       whatsappSessionStates: states({ 'opensquad-wa-caiu': 'SCAN_QR_CODE', 'opensquad-wa-reconectando': 'WORKING', 'opensquad-wa-ok': 'WORKING', 'opensquad-wa-sumiu': 'WORKING' }),
     });
     assert.deepEqual(emails, ['🔴 [Opensquad] wa-caiu — WhatsApp desconectado']);
+  });
+});
+
+test('a dismissed alert stays closed while the issue is open and alerts again when it recurs', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'wa-fechar', name: 'Fechar', handle: '@fechar' }, dir);
+    await saveProjectWhatsAppInstance('wa-fechar', { sessionName: 'opensquad-wa-fechar' }, dir);
+    const withState = (status) => ({ whatsappSessionStates: async () => ({ 'opensquad-wa-fechar': status }) });
+
+    const [alert] = await listSystemAlerts(dir, withState('FAILED'));
+    assert.equal(alert.key, 'whatsapp_disconnected:wa-fechar');
+    await dismissSystemAlert(alert.key, dir);
+
+    assert.deepEqual(await listSystemAlerts(dir, withState('FAILED')), []);
+    const emails = [];
+    await sendDueAlertEmails(dir, { ...withState('FAILED'), emailSender: async (email) => emails.push(email.subject) });
+    assert.deepEqual(emails, []);
+
+    // WAHA not answering is not "resolved": still closed afterwards.
+    await listSystemAlerts(dir, { whatsappSessionStates: async () => { throw new Error('timeout'); } });
+    assert.deepEqual(await listSystemAlerts(dir, withState('FAILED')), []);
+
+    // Reconnected, then dropped again: a new occurrence, so it alerts.
+    assert.deepEqual(await listSystemAlerts(dir, withState('WORKING')), []);
+    assert.equal((await listSystemAlerts(dir, withState('FAILED'))).length, 1);
+
+    await assert.rejects(() => dismissSystemAlert('', dir), /Alerta não informado/);
   });
 });
 
