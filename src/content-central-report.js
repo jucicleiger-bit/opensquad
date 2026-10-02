@@ -201,9 +201,9 @@ body{margin:0;background:#1a1a1d;color:#111;font-family:system-ui,-apple-system,
 .kicker{font-size:14px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#6b6b6b}
 .month{font-size:35px;font-weight:800;letter-spacing:-.02em;margin-top:3px}
 .partial{font-size:14px;color:#6b6b6b;margin-top:4px}
-.client{display:flex;align-items:center;gap:13px;margin-top:20px}
-.client img,.client .initial{width:57px;height:57px;border-radius:50%;border:1px solid #ddd;object-fit:cover;flex:0 0 auto}
-.client .initial{display:flex;align-items:center;justify-content:center;background:#0b0b0c;color:#fff;font-weight:800;font-size:24px}
+.client{display:flex;flex-direction:column;align-items:flex-start;gap:10px;margin-top:20px}
+.client img{height:72px;width:auto;max-width:100%;border-radius:10px;border:1px solid #e3e3e3;object-fit:contain;background:#fff}
+.client .initial{width:57px;height:57px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#0b0b0c;color:#fff;font-weight:800;font-size:24px}
 .client b{display:block;font-size:20px}
 .client span{font-size:16px;color:#6b6b6b}
 .hero{margin-top:auto}
