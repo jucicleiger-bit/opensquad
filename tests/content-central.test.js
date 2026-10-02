@@ -11361,3 +11361,40 @@ test('the image brief bans loose accent marks and treats the structure model as 
     assert.doesNotMatch(clean.image.prompt, /Letra do título: livre/);
   });
 });
+
+test('last month\'s report is announced from day 3 on, emailed once, and can be closed', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'rel-aviso', name: 'Aviso', handle: '@aviso' }, dir);
+    const batchDir = join(dir, '_opensquad', 'content-central', 'projects', 'rel-aviso', 'content', 'drafts', 'lote-1');
+    await mkdir(batchDir, { recursive: true });
+    await writeFile(join(batchDir, 'day-01-instagram_story.json'), JSON.stringify({
+      contentId: 'rel-aviso-1',
+      batchId: 'lote-1',
+      channel: 'instagram_story',
+      scheduledDate: '2026-09-10',
+      publish: { publishedAt: new Date(2026, 8, 10, 12).toISOString(), realPublished: true },
+    }), 'utf-8');
+
+    // Day 2: Meta may still be delivering last month's numbers.
+    assert.deepEqual(await listSystemAlerts(dir, { now: new Date(2026, 9, 2, 9) }), []);
+
+    const [alert] = await listSystemAlerts(dir, { now: new Date(2026, 9, 3, 9) });
+    assert.equal(alert.type, 'report_ready');
+    assert.equal(alert.month, '2026-09');
+    assert.equal(alert.key, 'report_ready:rel-aviso:2026-09');
+    assert.equal(alert.message, 'Relatório de setembro pronto.');
+
+    // In November, September is no longer last month.
+    assert.deepEqual(await listSystemAlerts(dir, { now: new Date(2026, 10, 5, 9) }), []);
+
+    const emails = [];
+    const emailSender = async (email) => emails.push(email.subject);
+    await sendDueAlertEmails(dir, { emailSender, now: new Date(2026, 9, 3, 9) });
+    await sendDueAlertEmails(dir, { emailSender, now: new Date(2026, 9, 10, 9) });
+    assert.equal(emails.length, 1);
+    assert.match(emails[0], /Aviso — relatório de setembro pronto/);
+
+    await dismissSystemAlert(alert.key, dir);
+    assert.deepEqual(await listSystemAlerts(dir, { now: new Date(2026, 9, 12, 9) }), []);
+  });
+});

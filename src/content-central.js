@@ -4939,6 +4939,9 @@ export async function listSystemAlerts(targetDir = process.cwd(), options = {}) 
     if (raw) projects.push(await toProjectSummary(raw, paths));
   }
   const alerts = [];
+  const now = options.now || new Date();
+  // From day 3 on: Meta delivers last month's numbers up to 48 hours late.
+  const reportMonth = now.getDate() >= 3 ? previousMonthKey(localMonthKey(now)) : null;
 
   // Live WAHA session states ({ sessionName: status }), injected by the
   // server — this module knows nothing about WAHA. Asked once for every
@@ -4994,6 +4997,16 @@ export async function listSystemAlerts(targetDir = process.cwd(), options = {}) 
     }
 
     const content = await listProjectContent(project.projectId, targetDir);
+    if (reportMonth && content.some((item) => item.publish?.publishedAt && localMonthKey(new Date(item.publish.publishedAt)) === reportMonth)) {
+      alerts.push({
+        type: 'report_ready',
+        projectId: project.projectId,
+        projectName: project.name,
+        month: reportMonth,
+        message: `Relatório de ${monthNamePt(reportMonth)} pronto.`,
+      });
+    }
+
     for (const item of content) {
       const subject = item.contentTopic?.offerName || item.contentTopic?.label || item.title || item.contentId;
       const channel = CHANNEL_LABELS[item.channel] || item.channel;
@@ -5057,14 +5070,21 @@ export async function dismissSystemAlert(key, targetDir = process.cwd()) {
 }
 
 function alertNotificationKey(alert) {
-  return alert.contentId ? `${alert.type}:${alert.projectId}:${alert.contentId}` : `${alert.type}:${alert.projectId}`;
+  // The month keeps each report's notice distinct: closing September's must
+  // not hide October's.
+  const subject = alert.contentId || alert.month;
+  return subject ? `${alert.type}:${alert.projectId}:${subject}` : `${alert.type}:${alert.projectId}`;
 }
 
 function alertEmailSubject(alert) {
-  const icon = alert.type === 'token_expired' || alert.type === 'whatsapp_disconnected' ? '🔴' : alert.type === 'token_expiring' ? '🟡' : '⚠️';
+  const icon = alert.type === 'token_expired' || alert.type === 'whatsapp_disconnected' ? '🔴'
+    : alert.type === 'token_expiring' ? '🟡'
+    : alert.type === 'report_ready' ? '📊'
+    : '⚠️';
   const topic = alert.type === 'publish_failed' ? 'falha ao publicar'
     : alert.type === 'media_upload_failed' ? 'falha ao hospedar imagem'
     : alert.type === 'whatsapp_disconnected' ? 'WhatsApp desconectado'
+    : alert.type === 'report_ready' ? `relatório de ${monthNamePt(alert.month)} pronto`
     : 'token da Meta';
   return `${icon} [Opensquad] ${alert.projectName} — ${topic}`;
 }
@@ -5094,7 +5114,10 @@ export async function sendDueAlertEmails(targetDir = process.cwd(), options = {}
   for (const alert of alerts) {
     const key = alertNotificationKey(alert);
     const lastSentAt = notified[key] ? new Date(notified[key]) : null;
-    if (lastSentAt && !Number.isNaN(lastSentAt.getTime()) && now.getTime() - lastSentAt.getTime() < cooldownMs) continue;
+    // A report being ready is news once; the other alerts get more urgent
+    // while they stay open, so they repeat after the cooldown.
+    const sentBefore = lastSentAt && !Number.isNaN(lastSentAt.getTime());
+    if (sentBefore && (alert.type === 'report_ready' || now.getTime() - lastSentAt.getTime() < cooldownMs)) continue;
     await options.emailSender({ subject: alertEmailSubject(alert), body: alertEmailBody(alert), alert });
     notified[key] = now.toISOString();
     sent.push(alert);
