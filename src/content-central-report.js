@@ -171,7 +171,22 @@ function chunk(list, size) {
 }
 
 const thumb = (imageUrl, badge) => `<div class="th">${imageUrl ? `<img src="${escapeHtml(imageUrl)}" alt="">` : '<div class="noimg"></div>'}${badge ? `<b>${escapeHtml(badge)}</b>` : ''}</div>`;
-const stat = (value, label) => (value === null ? '' : `<div class="stat"><div class="n">${formatNumber(value)}</div><div class="t">${label}</div></div>`);
+const hint = (text) => `<p class="hint">${text}</p>`;
+const stat = (value, label, explanation) => (value === null ? '' : `<div class="stat"><div class="n">${formatNumber(value)}</div><div class="t">${label}</div>${hint(explanation)}</div>`);
+
+// One plain sentence under each number, for a shop owner who has never read
+// an Instagram report. An explanation only shows next to the number it explains.
+const HINTS = {
+  publications: 'Tudo o que publicamos para a sua marca neste mês, somando todos os canais.',
+  views: 'Vezes que os seus conteúdos apareceram na tela de alguém. A mesma pessoa pode ver várias vezes.',
+  reach: 'Pessoas diferentes que viram pelo menos um conteúdo seu.',
+  followers: 'Pessoas que seguem o seu perfil.',
+  stories: 'Stories são publicações que ficam 24 horas no ar, no topo do Instagram.',
+  storyViews: ' O número em cada arte é quantas vezes ela foi vista.',
+  feed: 'Posts são publicações que ficam fixas no seu perfil.',
+  likes: ' Curtida é quando alguém tocou no coração para dizer que gostou.',
+  flyers: 'Encartes de ofertas publicados no mês.',
+};
 
 const REPORT_CSS = `
 *{box-sizing:border-box}
@@ -198,15 +213,18 @@ body{margin:0;background:#1a1a1d;color:#111;font-family:system-ui,-apple-system,
 .chips{display:flex;gap:10px;margin-top:17px;flex-wrap:wrap}
 .chip{font-size:16px;font-weight:600;border:1.5px solid #111;border-radius:99px;padding:5px 13px}
 h2{font-size:25px;font-weight:800;letter-spacing:-.01em;margin:0 0 5px}
-.sub{font-size:16px;color:#555;margin:0 0 15px}
-.stat{margin:12px 0 22px}
-.stat .n{font-size:63px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.sub{font-size:16px;color:#555;margin:0 0 6px}
+.hint{font-size:13px;line-height:1.35;color:#6b6b6b;margin:0 0 13px}
+.stat{margin:8px 0 16px}
+.stat .n{font-size:56px;font-weight:800;letter-spacing:-.03em;line-height:1}
 .stat .t{font-size:17.5px;color:#333;margin-top:5px}
+.stat .hint{margin:5px 0 0}
+.hero .hint{margin:7px 0 0}
 .delta{display:inline-block;font-size:16.5px;font-weight:700;background:#FFD100;border-radius:99px;padding:3px 13px;margin-left:10px;vertical-align:middle;letter-spacing:0}
 hr{border:0;border-top:1px solid #e3e3e3;margin:0 0 20px}
-.grid{display:grid;gap:8px}
-.g3{grid-template-columns:repeat(3,1fr)}
-.g2{grid-template-columns:repeat(2,1fr);gap:10px}
+.grid{display:grid;gap:8px;width:100%;margin:0 auto}
+.g3{grid-template-columns:repeat(3,1fr);max-width:288px}
+.g2{grid-template-columns:repeat(2,1fr);gap:10px;max-width:270px}
 .th{position:relative}
 .th img,.th .noimg{width:100%;display:block;border-radius:7px;object-fit:cover;background:#eee}
 .g3 .th img,.g3 .th .noimg{aspect-ratio:9/16}
@@ -240,15 +258,16 @@ export function renderReportPage(report) {
         <div class="hero">
           <div class="num">${formatNumber(total)}</div>
           <div class="lbl"><span class="mark">${total === 1 ? 'publicação' : 'publicações'}</span> no mês</div>
+          ${hint(HINTS.publications)}
           <div class="chips">${report.totals.byChannel.map((chip) => `<span class="chip">${escapeHtml(chip.text)}</span>`).join('')}</div>
         </div>`,
     });
 
     const audienceBlock = audience.views !== null || audience.reach !== null
-      ? `<h2>Quem viu a sua marca</h2>${stat(audience.views, 'visualizações do perfil no mês')}${stat(audience.reach, 'contas alcançadas')}`
+      ? `<h2>Quem viu a sua marca</h2>${stat(audience.views, 'visualizações do perfil no mês', HINTS.views)}${stat(audience.reach, 'contas alcançadas', HINTS.reach)}`
       : '';
     const followersBlock = followers.total !== null
-      ? `${audienceBlock ? '<hr>' : ''}<h2>Seguidores</h2><div class="stat"><div class="n">${formatNumber(followers.total)}${followers.delta !== null ? `<span class="delta">+${formatNumber(followers.delta)} no mês</span>` : ''}</div><div class="t">${report.partial ? `em ${escapeHtml(report.partialUntil)}` : `no fim de ${escapeHtml(report.monthName)}`}</div></div>`
+      ? `${audienceBlock ? '<hr>' : ''}<h2>Seguidores</h2><div class="stat"><div class="n">${formatNumber(followers.total)}${followers.delta !== null ? `<span class="delta">+${formatNumber(followers.delta)} no mês</span>` : ''}</div><div class="t">${report.partial ? `em ${escapeHtml(report.partialUntil)}` : `no fim de ${escapeHtml(report.monthName)}`}</div>${hint(HINTS.followers)}</div>`
       : '';
     if (audienceBlock || followersBlock) pages.push({ top: inner, body: `${audienceBlock}${followersBlock}` });
 
@@ -257,6 +276,7 @@ export function renderReportPage(report) {
       pages.push({
         top: inner,
         body: `<h2>Stories</h2><p class="sub">${formatNumber(stories.count)} no mês${ranked}</p>
+          ${hint(`${HINTS.stories}${stories.top.some((story) => story.views !== null) ? HINTS.storyViews : ''}`)}
           <div class="grid g3">${stories.top.map((story) => thumb(story.imageUrl, story.views !== null ? formatNumber(story.views) : '')).join('')}</div>
           ${stories.more > 0 ? `<div class="more">e mais ${countOf(stories.more, ['story', 'stories'])}</div>` : ''}`,
       });
@@ -271,6 +291,7 @@ export function renderReportPage(report) {
       pages.push({
         top: inner,
         body: `<h2>Posts no feed</h2><p class="sub">${feedSub}</p>
+          ${hint(`${HINTS.feed}${feed.likes !== null ? HINTS.likes : ''}`)}
           <div class="grid g2">${posts.map((post) => thumb(post.imageUrl, post.likes !== null ? countOf(post.likes, ['curtida', 'curtidas']) : '')).join('')}</div>`,
       });
     }
@@ -279,6 +300,7 @@ export function renderReportPage(report) {
       pages.push({
         top: inner,
         body: `<h2>Encartes</h2><p class="sub">${formatNumber(flyers.count)} no mês</p>
+          ${hint(`${HINTS.flyers}${sheets.some((sheet) => sheet.views !== null) ? HINTS.storyViews : ''}`)}
           <div class="grid g3">${sheets.map((sheet) => thumb(sheet.imageUrl, sheet.views !== null ? formatNumber(sheet.views) : '')).join('')}</div>`,
       });
     }

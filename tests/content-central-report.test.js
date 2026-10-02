@@ -172,6 +172,35 @@ test('the page degrades without numbers and says so for an empty month', () => {
   assert.match(empty, /Nenhuma publicação em agosto de 2026\./);
 });
 
+test('every number carries a plain-language explanation, only where the number shows', () => {
+  const story = item();
+  const post = item({ channel: 'instagram_feed' });
+  const full = renderReportPage(report([story, post], {
+    months: { '2026-08': { views: 9860, reach: 2140 } },
+    followers: { '2026-07-31': 1247, '2026-08-31': 1284 },
+    media: {
+      [story.publish.metaMediaId]: { kind: 'story', views: 412 },
+      [post.publish.metaMediaId]: { kind: 'feed', likes: 31, comments: 4 },
+    },
+  }));
+  assert.match(full, /Tudo o que publicamos/);
+  assert.match(full, /apareceram na tela de alguém/);
+  assert.match(full, /Pessoas diferentes/);
+  assert.match(full, /seguem o seu perfil/);
+  assert.match(full, /ficam 24 horas no ar/);
+  assert.match(full, /quantas vezes ela foi vista/);
+  assert.match(full, /ficam fixas no seu perfil/);
+  assert.match(full, /tocou no coração/);
+
+  // No number on screen, no explanation of that number.
+  const plain = renderReportPage(report([item(), item({ channel: 'instagram_feed' })]));
+  assert.match(plain, /ficam 24 horas no ar/);
+  assert.match(plain, /ficam fixas no seu perfil/);
+  assert.doesNotMatch(plain, /quantas vezes ela foi vista/);
+  assert.doesNotMatch(plain, /tocou no coração/);
+  assert.doesNotMatch(plain, /Pessoas diferentes/);
+});
+
 test('the page escapes names coming from the project', () => {
   const html = renderReportPage(buildMonthlyReport({
     project: { ...project, name: 'Loja <b>X</b>' }, agency, items: [item()], metrics: {}, month: '2026-08', now: closedNow,
