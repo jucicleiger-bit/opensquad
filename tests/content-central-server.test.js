@@ -5473,3 +5473,39 @@ test('buildCodexAttachmentManifest labels a structure model as structure-only fo
   assert.doesNotMatch(manifest, /grade/, 'the flyer sentence must not leak into an ordinary offer');
   assert.equal(buildCodexAttachmentManifest([brand, photo], { source: 'offer' }, 0), '', 'no structure model, no manifest — as before');
 });
+
+test('content central lists report months and serves the monthly report page', async () => {
+  await withServer(async (dir, server) => {
+    await request(server, '/api/projects', {
+      method: 'POST',
+      body: JSON.stringify({ projectId: 'relato', name: 'Loja Relato', handle: '@relato' }),
+    });
+    const batchDir = join(dir, '_opensquad', 'content-central', 'projects', 'relato', 'content', 'drafts', 'lote-1');
+    await mkdir(batchDir, { recursive: true });
+    await writeFile(join(batchDir, 'day-01-instagram_story.json'), JSON.stringify({
+      contentId: 'relato-1',
+      batchId: 'lote-1',
+      channel: 'instagram_story',
+      scheduledDate: '2026-08-10',
+      scheduledTime: '09:00',
+      contentTopic: { type: 'offer' },
+      caption: { text: '' },
+      publish: { publishedAt: new Date(2026, 7, 10, 12).toISOString(), realPublished: true, metaMediaId: 'm1' },
+    }), 'utf-8');
+
+    const list = await request(server, '/api/projects/relato/reports');
+    assert.equal(list.response.status, 200);
+    assert.deepEqual(list.body.months.map((entry) => [entry.month, entry.publications, entry.status]), [['2026-08', 1, 'pronto']]);
+    assert.equal(list.body.insightsEnabled, false);
+
+    const page = await realFetch(`${server.url}/api/projects/relato/report?month=2026-08`);
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-type'), /text\/html/);
+    const html = await page.text();
+    assert.match(html, /Loja Relato/);
+    assert.match(html, /Agosto de 2026/);
+
+    assert.equal((await request(server, '/api/projects/relato/report?month=agosto')).response.status, 400);
+    assert.equal((await request(server, '/api/projects/nao-existe/report?month=2026-08')).response.status, 404);
+  });
+});

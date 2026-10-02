@@ -19,6 +19,8 @@ import {
   contentCentralPersonaLine,
   contentCentralPersonaResponsibilityLine,
 } from './content-central-personas.js';
+import { collectAllProjectsMetrics, INSIGHTS_PERMISSION, loadProjectMetrics } from './content-central-metrics.js';
+import { buildMonthlyReport, listReportMonths, renderReportPage } from './content-central-report.js';
 import {
   analyzeLearningImage,
   animateContentForReels,
@@ -445,6 +447,7 @@ export async function startContentCentralServer({
   const cloudWhatsAppPublishSchedulerTimer = startCloudWhatsAppPublishScheduler(targetDir);
   const cloudArtGenerationSchedulerTimer = startCloudArtGenerationScheduler(targetDir, context);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
+  const instagramMetricsSchedulerTimer = startInstagramMetricsScheduler(targetDir);
   const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
   const socialSellingRadarSchedulerTimer = startSocialSellingRadarScheduler(targetDir);
   const socialSellingEngagementSchedulerTimer = startSocialSellingEngagementScheduler(targetDir);
@@ -458,6 +461,7 @@ export async function startContentCentralServer({
       if (cloudWhatsAppPublishSchedulerTimer) clearInterval(cloudWhatsAppPublishSchedulerTimer);
       if (cloudArtGenerationSchedulerTimer) clearInterval(cloudArtGenerationSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
+      if (instagramMetricsSchedulerTimer) clearInterval(instagramMetricsSchedulerTimer);
       if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
       if (socialSellingRadarSchedulerTimer) clearInterval(socialSellingRadarSchedulerTimer);
       if (socialSellingEngagementSchedulerTimer) clearInterval(socialSellingEngagementSchedulerTimer);
@@ -805,6 +809,24 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const feedItems = content.filter((item) => item.channel === 'instagram_feed');
     const storyItems = content.filter((item) => item.channel === 'instagram_story');
     return sendHtml(res, renderProspectMockupPage(project, feedItems, storyItems));
+  }
+
+  if (method === 'GET' && parts.length === 4 && (parts[3] === 'reports' || parts[3] === 'report')) {
+    const project = await loadProject(getCentralPaths(targetDir, projectId)).catch(() => null);
+    if (!project) return sendJson(res, 404, { error: 'Project not found' });
+    const items = await listProjectContent(projectId, targetDir);
+
+    if (parts[3] === 'reports') {
+      return sendJson(res, 200, {
+        months: listReportMonths({ items }),
+        insightsEnabled: (project.token?.permissions || []).includes(INSIGHTS_PERMISSION),
+      });
+    }
+
+    const month = url.searchParams.get('month') || '';
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) return sendJson(res, 400, { error: 'Informe o mês no formato AAAA-MM.' });
+    const [metrics, agency] = await Promise.all([loadProjectMetrics(projectId, targetDir), getCommercialAgency(targetDir)]);
+    return sendHtml(res, renderReportPage(buildMonthlyReport({ project, agency, items, metrics, month })));
   }
 
   if (method === 'GET' && parts.length === 5 && parts[3] === 'whatsapp-instance' && parts[4] === 'status') {
@@ -5530,6 +5552,25 @@ async function sendAlertEmailViaGoogleWorkspace({ subject, body }) {
   ], {
     timeout: Number(process.env.OPENSQUAD_ALERT_EMAIL_TIMEOUT_MS || 30000),
   });
+}
+
+// Reads Instagram numbers for the monthly report. On by default, unlike
+// publishing: it only reads from Meta. Hourly because a story's numbers
+// exist only while it is live (24h) — see content-central-metrics.js.
+function startInstagramMetricsScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_METRICS === 'false') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_METRICS_CHECK_INTERVAL_MS || 3600000);
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    collectAllProjectsMetrics(targetDir)
+      .catch((err) => console.error('[content-central] metrics sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
 }
 
 function startAlertEmailScheduler(targetDir) {
