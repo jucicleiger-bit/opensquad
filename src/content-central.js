@@ -433,6 +433,9 @@ export function getCentralPaths(targetDir = process.cwd(), projectId = null) {
     // holds N independently-regenerable slides instead of 1 image.
     carouselsDir: join(projectDir, 'content', 'carousels'),
     tokenSecretPath: join(secretsDir, `${normalized}.token`),
+    // Instagram numbers for the monthly report — written only by the
+    // collector in content-central-metrics.js, never by the content flows.
+    metricsPath: join(projectDir, 'metrics', 'instagram.json'),
   };
 }
 
@@ -10601,6 +10604,32 @@ function formatDate(date) {
   return date.toISOString().slice(0, 10);
 }
 
+// Local-time keys: the monthly report and its metrics follow the operator's
+// own calendar, and toISOString() would file a 22:00 post under the next day
+// (and the last evening of a month under the next month).
+export function localDateKey(date) {
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+export function localMonthKey(date) {
+  return localDateKey(date).slice(0, 7);
+}
+
+export function previousMonthKey(month) {
+  const [year, monthNumber] = month.split('-').map(Number);
+  return localMonthKey(new Date(year, monthNumber - 2, 1));
+}
+
+const MONTH_NAMES_PT = [
+  'janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro',
+];
+
+export function monthNamePt(month) {
+  return MONTH_NAMES_PT[Number(month.split('-')[1]) - 1];
+}
+
 function addDays(dateString, days) {
   const [year, month, day] = dateString.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day + days));
@@ -10622,7 +10651,7 @@ function normalizeDaysOfWeek(value) {
   return [...new Set(raw.map((item) => String(item || '').trim().toLowerCase()).filter((item) => WEEKDAY_CODES.has(item)))];
 }
 
-async function readJson(path, fallback) {
+export async function readJson(path, fallback) {
   try {
     return JSON.parse(await readFile(path, 'utf-8'));
   } catch (err) {
@@ -10633,7 +10662,7 @@ async function readJson(path, fallback) {
 
 let writeJsonTempCounter = 0;
 
-async function writeJson(path, value) {
+export async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
   // Write to a temp file in the same directory, then rename over the real
   // path — rename is atomic on the same filesystem, so a crash mid-write
