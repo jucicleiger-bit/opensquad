@@ -15,6 +15,7 @@ import { Flyer } from "@/pages/workspace/Flyer";
 import { TestPost } from "@/pages/workspace/TestPost";
 import { PendingApproval } from "@/pages/workspace/PendingApproval";
 import { Calendar } from "@/pages/workspace/Calendar";
+import { Reports } from "@/pages/workspace/Reports";
 import { Account } from "@/pages/workspace/Account";
 import { AprendizadoSegmento } from "@/pages/AprendizadoSegmento";
 import { AprendizadoTipoOferta } from "@/pages/AprendizadoTipoOferta";
@@ -61,6 +62,7 @@ export function App() {
           <Route path="teste" element={<TestPost />} />
           <Route path="aguardando" element={<PendingApproval />} />
           <Route path="calendario" element={<Calendar />} />
+          <Route path="relatorios" element={<Reports />} />
           <Route path="conta" element={<Account />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

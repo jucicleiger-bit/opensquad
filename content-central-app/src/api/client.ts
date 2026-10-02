@@ -337,11 +337,12 @@ export interface ProjectSummary {
 }
 
 export interface SystemAlert {
-  type: "token_expired" | "token_expiring" | "publish_failed" | "media_upload_failed" | "topic_ideas_fallback" | "whatsapp_disconnected";
+  type: "token_expired" | "token_expiring" | "publish_failed" | "media_upload_failed" | "topic_ideas_fallback" | "whatsapp_disconnected" | "report_ready";
   key: string;
   projectId: string;
   projectName: string;
   message: string;
+  month?: string;
   contentId?: string;
   batchId?: string;
 }
@@ -539,6 +540,23 @@ export function createProspectFromScreenshot(
 
 export function prospectMockupUrl(projectId: string): string {
   return `/api/projects/${encodeURIComponent(projectId)}/prospect-mockup`;
+}
+
+export interface ReportMonth {
+  month: string;
+  label: string;
+  publications: number;
+  status: "parcial" | "fechando" | "pronto";
+}
+
+export function getReports(projectId: string): Promise<{ months: ReportMonth[]; insightsEnabled: boolean }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/reports`);
+}
+
+// The report is a standalone server page (like the prospect mockup), opened
+// in its own tab so the browser's print dialog can save it as a PDF.
+export function reportUrl(projectId: string, month: string): string {
+  return `/api/projects/${encodeURIComponent(projectId)}/report?month=${encodeURIComponent(month)}`;
 }
 
 // A "segment template" (e.g. "Embalagens") is a small library of

@@ -152,6 +152,12 @@ export function Account() {
             <span className="pill">Nenhum token configurado</span>
           )}
         </div>
+        {tokenInfo?.configured && !(tokenInfo.permissions || []).includes("instagram_manage_insights") ? (
+          <div className="notice" style={{ marginTop: 12 }}>
+            Este token não tem a permissão instagram_manage_insights. O relatório mensal sai sem visualizações e alcance. Para
+            incluir, gere o token de novo marcando essa permissão.
+          </div>
+        ) : null}
       </Card>
 
       <Card style={{ padding: 20, marginBottom: 20 }}>

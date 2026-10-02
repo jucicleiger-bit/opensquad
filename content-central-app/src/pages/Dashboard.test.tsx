@@ -172,6 +172,33 @@ describe("Dashboard", () => {
     expect(screen.getByText(/Falha ao publicar\./)).toBeInTheDocument();
   });
 
+  it("opens the reports tab from a report-ready alert", async () => {
+    stubFetch({
+      projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", token: {}, brandXray: { status: "empty" } }],
+      globalRules: {},
+      alerts: [
+        {
+          type: "report_ready",
+          key: "report_ready:boss-pizzaria:2026-09",
+          month: "2026-09",
+          projectId: "boss-pizzaria",
+          projectName: "Boss Pizzaria",
+          message: "Relatório de setembro pronto.",
+        },
+      ],
+    });
+
+    render(
+      <MemoryRouter>
+        <Dashboard />
+      </MemoryRouter>,
+    );
+
+    const open = await screen.findByRole("link", { name: "Abrir" });
+    expect(open).toHaveAttribute("href", "/projects/boss-pizzaria/relatorios");
+    expect(screen.queryByRole("button", { name: "Resolver" })).not.toBeInTheDocument();
+  });
+
   it("shows an empty state when there are no projects", async () => {
     stubFetch({ projects: [], globalRules: {} });
 

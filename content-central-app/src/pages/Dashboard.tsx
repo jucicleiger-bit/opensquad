@@ -365,11 +365,15 @@ export function Dashboard() {
                 <div style={{ display: "flex", gap: "var(--space-sm)", alignItems: "center" }}>
                   <Link
                     to={`/projects/${alert.projectId}/${
-                      alert.type === "publish_failed" || alert.type === "media_upload_failed" ? "calendario" : "conta"
+                      alert.type === "report_ready"
+                        ? "relatorios"
+                        : alert.type === "publish_failed" || alert.type === "media_upload_failed"
+                          ? "calendario"
+                          : "conta"
                     }`}
                   >
                     <Button type="button" variant="secondary">
-                      Resolver
+                      {alert.type === "report_ready" ? "Abrir" : "Resolver"}
                     </Button>
                   </Link>
                   <Button type="button" variant="ghost" onClick={() => handleDismissAlert(alert.key)}>

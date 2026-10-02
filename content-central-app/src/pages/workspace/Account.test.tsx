@@ -45,6 +45,21 @@ describe("Account", () => {
     expect(await screen.findByText("Nenhum token configurado")).toBeInTheDocument();
   });
 
+  it("says when the token cannot read reach", async () => {
+    const token = { configured: true, masked: "••••1234", expiresAt: null, status: "valido" };
+    stubFetchSequence([{ body: projectState({ token: { ...token, permissions: ["instagram_basic"] } }) }]);
+    renderAccount();
+    expect(await screen.findByText(/não tem a permissão instagram_manage_insights/)).toBeInTheDocument();
+  });
+
+  it("shows no reach warning for a token with the insights permission", async () => {
+    const token = { configured: true, masked: "••••1234", expiresAt: null, status: "valido" };
+    stubFetchSequence([{ body: projectState({ token: { ...token, permissions: ["instagram_basic", "instagram_manage_insights"] } }) }]);
+    renderAccount();
+    expect(await screen.findByText("••••1234")).toBeInTheDocument();
+    expect(screen.queryByText(/não tem a permissão instagram_manage_insights/)).not.toBeInTheDocument();
+  });
+
   it("shows the real token status when configured", async () => {
     const expiresAt = new Date(Date.now() + 61 * 86400000).toISOString();
     stubFetchSequence([

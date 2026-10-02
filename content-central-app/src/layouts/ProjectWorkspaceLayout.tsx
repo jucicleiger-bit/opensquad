@@ -27,6 +27,7 @@ const SECTIONS = [
   { to: "teste", label: "Teste seguro", group: "Conteúdo" },
   { to: "aguardando", label: "Aguardando aprovação", group: "Conteúdo" },
   { to: "calendario", label: "Calendário", group: "Conteúdo" },
+  { to: "relatorios", label: "Relatórios", group: "Conteúdo" },
   { to: "conta", label: "Conta e token", group: "Conta" },
 ];
 
