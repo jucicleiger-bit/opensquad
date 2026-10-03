@@ -2,9 +2,11 @@
 // plan, pending proposals and client notebook, plus the context it reads at
 // the start of a conversation. See
 // docs/superpowers/specs/2026-10-03-cerebro-do-projeto-design.md.
+import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import {
   applyPlanSlotChoices, buildOfferUsage, getCentralPaths, listProjectContent, loadProject,
   normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer, updateProjectBrandInput,
@@ -190,4 +192,92 @@ export async function buildBrainContext(projectId, targetDir) {
     '## Propostas pendentes',
     state.proposals.filter((proposal) => proposal.status === 'pending').map((proposal) => `- ${proposal.id}: ${proposal.summary}`).join('\n') || '(nenhuma)',
   ].join('\n\n');
+}
+
+const CEREBRO_CLI = fileURLToPath(new URL('../bin/cerebro.js', import.meta.url)).replaceAll('\\', '/');
+const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000;
+
+export function brainSystemPrompt(projectId) {
+  const cli = `node ${CEREBRO_CLI}`;
+  return [
+    `Você é o cérebro do projeto "${projectId}" no Content Central: o administrador do planejamento de conteúdo desse cliente (uma loja local).`,
+    'O operador (dono da agência) conversa com você para planejar a semana. Fale em português simples e direto, como um gerente de marketing. Não fale de código nem de arquivos.',
+    'Você só age pelo comando abaixo, usando a ferramenta Bash. Não leia nem edite arquivos.',
+    `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas.`,
+    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"instagram_feed|instagram_story|instagram_reels|facebook_feed|facebook_story|whatsapp_status","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo,"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático.`,
+    `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"<objetivo>":<percentual>}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD; "" apaga a validade.`,
+    'Regras:',
+    '- O plano você monta direto. Ofertas, percentuais do Raio-X e caderno você só PROPÕE; o operador aplica na tela.',
+    '- O caderno guarda o que vale sempre para esse cliente. Quando o operador disser algo que deve ser lembrado, ou que contradiz o caderno, proponha o caderno novo e diga o que sai e o que entra.',
+    '- Combo junta só ofertas do mesmo setor. Oferta fora da validade não entra. Story, Reels e Facebook Story no mesmo horário dividem a mesma arte, assim como Feed e Facebook Feed: use a mesma oferta neles.',
+    '- Você nunca gera nem publica. O operador aprova o plano na tela com "Aprovar e gerar".',
+    '- Termine cada resposta dizendo o que você fez e o que espera do operador.',
+  ].join('\n');
+}
+
+// One turn of the cérebro: `claude -p`, resuming the project's session.
+// --setting-sources project keeps the operator's personal plugins and hooks
+// (which restyle answers) out; the only tool is Bash, and only the cerebro
+// CLI runs without a prompt — anything else is denied in print mode. The
+// prompt goes through stdin: the first turn carries the whole project
+// context, which can outgrow Windows' command-line limit.
+export function runClaudeTurn({ prompt, sessionId, systemPrompt, cwd }) {
+  const args = ['-p', '--output-format', 'json', '--setting-sources', 'project', '--tools', 'Bash',
+    '--allowedTools', `Bash(node ${CEREBRO_CLI}:*)`, '--append-system-prompt', systemPrompt];
+  if (sessionId) args.push('--resume', sessionId);
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.env.CLAUDE_BIN || 'claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error('O cérebro demorou mais de 5 minutos e foi interrompido.'));
+    }, CLAUDE_TIMEOUT_MS);
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(new Error(`Não consegui abrir o Claude Code: ${err.message}`));
+    });
+    child.on('close', () => {
+      clearTimeout(timer);
+      let result;
+      try {
+        result = JSON.parse(stdout);
+      } catch {
+        return reject(new Error((stderr || stdout || 'O Claude Code não respondeu.').trim().slice(0, 500)));
+      }
+      if (result.is_error) return reject(new Error(String(result.result || 'O Claude Code devolveu erro.')));
+      resolve({ sessionId: result.session_id, text: String(result.result || '') });
+    });
+    child.stdin.end(prompt);
+  });
+}
+
+const busyProjects = new Set();
+
+export async function sendBrainMessage(projectId, text, targetDir, runner = runClaudeTurn) {
+  const message = String(text || '').trim();
+  if (!message) throw Object.assign(new Error('Mensagem vazia.'), { status: 400 });
+  if (busyProjects.has(projectId)) throw Object.assign(new Error('O cérebro ainda está respondendo.'), { status: 409 });
+  busyProjects.add(projectId);
+  try {
+    const { chat } = await readBrainState(projectId, targetDir);
+    await appendBrainMessages(projectId, [{ role: 'user', text: message, at: new Date().toISOString() }], null, targetDir);
+    const prompt = chat.sessionId
+      ? message
+      : `${await buildBrainContext(projectId, targetDir)}\n\n---\nMensagem do operador:\n${message}`;
+    const { dir } = brainPaths(targetDir, projectId);
+    await mkdir(dir, { recursive: true });
+    try {
+      const reply = await runner({ prompt, sessionId: chat.sessionId, systemPrompt: brainSystemPrompt(projectId), cwd: dir });
+      const next = await appendBrainMessages(projectId, [{ role: 'assistant', text: reply.text, at: new Date().toISOString() }], reply.sessionId, targetDir);
+      return { chat: next };
+    } catch (err) {
+      const failed = await appendBrainMessages(projectId, [{ role: 'error', text: err.message, at: new Date().toISOString() }], null, targetDir);
+      throw Object.assign(new Error(err.message), { status: 502, chat: failed });
+    }
+  } finally {
+    busyProjects.delete(projectId);
+  }
 }
