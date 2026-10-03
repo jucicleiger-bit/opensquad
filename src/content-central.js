@@ -458,6 +458,23 @@ export function calculateTokenDaysRemaining(expiresAt, now = new Date()) {
   return Math.max(0, Math.ceil((expiry.getTime() - now.getTime()) / DAY_MS));
 }
 
+// daysRemaining is null when Meta reports no expiration (a permanent
+// Page/System User token) — `null <= 10` coerces to true in JS, which
+// used to mislabel those valid, never-expiring tokens as "vence_em_breve".
+function tokenStatusFor(daysRemaining) {
+  return daysRemaining === null ? 'valido' : daysRemaining === 0 ? 'expirado' : daysRemaining <= 10 ? 'vence_em_breve' : 'valido';
+}
+
+// project.json keeps daysRemaining/status as they were on the day the token
+// was saved, so a token saved with 60 days left read "valido, 60 dias"
+// forever and never raised the expiry alert. Recomputed from expiresAt on
+// every read instead.
+function liveTokenState(token, now = new Date()) {
+  if (!token?.configured || !token.expiresAt) return token;
+  const daysRemaining = calculateTokenDaysRemaining(token.expiresAt, now);
+  return { ...token, daysRemaining, status: tokenStatusFor(daysRemaining) };
+}
+
 export async function createCentralProject(options, targetDir = process.cwd()) {
   const projectId = normalizeProjectId(options?.projectId || options?.name);
   const isProspect = Boolean(options?.isProspect);
@@ -986,10 +1003,7 @@ export async function saveProjectToken(projectId, tokenInput, targetDir = proces
     daysRemaining,
     lastValidatedAt: now.toISOString(),
     permissions: tokenInput.permissions || [],
-    // daysRemaining is null when Meta reports no expiration (a permanent
-    // Page/System User token) — `null <= 10` coerces to true in JS, which
-    // used to mislabel those valid, never-expiring tokens as "vence_em_breve".
-    status: daysRemaining === null ? 'valido' : daysRemaining === 0 ? 'expirado' : daysRemaining <= 10 ? 'vence_em_breve' : 'valido',
+    status: tokenStatusFor(daysRemaining),
   };
 
   if (tokenInput.account) {
@@ -1452,8 +1466,13 @@ export async function validateMetaToken(token, { fetchImpl = globalThis.fetch, n
   if (!response.ok) throw new Error(body?.error?.message || 'Não foi possível validar o token Meta');
   if (body?.data?.is_valid === false) throw new Error('Token Meta inválido ou expirado');
 
-  const expiresAt = body?.data?.expires_at
-    ? new Date(body.data.expires_at * 1000).toISOString()
+  // A user token can say expires_at 0 ("never") and still stop working on
+  // data_access_expires_at, 90 days after the last Facebook login — King's
+  // token read "sem validade" while Meta was going to cut it on 2026-10-23.
+  // The earlier of the two is when publishing actually breaks; 0 means none.
+  const cutoffs = [body?.data?.expires_at, body?.data?.data_access_expires_at].filter((seconds) => seconds > 0);
+  const expiresAt = cutoffs.length
+    ? new Date(Math.min(...cutoffs) * 1000).toISOString()
     : null;
 
   return {
@@ -4874,19 +4893,20 @@ export async function listSystemAlerts(targetDir = process.cwd(), options = {}) 
       });
     }
 
-    if (project.token?.status === 'expirado') {
+    const token = liveTokenState(project.token, now);
+    if (token?.status === 'expirado') {
       alerts.push({
         type: 'token_expired',
         projectId: project.projectId,
         projectName: project.name,
         message: 'Token da Meta expirado — publicação real vai falhar até renovar.',
       });
-    } else if (project.token?.status === 'vence_em_breve' && Number.isFinite(project.token.daysRemaining)) {
+    } else if (token?.status === 'vence_em_breve' && Number.isFinite(token.daysRemaining)) {
       alerts.push({
         type: 'token_expiring',
         projectId: project.projectId,
         projectName: project.name,
-        message: `Token da Meta vence em ${project.token.daysRemaining} dia(s).`,
+        message: `Token da Meta vence em ${token.daysRemaining} dia(s).`,
       });
     }
 
@@ -6003,7 +6023,7 @@ async function toProjectSummary(project) {
     technicalBase: normalizeTechnicalBase(project.technicalBase),
     brand: normalizeProjectBrand(project),
     offerAssets: normalizeProjectOfferAssets(project),
-    token: project.token,
+    token: liveTokenState(project.token),
     whatsapp: {
       configured: project.whatsapp?.configured || false,
       sessionName: project.whatsapp?.sessionName || '',

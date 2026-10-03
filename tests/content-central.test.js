@@ -2541,6 +2541,26 @@ test('validateMetaToken derives expiry days from only the pasted token', async (
   assert.equal(calls[0].includes('EAAB-token-from-panel'), true);
 });
 
+test('validateMetaToken treats data_access_expires_at as the expiry of a token that otherwise never expires', async () => {
+  const now = new Date('2026-10-03T12:00:00.000Z');
+  const debug = (data) => async (url) => {
+    if (String(url).includes('debug_token')) return { ok: true, json: async () => ({ data: { is_valid: true, scopes: [], ...data } }) };
+    return { ok: true, json: async () => ({ data: [] }) };
+  };
+  const dataAccessEnd = Math.floor(Date.parse('2026-10-23T12:00:00.000Z') / 1000);
+
+  const userToken = await validateMetaToken('EAAB-user', { fetchImpl: debug({ expires_at: 0, data_access_expires_at: dataAccessEnd }), now });
+  assert.equal(userToken.expiresAt, '2026-10-23T12:00:00.000Z');
+  assert.equal(userToken.daysRemaining, 20);
+
+  const earlierHardExpiry = Math.floor(Date.parse('2026-10-10T12:00:00.000Z') / 1000);
+  const both = await validateMetaToken('EAAB-both', { fetchImpl: debug({ expires_at: earlierHardExpiry, data_access_expires_at: dataAccessEnd }), now });
+  assert.equal(both.expiresAt, '2026-10-10T12:00:00.000Z');
+
+  const systemUser = await validateMetaToken('EAAB-system', { fetchImpl: debug({ expires_at: 0, data_access_expires_at: 0 }), now });
+  assert.equal(systemUser.expiresAt, null);
+});
+
 test('validateMetaToken keeps the account empty (not the debug_token user_id) when no Page/Instagram link resolves', async () => {
   const now = new Date('2026-07-15T12:00:00.000Z');
   const fakeFetch = async (url) => {
@@ -7844,7 +7864,7 @@ test('listSystemAlerts flags an expired token and one about to expire, but not a
       approvalEmail: 'aprovacao@example.com',
     }, dir);
 
-    const alerts = await listSystemAlerts(dir);
+    const alerts = await listSystemAlerts(dir, { now: new Date('2026-07-20T12:00:00.000Z') });
     const byProject = Object.fromEntries(alerts.map((a) => [a.projectId, a]));
 
     assert.equal(byProject['token-expirado'].type, 'token_expired');
@@ -7852,6 +7872,23 @@ test('listSystemAlerts flags an expired token and one about to expire, but not a
     assert.match(byProject['token-vencendo'].message, /5 dia/);
     assert.equal(byProject['token-permanente'], undefined);
     assert.equal(byProject['sem-token'], undefined);
+  });
+});
+
+// Production 2026-10-03: inova's token was saved on 2026-08-11 with 60 days
+// left and still read "valido, 60 dias" six days before it ran out, so the
+// alert never fired.
+test('listSystemAlerts counts the days left from today, not from the day the token was saved', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'token-antigo', name: 'Token Antigo', handle: '@tokenantigo', approvalEmail: 'aprovacao@example.com' }, dir);
+    await saveProjectToken('token-antigo', { token: 'EAAB-old-token', expiresAt: '2026-10-09T12:00:00.000Z' }, dir, new Date('2026-08-10T12:00:00.000Z'));
+
+    const soon = await listSystemAlerts(dir, { now: new Date('2026-10-03T12:00:00.000Z') });
+    assert.equal(soon.find((a) => a.projectId === 'token-antigo')?.type, 'token_expiring');
+    assert.match(soon.find((a) => a.projectId === 'token-antigo').message, /6 dia/);
+
+    const after = await listSystemAlerts(dir, { now: new Date('2026-10-10T12:00:00.000Z') });
+    assert.equal(after.find((a) => a.projectId === 'token-antigo')?.type, 'token_expired');
   });
 });
 
