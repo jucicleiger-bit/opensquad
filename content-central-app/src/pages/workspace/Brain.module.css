@@ -1,0 +1,88 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.message {
+  white-space: pre-wrap;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  max-width: 90%;
+  line-height: 1.45;
+}
+
+.user {
+  align-self: flex-end;
+  background: var(--soft);
+}
+
+.assistant {
+  align-self: flex-start;
+  background: var(--surface-2);
+}
+
+.error {
+  align-self: stretch;
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.proposal {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.proposal ul {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+}
+
+.notebookAfter {
+  white-space: pre-wrap;
+  font-family: inherit;
+  margin: 6px 0 0;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.day {
+  margin-bottom: 12px;
+  text-transform: none;
+}
+
+.day b::first-letter {
+  text-transform: uppercase;
+}
+
+.slot {
+  font-size: 14px;
+  margin-top: 4px;
+}

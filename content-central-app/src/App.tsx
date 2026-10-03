@@ -17,6 +17,7 @@ import { PendingApproval } from "@/pages/workspace/PendingApproval";
 import { Calendar } from "@/pages/workspace/Calendar";
 import { Reports } from "@/pages/workspace/Reports";
 import { Account } from "@/pages/workspace/Account";
+import { Brain } from "@/pages/workspace/Brain";
 import { AprendizadoSegmento } from "@/pages/AprendizadoSegmento";
 import { AprendizadoTipoOferta } from "@/pages/AprendizadoTipoOferta";
 import { ComercialAgencia } from "@/pages/ComercialAgencia";
@@ -55,6 +56,7 @@ export function App() {
           <Route path="referencias" element={<References />} />
           <Route path="ofertas" element={<Offers />} />
           <Route path="pilares" element={<Pillars />} />
+          <Route path="cerebro" element={<Brain />} />
           <Route path="gerar" element={<GenerateContent />} />
           <Route path="anuncios" element={<AdCreatives />} />
           <Route path="carrossel" element={<Carousels />} />

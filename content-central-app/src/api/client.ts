@@ -682,6 +682,8 @@ export interface PlannedContentSlot {
   source: string;
   label: string;
   offerId?: string | null;
+  // Set when the cérebro pinned this slot to one offer or a same-sector pair.
+  offerIds?: string[];
   offerName?: string;
   price?: string;
   goalKey?: string;
@@ -1678,4 +1680,66 @@ export function roleForReferenceCategory(category: string, usageRoles: string[])
   if (category === "official_asset") return "brand_asset";
   if (category === "real_product") return "product_photo";
   return usageRoles[0] || "visual_reference";
+}
+
+// The per-project planning agent ("cérebro") — see
+// src/content-central-brain.js and the Brain workspace tab.
+export interface BrainMessage {
+  role: "user" | "assistant" | "error";
+  text: string;
+  at: string;
+}
+
+export interface BrainChange {
+  kind: "offer" | "goalWeights" | "notebook";
+  offerId?: string;
+  field?: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface BrainProposal {
+  id: string;
+  summary: string;
+  changes: BrainChange[];
+  status: "pending" | "applied" | "rejected";
+  results?: { index: number; ok: boolean; error?: string }[];
+  createdAt: string;
+}
+
+export interface BrainPlan {
+  startDate: string;
+  days: number;
+  formats: GenerateFormatInput[];
+  plan: PlannedContentSchedule;
+  updatedAt: string;
+}
+
+export interface BrainState {
+  chat: { sessionId: string | null; messages: BrainMessage[] };
+  plan: BrainPlan | null;
+  proposals: BrainProposal[];
+  notebook: string;
+}
+
+const brainPath = (projectId: string) => `/api/projects/${encodeURIComponent(projectId)}/brain`;
+
+export function getBrain(projectId: string): Promise<BrainState> {
+  return api(brainPath(projectId));
+}
+
+export function sendBrainMessage(projectId: string, text: string): Promise<{ chat: BrainState["chat"] }> {
+  return api(`${brainPath(projectId)}/messages`, { method: "POST", body: JSON.stringify({ text }) });
+}
+
+export function resolveBrainProposal(
+  projectId: string,
+  proposalId: string,
+  action: "apply" | "reject",
+): Promise<{ proposal: BrainProposal }> {
+  return api(`${brainPath(projectId)}/proposals/${encodeURIComponent(proposalId)}/${action}`, { method: "POST", body: "{}" });
+}
+
+export function saveBrainNotebook(projectId: string, text: string): Promise<{ notebook: string }> {
+  return api(`${brainPath(projectId)}/notebook`, { method: "POST", body: JSON.stringify({ text }) });
 }
