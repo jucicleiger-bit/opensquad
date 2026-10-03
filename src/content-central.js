@@ -6685,22 +6685,37 @@ function offerIdsOfItem(item) {
   return ids.filter(Boolean);
 }
 
+// The longest schedule one generation can create (see the days check in
+// generateContentSchedulePlan).
+const MAX_SCHEDULE_DAYS = 60;
+
+// An unpublished piece only holds its offer while it is really upcoming:
+// scheduled from today up to one generation ahead. A draft left behind in
+// the past never went out, and a date typed years ahead (real ones exist
+// for 2029) would otherwise push its offer to the back of the queue.
+function isUpcoming(item, today) {
+  return Boolean(item.scheduledDate) && item.scheduledDate >= today && item.scheduledDate <= addDays(today, MAX_SCHEDULE_DAYS);
+}
+
 // When an item used its offers: the real publication time once it went
-// out, otherwise the slot it is scheduled for. Local time, so it compares
-// with the 'YYYY-MM-DD HH:MM' slot keys the schedule builds.
-function offerUseKey(item) {
+// out, otherwise the upcoming slot it is scheduled for ('' = not counted).
+// Local time, so it compares with the 'YYYY-MM-DD HH:MM' slot keys the
+// schedule builds.
+function offerUseKey(item, today) {
   if (item.publish?.publishedAt) {
     const published = new Date(item.publish.publishedAt);
     const pad = (value) => String(value).padStart(2, '0');
     return `${localDateKey(published)} ${pad(published.getHours())}:${pad(published.getMinutes())}`;
   }
-  return `${item.scheduledDate} ${item.scheduledTime || '00:00'}`;
+  return isUpcoming(item, today) ? `${item.scheduledDate} ${item.scheduledTime || '00:00'}` : '';
 }
 
-function offerUsageFromItems(items) {
+function offerUsageFromItems(items, now = new Date()) {
+  const today = localDateKey(now);
   const usage = new Map();
   for (const item of items) {
-    const when = offerUseKey(item);
+    const when = offerUseKey(item, today);
+    if (!when) continue;
     for (const offerId of offerIdsOfItem(item)) {
       if (when > (usage.get(offerId) || '')) usage.set(offerId, when);
     }
@@ -6722,7 +6737,7 @@ function leastRecentlyUsedOffer(offers, usage) {
 // list before repeating, and the next generation picks up from the history
 // on disk.
 function createOfferChooser(project, existingItems, options, targetDir) {
-  const usage = offerUsageFromItems(existingItems);
+  const usage = offerUsageFromItems(existingItems, options.now || new Date());
   const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
   return async function chooseOffer({ weekday, slotKey, pillar = null, activePillars = [] }) {
     let candidates = activeProjectOffers(project).filter((offer) => fitsWeekday(offer, weekday));
@@ -6832,12 +6847,12 @@ export function buildOfferUsage(project, items, now = new Date()) {
       if (publishedAt) {
         entry.publishedCount += 1;
         if (!entry.lastPublishedAt || publishedAt > entry.lastPublishedAt) entry.lastPublishedAt = publishedAt;
-      } else if (item.scheduledDate >= today && (!entry.nextScheduledDate || item.scheduledDate < entry.nextScheduledDate)) {
+      } else if (isUpcoming(item, today) && (!entry.nextScheduledDate || item.scheduledDate < entry.nextScheduledDate)) {
         entry.nextScheduledDate = item.scheduledDate;
       }
     }
   }
-  const usage = offerUsageFromItems(items);
+  const usage = offerUsageFromItems(items, now);
   const queue = [...activeProjectOffers(project)]
     .sort((a, b) => (usage.get(a.id) || '').localeCompare(usage.get(b.id) || ''))
     .map((offer) => offer.id);

@@ -27,6 +27,8 @@ async function withTempProject(fn) {
 }
 
 const ONE_STORY_A_DAY = [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }];
+// Pinned, so pieces scheduled in October stay "upcoming" whatever day the suite runs.
+const NOW = new Date(2026, 9, 3, 9);
 
 // A piece that already exists on disk, the way the panel leaves it.
 async function writeHistoryItem(dir, projectId, { offerId, offerName, scheduledDate, publishedAt = null, status = 'aprovado', products = null }) {
@@ -55,7 +57,7 @@ test('never-posted offers go first, then the one that has gone longest without g
     await writeHistoryItem(dir, 'fila', { offerId: a.id, offerName: 'Produto A', scheduledDate: '2026-09-20', publishedAt: '2026-09-20T13:00:00.000Z' });
     await writeHistoryItem(dir, 'fila', { offerId: c.id, offerName: 'Produto C', scheduledDate: '2026-09-01', publishedAt: '2026-09-01T13:00:00.000Z' });
 
-    const batch = await generateContentSchedulePlan('fila', { days: 4, startDate: '2026-10-05', formats: ONE_STORY_A_DAY }, dir);
+    const batch = await generateContentSchedulePlan('fila', { days: 4, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW }, dir);
 
     assert.deepEqual(offerNames(batch.items), ['Produto B', 'Produto C', 'Produto A', 'Produto B']);
   });
@@ -68,9 +70,9 @@ test('an offer added halfway through is not skipped and nothing repeats before e
     await saveProjectOffer('nova-oferta', { name: 'Produto B', type: 'offer' }, dir);
     await saveProjectOffer('nova-oferta', { name: 'Produto C', type: 'offer' }, dir);
 
-    const first = await generateContentSchedulePlan('nova-oferta', { days: 2, startDate: '2026-10-05', formats: ONE_STORY_A_DAY }, dir);
+    const first = await generateContentSchedulePlan('nova-oferta', { days: 2, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW }, dir);
     await saveProjectOffer('nova-oferta', { name: 'Produto D', type: 'offer' }, dir);
-    const second = await generateContentSchedulePlan('nova-oferta', { days: 3, startDate: '2026-10-07', formats: ONE_STORY_A_DAY }, dir);
+    const second = await generateContentSchedulePlan('nova-oferta', { days: 3, startDate: '2026-10-07', formats: ONE_STORY_A_DAY, now: NOW }, dir);
 
     assert.deepEqual(offerNames(first.items), ['Produto A', 'Produto B']);
     assert.deepEqual(offerNames(second.items), ['Produto C', 'Produto D', 'Produto A']);
@@ -86,7 +88,7 @@ test('with pillars, every offer of a pillar takes its turn instead of the same o
     await saveProjectOffer('pilares-fila', { name: 'Oferta 1', type: 'offer', pillarId: convida.pillar.id }, dir);
     await saveProjectOffer('pilares-fila', { name: 'Oferta 2', type: 'offer', pillarId: convida.pillar.id }, dir);
 
-    const batch = await generateContentSchedulePlan('pilares-fila', { days: 4, startDate: '2026-10-05', formats: ONE_STORY_A_DAY }, dir);
+    const batch = await generateContentSchedulePlan('pilares-fila', { days: 4, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW }, dir);
 
     const sales = batch.items.filter((item) => item.contentTopic.pillar?.role === 'convida').map((item) => item.contentTopic.offerName);
     assert.deepEqual(sales, ['Oferta 1', 'Oferta 2']);
@@ -100,7 +102,7 @@ test('a selected group keeps its turn order across generations', async () => {
     await saveProjectOffer('grupo-fila', { name: 'Alface', type: 'offer', groupId: group.id }, dir);
     await saveProjectOffer('grupo-fila', { name: 'Tomate', type: 'offer', groupId: group.id }, dir);
     await saveProjectOffer('grupo-fila', { name: 'Fora do grupo', type: 'offer' }, dir);
-    const options = (startDate, days) => ({ days, startDate, formats: ONE_STORY_A_DAY, groupIds: [group.id], offersOnly: true });
+    const options = (startDate, days) => ({ days, startDate, formats: ONE_STORY_A_DAY, groupIds: [group.id], offersOnly: true, now: NOW });
 
     const first = await generateContentSchedulePlan('grupo-fila', options('2026-10-05', 1), dir);
     const second = await generateContentSchedulePlan('grupo-fila', options('2026-10-06', 2), dir);
@@ -116,7 +118,7 @@ test('the plan preview shows the same offers the generation then uses', async ()
     await saveProjectOffer('previa', { name: 'Produto B', type: 'offer' }, dir);
     await saveProjectOffer('previa', { name: 'Produto C', type: 'offer' }, dir);
     await writeHistoryItem(dir, 'previa', { offerId: a.id, offerName: 'Produto A', scheduledDate: '2026-09-20', publishedAt: '2026-09-20T13:00:00.000Z' });
-    const options = { days: 3, startDate: '2026-10-05', formats: ONE_STORY_A_DAY };
+    const options = { days: 3, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW };
 
     const plan = await previewContentSchedulePlan('previa', options, dir);
     const batch = await generateContentSchedulePlan('previa', options, dir);
@@ -134,12 +136,30 @@ test('safe test posts neither count as having gone out nor follow the queue', as
     await saveProjectOffer('teste-fila', { name: 'Produto B', type: 'offer' }, dir);
     await writeHistoryItem(dir, 'teste-fila', { offerId: a.id, offerName: 'Produto A', scheduledDate: '2026-10-01', status: 'test_post_simulated' });
 
-    const batch = await generateContentSchedulePlan('teste-fila', { days: 1, startDate: '2026-10-05', formats: ONE_STORY_A_DAY }, dir);
+    const batch = await generateContentSchedulePlan('teste-fila', { days: 1, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW }, dir);
     assert.deepEqual(offerNames(batch.items), ['Produto A']);
 
     // An explicit topicOffset (the safe-test flow) keeps its own rotation.
     const pinned = await generateContentBatch('teste-fila', { days: 1, startDate: '2026-10-06', channel: 'instagram_story', topicOffset: 1 }, dir);
     assert.deepEqual(offerNames(pinned.items), ['Produto B']);
+  });
+});
+
+test('an abandoned draft or a piece mistakenly scheduled years ahead does not hold an offer back', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'datas-erradas', name: 'Datas Erradas' }, dir);
+    const a = (await saveProjectOffer('datas-erradas', { name: 'Produto A', type: 'offer' }, dir)).offer;
+    const b = (await saveProjectOffer('datas-erradas', { name: 'Produto B', type: 'offer' }, dir)).offer;
+    const c = (await saveProjectOffer('datas-erradas', { name: 'Produto C', type: 'offer' }, dir)).offer;
+    await writeHistoryItem(dir, 'datas-erradas', { offerId: a.id, offerName: 'Produto A', scheduledDate: '2029-07-27', status: 'draft_generated' });
+    await writeHistoryItem(dir, 'datas-erradas', { offerId: b.id, offerName: 'Produto B', scheduledDate: '2026-08-10', status: 'draft_generated' });
+
+    const usage = buildOfferUsage(await loadProjectForTest('datas-erradas', dir), await listProjectContent('datas-erradas', dir), NOW);
+    assert.equal(usage.offers[a.id].nextScheduledDate, null);
+    assert.deepEqual(usage.queue, [a.id, b.id, c.id]);
+
+    const batch = await generateContentSchedulePlan('datas-erradas', { days: 3, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW }, dir);
+    assert.deepEqual(offerNames(batch.items), ['Produto A', 'Produto B', 'Produto C']);
   });
 });
 

@@ -5619,17 +5619,22 @@ test('a selected group keeps its own product queue while authority posts are int
     await saveProjectOffer('fila-por-grupo', { name: 'Produto 2', groupId: group.id }, dir);
     await saveProjectOffer('fila-por-grupo', { name: 'Produto 3', groupId: group.id }, dir);
 
+    // "Today" pinned before the batches: unpublished pieces only count while
+    // they are upcoming, and these dates are already past on the real clock.
+    const now = new Date(2026, 7, 1, 9);
     const first = await generateContentSchedulePlan('fila-por-grupo', {
       days: 4,
       startDate: '2026-08-03',
       formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
       groupIds: [group.id],
+      now,
     }, dir);
     const second = await generateContentSchedulePlan('fila-por-grupo', {
       days: 2,
       startDate: '2026-08-07',
       formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
       groupIds: [group.id],
+      now,
     }, dir);
 
     const generatedOffers = [...first.items, ...second.items]
