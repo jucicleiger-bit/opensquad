@@ -190,3 +190,43 @@ test('buildOfferUsage counts publications, the last one, the next in line and th
     assert.deepEqual(usage.queue, [a.id, b.id, c.id]);
   });
 });
+
+test('an offer outside its validity window never takes a slot', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'validade', name: 'Validade' }, dir);
+    await saveProjectOffer('validade', { name: 'Sempre', type: 'offer' }, dir);
+    await saveProjectOffer('validade', { name: 'Sorteio', type: 'offer', validFrom: '2026-10-06', validUntil: '2026-10-07' }, dir);
+
+    const batch = await generateContentSchedulePlan('validade', { days: 5, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, now: NOW }, dir);
+
+    assert.deepEqual(offerNames(batch.items), ['Sempre', 'Sorteio', 'Sempre', 'Sempre', 'Sempre']);
+  });
+});
+
+test('offer validity and sector are saved trimmed; a bad date is dropped', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'campos', name: 'Campos' }, dir);
+    const { offer } = await saveProjectOffer('campos', { name: 'X', validFrom: '2026-10-01', validUntil: 'amanhã', sector: '  Higiene ' }, dir);
+    assert.equal(offer.validFrom, '2026-10-01');
+    assert.equal(offer.validUntil, '');
+    assert.equal(offer.sector, 'Higiene');
+  });
+});
+
+test('a combo never pairs offers of different sectors', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'setor', name: 'Setor' }, dir);
+    const { group } = await saveProjectOfferGroup('setor', { name: 'Geral', comboChance: 100 }, dir);
+    await saveProjectOffer('setor', { name: 'Sabonete', type: 'offer', groupId: group.id, sector: 'Higiene' }, dir);
+    await saveProjectOffer('setor', { name: 'Arroz', type: 'offer', groupId: group.id, sector: 'Mercearia' }, dir);
+    await saveProjectOffer('setor', { name: 'Feijão', type: 'offer', groupId: group.id, sector: 'mercearia' }, dir);
+
+    const batch = await generateContentSchedulePlan('setor', { days: 3, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, groupIds: [group.id], offersOnly: true, now: NOW }, dir);
+
+    for (const item of batch.items) {
+      const names = (item.contentTopic.products || []).map((product) => product.name).sort();
+      if (names.length) assert.deepEqual(names, ['Arroz', 'Feijão']);
+    }
+    assert.ok(batch.items.some((item) => item.contentTopic.offerName === 'Sabonete'));
+  });
+});

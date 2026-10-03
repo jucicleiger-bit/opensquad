@@ -6632,7 +6632,7 @@ async function buildTopicPool(project, options = {}, targetDir) {
   const offerTopics = await Promise.all(
     activeProjectOffers(project)
       .filter((offer) => !groupIds || groupIds.has(offer.groupId))
-      .filter((offer) => !options.weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(options.weekday))
+      .filter((offer) => fitsSlot(offer, options.weekday, options.date))
       .map((offer) => offerToContentTopic(offer, targetDir))
   );
   if (options.offersOnly) return offerTopics;
@@ -6740,7 +6740,8 @@ function createOfferChooser(project, existingItems, options, targetDir) {
   const usage = offerUsageFromItems(existingItems, options.now || new Date());
   const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
   return async function chooseOffer({ weekday, slotKey, pillar = null, activePillars = [] }) {
-    let candidates = activeProjectOffers(project).filter((offer) => fitsWeekday(offer, weekday));
+    const date = String(slotKey || '').slice(0, 10) || null;
+    let candidates = activeProjectOffers(project).filter((offer) => fitsSlot(offer, weekday, date));
     if (groupIds) candidates = candidates.filter((offer) => groupIds.has(offer.groupId));
     if (pillar) {
       candidates = candidates.filter((offer) => (
@@ -6749,7 +6750,7 @@ function createOfferChooser(project, existingItems, options, targetDir) {
     }
     if (!candidates.length) return null;
     const primary = leastRecentlyUsedOffer(candidates, usage);
-    const partner = groupIds ? pickComboPartner(candidates, primary, project, weekday) : null;
+    const partner = groupIds ? pickComboPartner(candidates, primary, project, weekday, date) : null;
     usage.set(primary.id, slotKey);
     if (partner) usage.set(partner.id, slotKey);
     return partner ? buildComboOfferTopic(primary, partner, targetDir) : offerToContentTopic(primary, targetDir);
@@ -6786,13 +6787,14 @@ async function createScheduleTopicPicker(project, options, targetDir, existingIt
   const topicByCreativeGroupKey = new Map();
 
   async function next(channel, creativeGroupKey, weekday, slotKey) {
+    const date = String(slotKey || '').slice(0, 10) || undefined;
     if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) {
       return topicByCreativeGroupKey.get(creativeGroupKey);
     }
     let topic;
     let slotPillar = null;
     if (pillarSequence.length) {
-      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday, date }, targetDir);
       const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
       pillarCursor = selected.nextPillarCursor;
       topicCursor += 1;
@@ -6804,7 +6806,7 @@ async function createScheduleTopicPicker(project, options, targetDir, existingIt
         ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
       };
     } else {
-      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday, date }, targetDir);
       topicCursor += 1;
     }
     if (topic.source === 'offer') {
@@ -6854,13 +6856,14 @@ export function buildOfferUsage(project, items, now = new Date()) {
   }
   const usage = offerUsageFromItems(items, now);
   const queue = [...activeProjectOffers(project)]
+    .filter((offer) => !offer.validUntil || offer.validUntil >= today)
     .sort((a, b) => (usage.get(a.id) || '').localeCompare(usage.get(b.id) || ''))
     .map((offer) => offer.id);
   return { offers, queue };
 }
 
 async function buildContentTopic(project, index, context = {}, targetDir) {
-  const topics = await buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday }, targetDir);
+  const topics = await buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday, date: context.date }, targetDir);
   const topic = topics[index % topics.length];
   return {
     ...topic,
@@ -6975,11 +6978,18 @@ async function offerToContentTopic(offer, targetDir) {
 // behavior. Never fires for an offer that is already a manual combo
 // (type: 'combo') — combos never nest — nor for an offer with flavors,
 // whose arte is already the full set of its own variations.
-function fitsWeekday(offer, weekday) {
-  return !weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday);
+function fitsSlot(offer, weekday, date) {
+  if (weekday && offer.daysOfWeek?.length && !offer.daysOfWeek.includes(weekday)) return false;
+  if (date && offer.validFrom && date < offer.validFrom) return false;
+  if (date && offer.validUntil && date > offer.validUntil) return false;
+  return true;
 }
 
-function pickComboPartner(offers, primary, project, weekday) {
+function sameSector(a, b) {
+  return String(a.sector || '').trim().toLowerCase() === String(b.sector || '').trim().toLowerCase();
+}
+
+function pickComboPartner(offers, primary, project, weekday, date) {
   if (primary.type === 'combo' || primary.uniqueProposal || primary.flavors?.length || !primary.groupId) return null;
   const group = normalizeProjectOfferGroups(project?.contentStrategy?.offerGroups || [])
     .find((entry) => entry.id === primary.groupId);
@@ -6987,7 +6997,7 @@ function pickComboPartner(offers, primary, project, weekday) {
   if (chance <= 0 || Math.random() * 100 >= chance) return null;
   const candidates = offers.filter((offer) => (
     offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo'
-    && !offer.uniqueProposal && !offer.flavors?.length && fitsWeekday(offer, weekday)
+    && !offer.uniqueProposal && !offer.flavors?.length && fitsSlot(offer, weekday, date) && sameSector(offer, primary)
   ));
   if (!candidates.length) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
@@ -9934,6 +9944,14 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     // pizzeria's weekday rodízio price vs its separate weekend price, each
     // as its own offer. See buildTopicPool's weekday filter.
     daysOfWeek: normalizeDaysOfWeek(input?.daysOfWeek),
+    // Optional validity window (YYYY-MM-DD, inclusive). Empty = always
+    // valid, unchanged from before. See fitsSlot.
+    validFrom: normalizeDateKey(input?.validFrom),
+    validUntil: normalizeDateKey(input?.validUntil),
+    // Product sector ("Hortifruti", "Higiene"…). A combo only pairs offers
+    // of the same sector — groups mix sector and campaign, so grouping
+    // alone let hygiene pair with food. See sameSector.
+    sector: String(input?.sector || '').trim(),
     // Catalog-mode projects (venda direta) tie an offer/product to one or
     // more uploaded reference photos, unlike marketing-mode offers which
     // just draw from the general reference pool. Each id points at a
@@ -10699,6 +10717,11 @@ function weekdayFromDate(dateString) {
   const [year, month, day] = dateString.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
   return WEEKDAY_BY_INDEX[date.getUTCDay()];
+}
+
+function normalizeDateKey(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(`${text}T00:00:00Z`)) ? text : '';
 }
 
 function normalizeDaysOfWeek(value) {
