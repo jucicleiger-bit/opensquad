@@ -3511,8 +3511,11 @@ function buildApprovedPlanOverrideMap(approvedPlan) {
       const id = cleanApprovedPlanText(slot?.id, 120);
       const label = cleanApprovedPlanText(slot?.label, 220);
       const reason = cleanApprovedPlanText(slot?.reason, 500);
-      if (!id || (!label && !reason)) continue;
-      map.set(id, { id, label, reason });
+      const offerIds = Array.isArray(slot?.offerIds)
+        ? slot.offerIds.map((value) => cleanApprovedPlanText(value, 120)).filter(Boolean).slice(0, 2)
+        : [];
+      if (!id || (!label && !reason && !offerIds.length)) continue;
+      map.set(id, { id, label, reason, offerIds });
     }
   }
   return map;
@@ -3613,6 +3616,9 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
 
 
   const carouselDayIndexes = carouselWeekdaysForRange(days, carouselsPerWeek);
+  // Same-shape channels at one slot share one creative, so they can't be
+  // pinned to different offers.
+  const pinnedByCreativeGroup = new Map();
 
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
     const dayNumber = dayIndex + 1;
@@ -3634,7 +3640,23 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
           approvedPlanOverride
         );
         const contentId = nextFreeContentId(`${project.projectId}-${scheduledDate}-${format.channel}`, slotNumber, takenContentIds);
-        const contentTopic = withProductRotationSeed(baseContentTopic, contentId);
+        // A pinned slot (the operator's or the cérebro's choice of offer)
+        // replaces the rotation's pick. The picker still ran above so the
+        // other slots stay exactly as the reviewed preview showed them.
+        const pinnedOfferIds = approvedPlanOverride?.offerIds || [];
+        if (pinnedOfferIds.length && creativeGroupKey) {
+          const pinKey = pinnedOfferIds.join('+');
+          const seen = pinnedByCreativeGroup.get(creativeGroupKey);
+          if (seen && seen !== pinKey) throw new Error(`Horário ${planSlotId}: canais do mesmo formato no mesmo horário dividem a arte — use a mesma oferta.`);
+          pinnedByCreativeGroup.set(creativeGroupKey, pinKey);
+        }
+        const slotTopic = pinnedOfferIds.length
+          ? applyApprovedPlanOverrideToTopic(
+            { ...(await topicForPinnedOffers(project, planSlotId, pinnedOfferIds, scheduledDate, targetDir)), channel: format.channel },
+            { ...approvedPlanOverride, label: '' },
+          )
+          : baseContentTopic;
+        const contentTopic = withProductRotationSeed(slotTopic, contentId);
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const filePath = join(batchDir, `${fileName}.json`);
         const imageLocalPath = `content/drafts/${batchId}/images/${fileName}.svg`;
@@ -3824,6 +3846,47 @@ function buildPlanSummary(plan) {
     ? 'gerando apenas o(s) grupo(s) selecionado(s)'
     : 'misturando ofertas permitidas com objetivos do Raio-X quando houver';
   return `${parts.join(' + ')} em ${plan.days} dia(s), ${mode}. Extras não descontam da meta diária.`;
+}
+
+// Applies the cérebro's per-slot choices to a preview plan, validating each
+// pinned slot with the same rules generation uses, so a plan shown in the
+// panel is a plan that will generate.
+export async function applyPlanSlotChoices(projectId, plan, choices, targetDir = process.cwd()) {
+  const project = await loadProject(getCentralPaths(targetDir, projectId));
+  const byId = new Map((Array.isArray(choices) ? choices : []).map((choice) => [String(choice?.id || ''), choice]));
+  const known = new Set(plan.dayPlans.flatMap((day) => day.regular.map((slot) => slot.id)));
+  for (const id of byId.keys()) if (!known.has(id)) throw new Error(`Horário ${id} não existe neste plano.`);
+  const dayPlans = [];
+  for (const day of plan.dayPlans) {
+    const regular = [];
+    for (const slot of day.regular) {
+      const choice = byId.get(slot.id);
+      if (!choice) { regular.push(slot); continue; }
+      const offerIds = Array.isArray(choice.offerIds) ? choice.offerIds.map(String).filter(Boolean).slice(0, 2) : [];
+      const reason = cleanApprovedPlanText(choice.reason, 500) || slot.reason;
+      if (!offerIds.length) {
+        regular.push({ ...slot, label: cleanApprovedPlanText(choice.label, 220) || slot.label, reason });
+        continue;
+      }
+      const topic = await topicForPinnedOffers(project, slot.id, offerIds, slot.date, targetDir);
+      const name = topic.products?.length ? topic.products.map((product) => product.name).join(' + ') : topic.offerName;
+      const rest = { ...slot };
+      delete rest.topic;
+      regular.push({
+        ...rest,
+        kind: 'Venda',
+        source: 'offer',
+        offerIds,
+        offerId: offerIds[0],
+        offerName: name,
+        price: topic.products?.length ? topic.products.map((product) => product.price).join(' + ') : topic.price,
+        label: `Venda — ${name}`,
+        reason,
+      });
+    }
+    dayPlans.push({ ...day, regular });
+  }
+  return { ...plan, dayPlans };
 }
 
 export async function previewContentSchedulePlan(projectId, options = {}, targetDir = process.cwd()) {
@@ -6987,6 +7050,30 @@ function fitsSlot(offer, weekday, date) {
 
 function sameSector(a, b) {
   return String(a.sector || '').trim().toLowerCase() === String(b.sector || '').trim().toLowerCase();
+}
+
+// The topic of a plan slot pinned to one offer or a side-by-side pair. Same
+// eligibility as the automatic rotation; an invalid pin is an error naming
+// the slot, never a silent swap, because the operator approved exactly this.
+async function topicForPinnedOffers(project, slotId, offerIds, date, targetDir) {
+  const offers = activeProjectOffers(project);
+  const weekday = weekdayFromDate(date);
+  const picked = offerIds.map((offerId) => {
+    const offer = offers.find((entry) => entry.id === offerId);
+    if (!offer) throw new Error(`Horário ${slotId}: a oferta ${offerId} não existe ou está pausada.`);
+    if (!fitsSlot(offer, weekday, date)) throw new Error(`Horário ${slotId}: a oferta ${offer.name} não vale em ${date}.`);
+    return offer;
+  });
+  if (picked.length === 1) return offerToContentTopic(picked[0], targetDir);
+  const [a, b] = picked;
+  if (a.id === b.id) throw new Error(`Horário ${slotId}: o combo precisa de duas ofertas diferentes.`);
+  if (!sameSector(a, b)) throw new Error(`Horário ${slotId}: ${a.name} e ${b.name} são de setor diferente — combo só junta o mesmo setor.`);
+  for (const offer of picked) {
+    if (offer.type === 'combo' || offer.uniqueProposal || offer.flavors?.length) {
+      throw new Error(`Horário ${slotId}: ${offer.name} não pode entrar em combo.`);
+    }
+  }
+  return buildComboOfferTopic(a, b, targetDir);
 }
 
 function pickComboPartner(offers, primary, project, weekday, date) {

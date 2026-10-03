@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  applyPlanSlotChoices,
   buildOfferUsage,
   createCentralProject,
   generateContentBatch,
@@ -228,5 +229,54 @@ test('a combo never pairs offers of different sectors', async () => {
       if (names.length) assert.deepEqual(names, ['Arroz', 'Feijão']);
     }
     assert.ok(batch.items.some((item) => item.contentTopic.offerName === 'Sabonete'));
+  });
+});
+
+test('an approved plan slot with offerIds generates exactly those offers', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'fixo', name: 'Fixo' }, dir);
+    await saveProjectOffer('fixo', { name: 'A', type: 'offer', sector: 'Mercearia' }, dir);
+    const b = (await saveProjectOffer('fixo', { name: 'B', type: 'offer', sector: 'Mercearia' }, dir)).offer;
+    const c = (await saveProjectOffer('fixo', { name: 'C', type: 'offer', sector: 'Mercearia' }, dir)).offer;
+    const approvedPlan = { dayPlans: [
+      { date: '2026-10-05', regular: [{ id: '2026-10-05-instagram_story-01', offerIds: [c.id] }] },
+      { date: '2026-10-06', regular: [{ id: '2026-10-06-instagram_story-01', offerIds: [b.id, c.id] }] },
+    ] };
+
+    const batch = await generateContentSchedulePlan('fixo', { days: 2, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, approvedPlan, now: NOW }, dir);
+
+    assert.equal(batch.items[0].contentTopic.offerName, 'C');
+    assert.deepEqual(batch.items[1].contentTopic.products.map((p) => p.name), ['B', 'C']);
+  });
+});
+
+test('a pinned slot with an expired offer or mixed sectors fails naming the slot', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'fixo-ruim', name: 'Fixo Ruim' }, dir);
+    const old = (await saveProjectOffer('fixo-ruim', { name: 'Velha', type: 'offer', validUntil: '2026-10-01' }, dir)).offer;
+    const soap = (await saveProjectOffer('fixo-ruim', { name: 'Sabonete', type: 'offer', sector: 'Higiene' }, dir)).offer;
+    const rice = (await saveProjectOffer('fixo-ruim', { name: 'Arroz', type: 'offer', sector: 'Mercearia' }, dir)).offer;
+    const plan = (ids) => ({ dayPlans: [{ date: '2026-10-05', regular: [{ id: '2026-10-05-instagram_story-01', offerIds: ids }] }] });
+    const run = (ids) => generateContentSchedulePlan('fixo-ruim', { days: 1, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, approvedPlan: plan(ids), now: NOW }, dir);
+
+    await assert.rejects(run([old.id]), /2026-10-05-instagram_story-01.*Velha/);
+    await assert.rejects(run([soap.id, rice.id]), /2026-10-05-instagram_story-01.*setor/);
+  });
+});
+
+test('applyPlanSlotChoices rewrites the preview slot so the operator sees the pinned offer', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'escolha', name: 'Escolha' }, dir);
+    await saveProjectOffer('escolha', { name: 'A', type: 'offer' }, dir);
+    const b = (await saveProjectOffer('escolha', { name: 'B', type: 'offer', price: '9,90' }, dir)).offer;
+    const preview = await previewContentSchedulePlan('escolha', { days: 1, startDate: '2026-10-05', formats: ONE_STORY_A_DAY }, dir);
+
+    const plan = await applyPlanSlotChoices('escolha', preview, [{ id: '2026-10-05-instagram_story-01', offerIds: [b.id], reason: 'Foco da semana' }], dir);
+
+    const slot = plan.dayPlans[0].regular[0];
+    assert.deepEqual(slot.offerIds, [b.id]);
+    assert.equal(slot.offerName, 'B');
+    assert.equal(slot.label, 'Venda — B');
+    assert.equal(slot.reason, 'Foco da semana');
   });
 });
