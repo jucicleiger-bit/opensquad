@@ -79,8 +79,8 @@ silently falls back. Label/reason overrides keep working as today.
     `formats` (channel, posts/day, start time, interval — the same shape
     GenerateContent.tsx sends; formats are not persisted anywhere today, so
     the cérebro decides them, and the client's usual schedule lives in the
-    notebook). Builds the week via the existing `/plan` preview, then applies the cérebro's slot choices (`offerIds`, label,
-    reason, time) and saves it as the project's current draft plan.
+    notebook). Builds the week via the existing `/plan` preview, then applies the cérebro's slot choices (`offerIds`, label
+    reason; times come from `formats`) and saves it as the project's current draft plan.
   - `propose <project> <json>` — records a pending proposal (section 3).
 - One message at a time per project: a second message while one is running
   gets HTTP 409 "O cérebro ainda está respondendo".
