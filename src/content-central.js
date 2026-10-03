@@ -1780,7 +1780,12 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
     topicCount
   );
-  const selectedOfferRotator = createSelectedOfferRotator(project, options);
+  // An explicit topicOffset (the safe-test flow, see simulateTestPost) keeps
+  // its own positional rotation; everything else takes the offer that has
+  // gone longest without going out (createOfferChooser).
+  const chooseOffer = options.topicOffset === undefined
+    ? createOfferChooser(project, await listProjectContent(projectId, targetDir), options, targetDir)
+    : null;
   // A specific product/offer requested by id (e.g. "Teste rápido" picking one
   // from "Ofertas e assuntos") — resolved directly against the offer list,
   // bypassing buildContentTopic's pool-index rotation entirely. That pool is
@@ -1824,7 +1829,9 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     const contentId = `${project.projectId}-${scheduledDate}-${channel}`;
     const baseTopic = await buildContentTopic(project, topicOffset + index, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday: weekdayFromDate(scheduledDate) }, targetDir);
     const queuedOffer = forcedOfferTopic
-      || (baseTopic.source === 'offer' ? await nextSelectedOffer(selectedOfferRotator, weekdayFromDate(scheduledDate), targetDir, project) : null);
+      || (baseTopic.source === 'offer' && chooseOffer
+        ? await chooseOffer({ weekday: weekdayFromDate(scheduledDate), slotKey: `${scheduledDate} ${postTime}` })
+        : null);
     const contentTopic = withProductRotationSeed({ ...baseTopic, ...(queuedOffer || {}), channel }, contentId);
     const filePath = join(batchDir, `day-${String(dayNumber).padStart(2, '0')}.json`);
     const imageFileName = `day-${String(dayNumber).padStart(2, '0')}.svg`;
@@ -1893,7 +1900,6 @@ export async function generateContentBatch(projectId, options = {}, targetDir = 
     ...(project.contentStrategy || {}),
     nextScheduleTopicIndex: normalizeTopicIndex(topicOffset + days, topicCount),
   };
-  saveSelectedOfferRotator(project, selectedOfferRotator);
   await writeJson(paths.projectPath, project);
   return batch;
   });
@@ -3577,19 +3583,12 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
 
   const startDate = options.startDate || formatDate(new Date());
   const formats = normalizeScheduleFormats(options.formats || []);
-  const takenContentIds = new Set((await listProjectContent(projectId, targetDir)).map((item) => item.contentId));
+  const existingItems = await listProjectContent(projectId, targetDir);
+  const takenContentIds = new Set(existingItems.map((item) => item.contentId));
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
   const approvedPlanOverrides = buildApprovedPlanOverrideMap(options.approvedPlan);
   await refreshProjectTopicIdeasInPlace(project, paths, { topicIdeaGenerator: options.topicIdeaGenerator }, new Date());
-  const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
-  if (options.offersOnly && !topicCount) {
-    throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
-  }
-  const topicOffset = normalizeTopicIndex(
-    options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
-    topicCount
-  );
-  const selectedOfferRotator = createSelectedOfferRotator(project, options);
+  const picker = await createScheduleTopicPicker(project, options, targetDir, existingItems);
   // Same date+days used to reuse the folder and overwrite the earlier plan's
   // files; a stacked plan gets its own.
   const baseBatchId = `${startDate}-${String(days).padStart(2, '0')}d-plano-formatos`;
@@ -3612,61 +3611,6 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
 
   await mkdir(imageDir, { recursive: true });
 
-  // Channels with the same pixel shape (Story/Reels/Facebook Story are all
-  // 9:16; Feed/Facebook Feed are both 4:5) get paired up by day+slot below so
-  // they can later share a single AI-generated creative instead of each
-  // burning its own generation call — see creativeShapeGroupForChannel().
-  // Pairing on the topic here (not just the image later) matters: siblings
-  // must depict the same offer/subject or a "shared" image would show one
-  // offer while the caption talks about another.
-  const topicByCreativeGroupKey = new Map();
-  // When the project has active pillars, topic selection becomes a two-step
-  // pick: which pillar this slot represents (weighted rotation, never two
-  // "convida" pillars back to back), then which topic within that pillar's
-  // matching offers/goals — reusing the same flat topicCursor for the
-  // within-pillar pick so no extra persisted cursor is needed per pillar.
-  // Projects without pillars configured fall through to the original flat
-  // round-robin untouched.
-  const activePillars = normalizeProjectPillars(project.contentStrategy?.pillars || [])
-    .filter((pillar) => pillar.active !== false);
-  const pillarSequence = activePillars.length ? buildPillarRotationSequence(activePillars) : [];
-  let pillarCursor = normalizeTopicIndex(project.contentStrategy?.nextPillarSequenceIndex, pillarSequence.length || 1);
-  let topicCursor = topicOffset;
-  async function nextContentTopic(channel, creativeGroupKey, weekday) {
-    if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) {
-      return topicByCreativeGroupKey.get(creativeGroupKey);
-    }
-    let topic;
-    if (pillarSequence.length) {
-      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
-      const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
-      pillarCursor = selected.nextPillarCursor;
-      topicCursor += 1;
-      topic = {
-        ...selected.topic,
-        channel: channel || '',
-        sequence: topicCursor,
-        ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
-      };
-    } else {
-      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
-      topicCursor += 1;
-    }
-    if (topic.source === 'offer') {
-      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir, project);
-      if (queuedOffer) {
-        const queuedPillar = resolveTopicPillar(queuedOffer, activePillars);
-        topic = {
-          ...topic,
-          ...queuedOffer,
-          channel: channel || topic.channel,
-          ...(queuedPillar ? { pillar: pillarSnapshotFrom(queuedPillar) } : { pillar: undefined }),
-        };
-      }
-    }
-    if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
-    return topic;
-  }
 
   const carouselDayIndexes = carouselWeekdaysForRange(days, carouselsPerWeek);
 
@@ -3686,7 +3630,7 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
         const planSlotId = `${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const approvedPlanOverride = approvedPlanOverrides.get(planSlotId);
         const baseContentTopic = applyApprovedPlanOverrideToTopic(
-          { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel },
+          { ...(await picker.next(format.channel, creativeGroupKey, weekday, `${scheduledDate} ${scheduledTime}`)), channel: format.channel },
           approvedPlanOverride
         );
         const contentId = nextFreeContentId(`${project.projectId}-${scheduledDate}-${format.channel}`, slotNumber, takenContentIds);
@@ -3821,10 +3765,8 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   await writeJson(join(batchDir, 'batch.json'), batch);
   project.contentStrategy = {
     ...(project.contentStrategy || {}),
-    nextScheduleTopicIndex: normalizeTopicIndex(topicCursor, topicCount),
-    nextPillarSequenceIndex: normalizeTopicIndex(pillarCursor, pillarSequence.length || 1),
+    ...picker.cursors(),
   };
-  saveSelectedOfferRotator(project, selectedOfferRotator);
   await writeJson(paths.projectPath, project);
   return batch;
   });
@@ -3897,55 +3839,7 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
   await refreshProjectTopicIdeas(projectId, { topicIdeaGenerator: options.topicIdeaGenerator, force: false }, targetDir, new Date());
   const refreshedProject = await loadProject(paths);
   Object.assign(project, refreshedProject);
-  const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
-  if (options.offersOnly && !topicCount) {
-    throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
-  }
-  const topicOffset = normalizeTopicIndex(
-    options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
-    topicCount
-  );
-  const selectedOfferRotator = createSelectedOfferRotator(project, options);
-  const activePillars = normalizeProjectPillars(project.contentStrategy?.pillars || [])
-    .filter((pillar) => pillar.active !== false);
-  const pillarSequence = activePillars.length ? buildPillarRotationSequence(activePillars) : [];
-  let pillarCursor = normalizeTopicIndex(project.contentStrategy?.nextPillarSequenceIndex, pillarSequence.length || 1);
-  let topicCursor = topicOffset;
-  const topicByCreativeGroupKey = new Map();
-
-  async function nextContentTopic(channel, creativeGroupKey, weekday) {
-    if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) return topicByCreativeGroupKey.get(creativeGroupKey);
-    let topic;
-    if (pillarSequence.length) {
-      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
-      const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
-      pillarCursor = selected.nextPillarCursor;
-      topicCursor += 1;
-      topic = {
-        ...selected.topic,
-        channel: channel || '',
-        sequence: topicCursor,
-        ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
-      };
-    } else {
-      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
-      topicCursor += 1;
-    }
-    if (topic.source === 'offer') {
-      const queuedOffer = await nextSelectedOffer(selectedOfferRotator, weekday, targetDir, project);
-      if (queuedOffer) {
-        const queuedPillar = resolveTopicPillar(queuedOffer, activePillars);
-        topic = {
-          ...topic,
-          ...queuedOffer,
-          channel: channel || topic.channel,
-          ...(queuedPillar ? { pillar: pillarSnapshotFrom(queuedPillar) } : { pillar: undefined }),
-        };
-      }
-    }
-    if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
-    return topic;
-  }
+  const picker = await createScheduleTopicPicker(project, options, targetDir, await listProjectContent(projectId, targetDir));
 
   const dayPlans = [];
   for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
@@ -3960,7 +3854,7 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
         const scheduledTime = addMinutesToTime(format.startTime, slotIndex * format.intervalMinutes);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
         const creativeGroupKey = shapeGroup ? `${startDate}-${String(days).padStart(2, '0')}d-preview::${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
-        const topic = { ...(await nextContentTopic(format.channel, creativeGroupKey, weekday)), channel: format.channel };
+        const topic = { ...(await picker.next(format.channel, creativeGroupKey, weekday, `${scheduledDate} ${scheduledTime}`)), channel: format.channel };
         dayPlan.regular.push(planSlotFromTopic({ topic, channel: format.channel, format, scheduledDate, scheduledTime, dayNumber, slotNumber, options }));
       }
     }
@@ -6772,10 +6666,6 @@ async function buildTopicPool(project, options = {}, targetDir) {
   });
 }
 
-// A group is a publishing queue as well as an organizer. Keeping its cursor
-// separately means a generation for "Produtos de venda" can be interleaved
-// with authority/relationship topics without losing its place when another
-// group (or the unfiltered project) is generated in between.
 function activeProjectOffers(project) {
   const existingGroupIds = new Set(normalizeProjectOfferGroups(project.contentStrategy?.offerGroups || []).map((group) => group.id));
   return normalizeProjectOffers(project.contentStrategy?.offers || [])
@@ -6783,48 +6673,175 @@ function activeProjectOffers(project) {
     .filter((offer) => !offer.groupId || existingGroupIds.has(offer.groupId));
 }
 
-function selectedOfferGroupKey(groupIds) {
-  if (!Array.isArray(groupIds) || !groupIds.length) return '';
-  return [...new Set(groupIds.map((id) => String(id || '').trim()).filter(Boolean))].sort().join('|');
+// The offers a content item put on screen: one, or both offers of a
+// side-by-side pair (see buildComboOfferTopic). Safe test posts never count
+// — they are rehearsals, not something the client's audience saw.
+function offerIdsOfItem(item) {
+  const topic = item?.contentTopic;
+  if (topic?.source !== 'offer' || item.status === 'test_post_simulated') return [];
+  const ids = Array.isArray(topic.products) && topic.products.length
+    ? topic.products.map((product) => product.offerId)
+    : [topic.offerId];
+  return ids.filter(Boolean);
 }
 
-function createSelectedOfferRotator(project, options = {}) {
-  const key = selectedOfferGroupKey(options.groupIds);
-  if (!key) return null;
-  const groupIds = new Set(key.split('|'));
-  const offers = activeProjectOffers(project).filter((offer) => groupIds.has(offer.groupId));
-  if (!offers.length) return null;
-  const cursors = project.contentStrategy?.nextOfferIndexByGroup || {};
-  return {
-    key,
-    offers,
-    cursor: normalizeTopicIndex(cursors[key], offers.length),
-  };
+// When an item used its offers: the real publication time once it went
+// out, otherwise the slot it is scheduled for. Local time, so it compares
+// with the 'YYYY-MM-DD HH:MM' slot keys the schedule builds.
+function offerUseKey(item) {
+  if (item.publish?.publishedAt) {
+    const published = new Date(item.publish.publishedAt);
+    const pad = (value) => String(value).padStart(2, '0');
+    return `${localDateKey(published)} ${pad(published.getHours())}:${pad(published.getMinutes())}`;
+  }
+  return `${item.scheduledDate} ${item.scheduledTime || '00:00'}`;
 }
 
-async function nextSelectedOffer(rotator, weekday, targetDir, project) {
-  if (!rotator) return null;
-  for (let index = 0; index < rotator.offers.length; index += 1) {
-    const offer = rotator.offers[rotator.cursor % rotator.offers.length];
-    rotator.cursor = normalizeTopicIndex(rotator.cursor + 1, rotator.offers.length);
-    if (fitsWeekday(offer, weekday)) {
-      const partner = pickComboPartner(rotator.offers, offer, project, weekday);
-      if (partner) return buildComboOfferTopic(offer, partner, targetDir);
-      return offerToContentTopic(offer, targetDir);
+function offerUsageFromItems(items) {
+  const usage = new Map();
+  for (const item of items) {
+    const when = offerUseKey(item);
+    for (const offerId of offerIdsOfItem(item)) {
+      if (when > (usage.get(offerId) || '')) usage.set(offerId, when);
     }
   }
-  return null;
+  return usage;
 }
 
-function saveSelectedOfferRotator(project, rotator) {
-  if (!rotator) return;
-  project.contentStrategy = {
-    ...(project.contentStrategy || {}),
-    nextOfferIndexByGroup: {
-      ...(project.contentStrategy?.nextOfferIndexByGroup || {}),
-      [rotator.key]: rotator.cursor,
-    },
+// Never-used offers first ('' sorts before any date), then the one used the
+// longest ago; ties keep registration order.
+function leastRecentlyUsedOffer(offers, usage) {
+  return offers.reduce((best, offer) => ((usage.get(offer.id) || '') < (usage.get(best.id) || '') ? offer : best));
+}
+
+// The offer for a sales slot is the one that has gone longest without going
+// out, among the offers that fit the slot (weekday, selected groups, the
+// slot's pillar). This replaced positional cursors that skipped or repeated
+// offers whenever the offer list, the weekday or the pillar mix changed.
+// Every pick is recorded against its slot, so one generation walks the whole
+// list before repeating, and the next generation picks up from the history
+// on disk.
+function createOfferChooser(project, existingItems, options, targetDir) {
+  const usage = offerUsageFromItems(existingItems);
+  const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
+  return async function chooseOffer({ weekday, slotKey, pillar = null, activePillars = [] }) {
+    let candidates = activeProjectOffers(project).filter((offer) => fitsWeekday(offer, weekday));
+    if (groupIds) candidates = candidates.filter((offer) => groupIds.has(offer.groupId));
+    if (pillar) {
+      candidates = candidates.filter((offer) => (
+        resolveTopicPillar({ source: 'offer', type: offer.type, pillarId: offer.pillarId }, activePillars)?.id === pillar.id
+      ));
+    }
+    if (!candidates.length) return null;
+    const primary = leastRecentlyUsedOffer(candidates, usage);
+    const partner = groupIds ? pickComboPartner(candidates, primary, project, weekday) : null;
+    usage.set(primary.id, slotKey);
+    if (partner) usage.set(partner.id, slotKey);
+    return partner ? buildComboOfferTopic(primary, partner, targetDir) : offerToContentTopic(primary, targetDir);
   };
+}
+
+// Picks the topic of each schedule slot. Shared by generateContentSchedulePlan
+// and previewContentSchedulePlan, so the plan the operator reviews is the
+// plan that gets generated.
+//
+// Two layers: a weighted cursor decides what kind of post a slot is (which
+// pillar, or which content-goal bucket — persisted through cursors()), and
+// for a sales slot createOfferChooser decides which offer.
+//
+// Channels with the same pixel shape (Story/Reels/Facebook Story are all
+// 9:16; Feed/Facebook Feed are both 4:5) share the topic of their day+slot so
+// they can later share one AI creative — siblings must depict the same
+// offer, or a shared image would show one offer while the caption talks
+// about another.
+async function createScheduleTopicPicker(project, options, targetDir, existingItems) {
+  const topicCount = await contentTopicCount(project, { groupIds: options.groupIds, offersOnly: options.offersOnly }, targetDir);
+  if (options.offersOnly && !topicCount) {
+    throw new Error('O(s) grupo(s) selecionado(s) não têm nenhuma oferta ativa — nada pra gerar com "só esse grupo" marcado.');
+  }
+  let topicCursor = normalizeTopicIndex(
+    options.topicOffset !== undefined ? options.topicOffset : project.contentStrategy?.nextScheduleTopicIndex,
+    topicCount
+  );
+  const activePillars = normalizeProjectPillars(project.contentStrategy?.pillars || [])
+    .filter((pillar) => pillar.active !== false);
+  const pillarSequence = activePillars.length ? buildPillarRotationSequence(activePillars) : [];
+  let pillarCursor = normalizeTopicIndex(project.contentStrategy?.nextPillarSequenceIndex, pillarSequence.length || 1);
+  const chooseOffer = createOfferChooser(project, existingItems, options, targetDir);
+  const topicByCreativeGroupKey = new Map();
+
+  async function next(channel, creativeGroupKey, weekday, slotKey) {
+    if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) {
+      return topicByCreativeGroupKey.get(creativeGroupKey);
+    }
+    let topic;
+    let slotPillar = null;
+    if (pillarSequence.length) {
+      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
+      pillarCursor = selected.nextPillarCursor;
+      topicCursor += 1;
+      slotPillar = selected.pillar;
+      topic = {
+        ...selected.topic,
+        channel: channel || '',
+        sequence: topicCursor,
+        ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
+      };
+    } else {
+      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      topicCursor += 1;
+    }
+    if (topic.source === 'offer') {
+      const chosen = await chooseOffer({ weekday, slotKey, pillar: slotPillar, activePillars });
+      if (chosen) {
+        const chosenPillar = resolveTopicPillar(chosen, activePillars);
+        topic = {
+          ...topic,
+          ...chosen,
+          channel: channel || topic.channel,
+          ...(chosenPillar ? { pillar: pillarSnapshotFrom(chosenPillar) } : { pillar: undefined }),
+        };
+      }
+    }
+    if (creativeGroupKey) topicByCreativeGroupKey.set(creativeGroupKey, topic);
+    return topic;
+  }
+
+  return {
+    next,
+    cursors: () => ({
+      nextScheduleTopicIndex: normalizeTopicIndex(topicCursor, topicCount),
+      nextPillarSequenceIndex: normalizeTopicIndex(pillarCursor, pillarSequence.length || 1),
+    }),
+  };
+}
+
+// For the panel: how many times each offer went out, when it last did, the
+// next date it is already scheduled for, and the order the next sales slots
+// will take (weekday and pillar rules can still change a given slot).
+export function buildOfferUsage(project, items, now = new Date()) {
+  const today = localDateKey(now);
+  const offers = Object.fromEntries(normalizeProjectOffers(project.contentStrategy?.offers || [])
+    .map((offer) => [offer.id, { publishedCount: 0, lastPublishedAt: null, nextScheduledDate: null }]));
+  for (const item of items) {
+    for (const offerId of offerIdsOfItem(item)) {
+      const entry = offers[offerId];
+      if (!entry) continue;
+      const publishedAt = item.publish?.publishedAt;
+      if (publishedAt) {
+        entry.publishedCount += 1;
+        if (!entry.lastPublishedAt || publishedAt > entry.lastPublishedAt) entry.lastPublishedAt = publishedAt;
+      } else if (item.scheduledDate >= today && (!entry.nextScheduledDate || item.scheduledDate < entry.nextScheduledDate)) {
+        entry.nextScheduledDate = item.scheduledDate;
+      }
+    }
+  }
+  const usage = offerUsageFromItems(items);
+  const queue = [...activeProjectOffers(project)]
+    .sort((a, b) => (usage.get(a.id) || '').localeCompare(usage.get(b.id) || ''))
+    .map((offer) => offer.id);
+  return { offers, queue };
 }
 
 async function buildContentTopic(project, index, context = {}, targetDir) {
