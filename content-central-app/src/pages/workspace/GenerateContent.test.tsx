@@ -77,6 +77,35 @@ describe("GenerateContent", () => {
     expect(await screen.findByText("Nenhum assunto/oferta cadastrado para este projeto.")).toBeInTheDocument();
   });
 
+  it("shows the next offers in line, following the selected group", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria",
+            contentStrategy: {
+              offers: [
+                { id: "alface", name: "Alface", type: "offer", active: true, groupId: "hortifruti" },
+                { id: "tomate", name: "Tomate", type: "offer", active: true, groupId: "hortifruti" },
+                { id: "cafe", name: "Café", type: "offer", active: true },
+              ],
+              offerGroups: [{ id: "hortifruti", name: "Hortifrúti" }],
+            },
+            offerUsage: { offers: {}, queue: ["cafe", "tomate", "alface"] },
+          }],
+          globalRules: {},
+        },
+      },
+      EMPTY_COMMEMORATIVE_DATES,
+    ]);
+    renderGenerate();
+
+    expect(await screen.findByText("Próximas ofertas da fila: Café, Tomate, Alface")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Hortifrúti" }));
+    expect(screen.getByText("Próximas ofertas da fila: Tomate, Alface")).toBeInTheDocument();
+  });
+
   it("does not warn when the project has an active offer", async () => {
     stubFetchSequence([
       { body: projectState([{ id: "rodizio", name: "Rodízio", type: "rodizio", active: true }]) },

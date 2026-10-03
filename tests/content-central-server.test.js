@@ -5509,3 +5509,16 @@ test('content central lists report months and serves the monthly report page', a
     assert.equal((await request(server, '/api/projects/nao-existe/report?month=2026-08')).response.status, 404);
   });
 });
+
+test('the panel state tells, per project, how each offer has been used and the order of the queue', async () => {
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId: 'uso-ofertas', name: 'Uso Ofertas', handle: '@uso' }) });
+    const first = await request(server, '/api/projects/uso-ofertas/offers', { method: 'POST', body: JSON.stringify({ name: 'Alface', type: 'offer' }) });
+    const second = await request(server, '/api/projects/uso-ofertas/offers', { method: 'POST', body: JSON.stringify({ name: 'Tomate', type: 'offer' }) });
+
+    const state = await request(server, '/api/state');
+    const usage = state.body.projects.find((project) => project.projectId === 'uso-ofertas').offerUsage;
+    assert.deepEqual(usage.queue, [first.body.offer.id, second.body.offer.id]);
+    assert.deepEqual(usage.offers[first.body.offer.id], { publishedCount: 0, lastPublishedAt: null, nextScheduledDate: null });
+  });
+});

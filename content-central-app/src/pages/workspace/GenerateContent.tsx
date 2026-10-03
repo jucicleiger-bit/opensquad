@@ -11,6 +11,7 @@ import {
   type GenerateFormatInput,
   type GenerateContentInput,
   type PlannedContentSchedule,
+  type ProjectOffer,
 } from "@/api/client";
 import { channelFullLabel, FEED_CREATIVE_CHANNELS, VERTICAL_CREATIVE_CHANNELS } from "./contentDisplay";
 import { Button } from "@/components/Button";
@@ -181,6 +182,15 @@ function GenerateMarketingContent() {
   // "gera só isso, não intercala com autoridade/engajamento etc." for a
   // batch that needs to be 100% e.g. "Promoção fim de semana".
   const [offersOnly, setOffersOnly] = useState(false);
+  // The next sales slots, in the order the generator will take them (the
+  // offer that has gone longest without going out first), narrowed to the
+  // selected groups. Weekday and pillar rules can still change a given slot.
+  const offersById = new Map((project.contentStrategy?.offers || []).map((offer) => [offer.id, offer]));
+  const nextInLine = (project.offerUsage?.queue || [])
+    .map((id) => offersById.get(id))
+    .filter((offer): offer is ProjectOffer => Boolean(offer))
+    .filter((offer) => selectedGroupIds.size === 0 || (offer.groupId ? selectedGroupIds.has(offer.groupId) : false))
+    .slice(0, 5);
 
   // Feriados nacionais + datas comerciais (Dia das Mães, Black Friday etc.)
   // pros próximos meses — uma arte avulsa pra qualquer uma delas roda
@@ -469,6 +479,12 @@ function GenerateMarketingContent() {
                 </label>
               ) : null}
             </>
+          ) : null}
+
+          {nextInLine.length > 0 ? (
+            <p className="muted" style={{ marginBottom: 12 }}>
+              {`Próximas ofertas da fila: ${nextInLine.map((offer) => offer.name).join(", ")}`}
+            </p>
           ) : null}
 
           <h3 className="section-heading">Organizar por formato</h3>

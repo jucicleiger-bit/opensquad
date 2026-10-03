@@ -304,6 +304,19 @@ export interface ProspectSource {
   realFollowing: number | null;
 }
 
+export interface OfferUsageEntry {
+  publishedCount: number;
+  lastPublishedAt: string | null;
+  nextScheduledDate: string | null;
+}
+
+// Per offer: how it has been used. `queue` is the order the next sales
+// slots will take — the offer that has gone longest without going out first.
+export interface OfferUsage {
+  offers: Record<string, OfferUsageEntry>;
+  queue: string[];
+}
+
 export interface ProjectSummary {
   projectId: string;
   name: string;
@@ -331,6 +344,7 @@ export interface ProjectSummary {
     [key: string]: unknown;
   };
   contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; topicIdeas?: TopicIdeasBank; [key: string]: unknown };
+  offerUsage?: OfferUsage;
   rules?: unknown;
   createdAt?: string;
   updatedAt?: string;

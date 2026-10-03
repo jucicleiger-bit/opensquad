@@ -26,6 +26,7 @@ import {
   animateContentForReels,
   applyExternalPublishResult,
   buildApprovalPayload,
+  buildOfferUsage,
   approveContent,
   deleteLearningEntry,
   enqueueSegmentTemplateAdaptation,
@@ -492,11 +493,22 @@ async function handleRequest(req, res, targetDir, context = {}) {
   if (method === 'GET' && !route.startsWith('/api/')) {
     return sendReactApp(res, route === '/' ? '' : route);
   }
-  if (method === 'GET' && route === '/api/state') return sendJson(res, 200, {
-    projects: await listCentralProjects(targetDir),
-    globalRules: await getGlobalRules(targetDir),
-    alerts: await listSystemAlerts(targetDir, { whatsappSessionStates: listWahaSessionStates }),
-  });
+  if (method === 'GET' && route === '/api/state') {
+    const projects = await listCentralProjects(targetDir);
+    // Ofertas and Agenda e geração show, per offer, when it last went out and
+    // what comes next in the queue — riding on the state the panel already
+    // loads, instead of one more request per page.
+    // ponytail: reads every project's content again (listSystemAlerts already
+    // does once); share one read if /api/state gets slow.
+    for (const project of projects) {
+      project.offerUsage = buildOfferUsage(project, await listProjectContent(project.projectId, targetDir));
+    }
+    return sendJson(res, 200, {
+      projects,
+      globalRules: await getGlobalRules(targetDir),
+      alerts: await listSystemAlerts(targetDir, { whatsappSessionStates: listWahaSessionStates }),
+    });
+  }
 
   // Segment templates (e.g. "embalagens") — pre-approved art reused across
   // prospects in the same business segment instead of generating from

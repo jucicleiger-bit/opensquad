@@ -72,6 +72,32 @@ describe("Offers", () => {
     expect(screen.getByText("ativo")).toBeInTheDocument();
   });
 
+  it("tells under each offer when it last went out, or that it never did", async () => {
+    stubFetchSequence([
+      {
+        body: {
+          projects: [{
+            projectId: "boss-pizzaria",
+            name: "Boss Pizzaria",
+            contentStrategy: { offers: [RODIZIO_OFFER, { id: "pizza-nova", name: "Pizza nova", type: "offer", active: true }] },
+            offerUsage: {
+              offers: {
+                "rodizio-boss": { publishedCount: 3, lastPublishedAt: "2026-09-28T13:00:00.000Z", nextScheduledDate: null },
+                "pizza-nova": { publishedCount: 0, lastPublishedAt: null, nextScheduledDate: null },
+              },
+              queue: ["pizza-nova", "rodizio-boss"],
+            },
+          }],
+          globalRules: {},
+        },
+      },
+    ]);
+    renderOffers();
+    await expandSection("Sem grupo");
+    expect(await screen.findByText("Última publicação: 28/09 · 3 vezes")).toBeInTheDocument();
+    expect(screen.getByText("Ainda não saiu")).toBeInTheDocument();
+  });
+
   it("keeps the create form and text importer collapsed behind toolbar buttons so a long product list isn't pushed down", async () => {
     stubFetchSequence([{ body: projectState([RODIZIO_OFFER]) }]);
     renderOffers();

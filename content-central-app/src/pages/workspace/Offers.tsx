@@ -23,6 +23,7 @@ import {
   type SiteOfferCandidate,
 } from "@/api/client";
 import { Button } from "@/components/Button";
+import { offerUsageText } from "./offerUsageDisplay";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 
@@ -1079,6 +1080,11 @@ export function Offers() {
                             ) : null}
                             {offer.uniqueProposal ? <span className="pill">proposta única</span> : null}
                           </div>
+                          {project.offerUsage?.offers?.[offer.id] ? (
+                            <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+                              {offerUsageText(project.offerUsage.offers[offer.id])}
+                            </div>
+                          ) : null}
                           <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
                             {offer.items ? <div>{isCatalog ? "Detalhes" : "Itens"}: {offer.items}</div> : null}
                             {!isCatalog && offer.cta ? <div>CTA: {offer.cta}</div> : null}
