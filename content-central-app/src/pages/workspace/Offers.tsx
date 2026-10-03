@@ -23,7 +23,7 @@ import {
   type SiteOfferCandidate,
 } from "@/api/client";
 import { Button } from "@/components/Button";
-import { offerUsageText } from "./offerUsageDisplay";
+import { localDateKey, offerUsageText, offerValidityText } from "./offerUsageDisplay";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 
@@ -61,6 +61,9 @@ const EMPTY_FORM = {
   pillarId: "",
   groupId: "",
   daysOfWeek: [] as string[],
+  validFrom: "",
+  validUntil: "",
+  sector: "",
   active: true,
   uniqueProposal: false,
   photoReferenceIds: [] as string[],
@@ -86,6 +89,8 @@ export function Offers() {
   const { project, refreshProject } = useOutletContext<WorkspaceContext>();
   const isCatalog = project.projectType === "catalog";
   const offers = project.contentStrategy?.offers || [];
+  const sectors = [...new Set(offers.map((offer) => offer.sector?.trim()).filter((sector): sector is string => Boolean(sector)))].sort();
+  const today = localDateKey(new Date());
   const pillars = project.contentStrategy?.pillars || [];
   const offerGroups = project.contentStrategy?.offerGroups || [];
   // New offers (manual form or paste-text import) default to the first
@@ -420,6 +425,9 @@ export function Offers() {
       pillarId: offer.pillarId || "",
       groupId: offer.groupId || "",
       daysOfWeek: offer.daysOfWeek || [],
+      validFrom: offer.validFrom || "",
+      validUntil: offer.validUntil || "",
+      sector: offer.sector || "",
       active: offer.active !== false,
       uniqueProposal: offer.uniqueProposal || false,
       photoReferenceIds: offer.photoReferenceIds || [],
@@ -863,6 +871,35 @@ export function Offers() {
               ))}
             </div>
 
+            <div className="row">
+              <div>
+                <label htmlFor="offer-sector">Setor</label>
+                <input
+                  id="offer-sector"
+                  list="offer-sectors"
+                  placeholder="Ex.: Hortifruti, Higiene, Mercearia"
+                  value={form.sector}
+                  onChange={(e) => setForm({ ...form, sector: e.target.value })}
+                />
+                <datalist id="offer-sectors">
+                  {sectors.map((sector) => (
+                    <option key={sector} value={sector} />
+                  ))}
+                </datalist>
+              </div>
+              <div>
+                <label htmlFor="offer-valid-from">Vale de</label>
+                <input id="offer-valid-from" type="date" value={form.validFrom} onChange={(e) => setForm({ ...form, validFrom: e.target.value })} />
+              </div>
+              <div>
+                <label htmlFor="offer-valid-until">Vale até</label>
+                <input id="offer-valid-until" type="date" value={form.validUntil} onChange={(e) => setForm({ ...form, validUntil: e.target.value })} />
+              </div>
+            </div>
+            <p className="muted" style={{ margin: "4px 0 12px", fontSize: 12 }}>
+              Combo só junta {isCatalog ? "produtos" : "ofertas"} do mesmo setor. Datas vazias = vale sempre; fora das datas não entra na rotação.
+            </p>
+
             {!isCatalog ? (
               <div className="row">
                 <div>
@@ -1079,6 +1116,8 @@ export function Offers() {
                               </span>
                             ) : null}
                             {offer.uniqueProposal ? <span className="pill">proposta única</span> : null}
+                            {offer.sector ? <span className="pill">setor: {offer.sector}</span> : null}
+                            {offerValidityText(offer, today) ? <span className="pill">{offerValidityText(offer, today)}</span> : null}
                           </div>
                           {project.offerUsage?.offers?.[offer.id] ? (
                             <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>

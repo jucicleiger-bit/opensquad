@@ -223,6 +223,32 @@ describe("Offers", () => {
     expect(payload.uniqueProposal).toBe(true);
   });
 
+  it("saves sector and validity dates and shows them on the offer", async () => {
+    const dated = { ...RODIZIO_OFFER, name: "Sorteio", sector: "Higiene", validUntil: "2999-10-20" };
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { project: {}, offer: dated } },
+      { body: projectState([dated]) },
+    ]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Sorteio");
+    await userEvent.type(screen.getByLabelText("Setor"), "Higiene");
+    await userEvent.type(screen.getByLabelText("Vale de"), "2999-10-05");
+    await userEvent.type(screen.getByLabelText("Vale até"), "2999-10-20");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    const saveCall = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls[1];
+    const payload = JSON.parse(saveCall[1].body as string);
+    expect(payload).toMatchObject({ sector: "Higiene", validFrom: "2999-10-05", validUntil: "2999-10-20" });
+
+    await expandSection("Sem grupo");
+    expect(await screen.findByText("setor: Higiene")).toBeInTheDocument();
+    expect(await screen.findByText("Vence 20/10")).toBeInTheDocument();
+  });
+
   it("deletes an offer through the real endpoint after confirmation", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     stubFetchSequence([{ body: projectState([RODIZIO_OFFER]) }, { body: { deleted: true } }, { body: projectState() }]);

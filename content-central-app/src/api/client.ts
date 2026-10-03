@@ -103,6 +103,11 @@ export interface ProjectOffer {
   pillarId?: string | null;
   groupId?: string | null;
   daysOfWeek?: string[];
+  // YYYY-MM-DD, inclusive; empty = always valid.
+  validFrom?: string;
+  validUntil?: string;
+  // A combo only pairs offers of the same sector.
+  sector?: string;
   photoReferenceIds?: string[];
   flavors?: OfferFlavor[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
@@ -1199,6 +1204,9 @@ export interface SaveOfferInput {
   pillarId?: string | null;
   groupId?: string | null;
   daysOfWeek?: string[];
+  validFrom?: string;
+  validUntil?: string;
+  sector?: string;
   active?: boolean;
   uniqueProposal?: boolean;
   photoReferenceIds?: string[];
