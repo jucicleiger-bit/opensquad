@@ -121,6 +121,9 @@ import {
   saveProjectOffer,
   saveProjectOfferGroup,
   deleteProjectOfferGroup,
+  parseOfferDraftLines,
+  saveProjectOfferDrafts,
+  deleteProjectOfferDraft,
   saveProjectPillar,
   saveProjectToken,
   saveProjectWhatsAppInstance,
@@ -406,6 +409,7 @@ export async function startContentCentralServer({
   topicIdeaGenerator = null,
   learningImageAnalyzer = null,
   offerDirectionSuggester = null,
+  productImageSearcher = null,
   videoAnimator = null,
   prospectScreenshotAnalyzer = null,
   bioImprover = null,
@@ -429,6 +433,7 @@ export async function startContentCentralServer({
     topicIdeaGenerator: topicIdeaGenerator || (enableAiImages ? generateTopicIdeasWithAiAndWeb : null),
     learningImageAnalyzer: learningImageAnalyzer || (enableAiImages ? analyzeLearningImageWithCodexAgent : null),
     offerDirectionSuggester: offerDirectionSuggester || (enableAiImages ? suggestOfferDirectionWithCodexAgent : null),
+    productImageSearcher: productImageSearcher || searchProductImages,
     videoAnimator: videoAnimator || (enableAiImages ? (payload) => animateImageForReelsWithFfmpeg(payload, targetDir) : null),
     prospectScreenshotAnalyzer: prospectScreenshotAnalyzer || (enableAiImages ? analyzeProspectScreenshotWithHermes : null),
     bioImprover: bioImprover || (enableAiImages ? improveProspectBioWithAi : null),
@@ -1054,7 +1059,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
   }
 
   if (parts.length === 4 && parts[3] === 'assets') {
-    const body = await normalizeUploadedImageAsset(await readBody(req));
+    const body = await normalizeUploadedImageAsset(await resolveAssetSourceUrl(await readBody(req)));
     const asset = await saveProjectAsset(projectId, body, targetDir, new Date(), { logoColorAnalyzer: context.logoColorAnalyzer });
     return sendJson(res, 201, { asset });
   }
@@ -1161,6 +1166,33 @@ async function handleRequest(req, res, targetDir, context = {}) {
   if (parts.length === 4 && parts[3] === 'offer-groups-delete') {
     const body = await readBody(req);
     const result = await deleteProjectOfferGroup(projectId, body.groupId, targetDir);
+    return sendJson(res, 200, result);
+  }
+
+  if (parts.length === 4 && parts[3] === 'offer-drafts') {
+    const body = await readBody(req);
+    const lines = parseOfferDraftLines(body.text);
+    if (!lines.length) return sendJson(res, 400, { error: 'Escreva pelo menos um produto, um por linha.' });
+    // One search at a time — firing 40 at once is how a keyless search gets
+    // blocked. A failed search leaves that draft without photos instead of
+    // failing the whole list.
+    const drafts = [];
+    for (const line of lines) {
+      let candidates = [];
+      try {
+        candidates = await context.productImageSearcher(line.name);
+      } catch (err) {
+        console.error('[content-central] product photo search failed:', err.message);
+      }
+      drafts.push({ ...line, candidates });
+    }
+    const result = await saveProjectOfferDrafts(projectId, drafts, targetDir);
+    return sendJson(res, 201, result);
+  }
+
+  if (parts.length === 4 && parts[3] === 'offer-drafts-delete') {
+    const body = await readBody(req);
+    const result = await deleteProjectOfferDraft(projectId, body.draftId, targetDir);
     return sendJson(res, 200, result);
   }
 
@@ -4232,6 +4264,68 @@ async function searchDuckDuckGo(query) {
   const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: SITE_FETCH_HEADERS });
   if (!response.ok) throw new Error(`DuckDuckGo respondeu com status ${response.status}.`);
   return extractDuckDuckGoResults(await response.text());
+}
+
+// Product photo candidates for "Adiantar fotos (lista)". Bing Images needs no
+// API key; each result is an <a class="iusc" m="{json}"> whose JSON holds the
+// full image (murl) and Bing's own thumbnail (turl).
+// ponytail: HTML scraping breaks if Bing changes its markup (drafts then come
+// without photos); upgrade path is a keyed image API such as Brave Search.
+export function extractBingImageResults(html, limit = 4) {
+  const results = [];
+  for (const match of String(html || '').matchAll(/class="iusc"[^>]*?\sm="([^"]+)"/g)) {
+    try {
+      const data = JSON.parse(match[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&'));
+      if (/^https?:\/\//i.test(data.murl || '')) {
+        results.push({ imageUrl: data.murl, thumbUrl: /^https?:\/\//i.test(data.turl || '') ? data.turl : data.murl });
+      }
+    } catch {
+      // A malformed entry is skipped; the rest of the page is still usable.
+    }
+    if (results.length >= limit) break;
+  }
+  return results;
+}
+
+async function searchProductImages(query) {
+  const url = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&setmkt=pt-BR&cc=BR`;
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: SITE_FETCH_HEADERS });
+  if (!response.ok) throw new Error(`Bing Imagens respondeu com status ${response.status}.`);
+  return extractBingImageResults(await response.text());
+}
+
+const MAX_SOURCE_IMAGE_BYTES = 10 * 1024 * 1024;
+
+async function downloadImageAsDataUrl(rawUrl) {
+  const url = new URL(String(rawUrl || ''));
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Endereço de foto inválido.');
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: SITE_FETCH_HEADERS });
+  const mimeType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  if (!response.ok || !mimeType.startsWith('image/')) throw new Error('Esse endereço não devolveu uma imagem.');
+  // ponytail: reads the whole body before checking the size; stream with a
+  // byte counter if huge images ever become a real problem.
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > MAX_SOURCE_IMAGE_BYTES) throw new Error('Foto grande demais (mais de 10 MB).');
+  return { dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`, mimeType };
+}
+
+// Lets the asset upload take a photo chosen from a draft's online candidates:
+// the server downloads it (the browser can't, because of CORS) and hands the
+// rest of the route a normal dataUrl.
+async function resolveAssetSourceUrl(body) {
+  if (!body?.sourceUrl || body.dataUrl) return body;
+  const { sourceUrl, fallbackSourceUrl, ...rest } = body;
+  for (const url of [sourceUrl, fallbackSourceUrl].filter(Boolean)) {
+    try {
+      const { dataUrl, mimeType } = await downloadImageAsDataUrl(url);
+      const extension = mimeType.split('/')[1].split('+')[0].replace('jpeg', 'jpg');
+      const baseName = String(rest.filename || 'produto').replace(/\.[^./\\]+$/, '');
+      return { ...rest, filename: `${baseName}.${extension}`, dataUrl };
+    } catch {
+      // Try the next URL (the thumbnail) before giving up.
+    }
+  }
+  throw new Error('Não consegui baixar essa foto — escolha outra ou anexe do computador.');
 }
 
 async function collectOnlineVisualResearchEvidence({ segment, productsOrServices }) {
