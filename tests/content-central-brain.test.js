@@ -249,6 +249,13 @@ test('the prompt teaches time, bank topics and the Raio-X rules', () => {
   assert.match(prompt, /Dias fechados ficam sem post sozinhos, exceto o post de feriado ou data comemorativa\./);
 });
 
+test('the prompt asks for a light, short answer with emojis and no tables', () => {
+  const prompt = brainSystemPrompt('loja');
+  assert.match(prompt, /tom leve/);
+  assert.match(prompt, /emojis/);
+  assert.match(prompt, /nunca use tabela/i);
+});
+
 const FEED_DAILY = { channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 };
 const TWO_STORIES_DAILY = { channel: 'instagram_story', postsPerDay: 2, everyDays: 1, startTime: '09:00', intervalMinutes: 240 };
 const ESSENCIAL = { storiesPerDay: 2, feedsPerWeek: 1, storyChannels: ['instagram_story'], feedChannels: ['instagram_feed'], flyersPerMonth: 2 };

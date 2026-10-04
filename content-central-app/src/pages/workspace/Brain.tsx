@@ -17,6 +17,7 @@ import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
+import { ChatText } from "./ChatText";
 import { localDateKey } from "./offerUsageDisplay";
 import styles from "./Brain.module.css";
 
@@ -57,6 +58,17 @@ function groupPlanLines<T extends PlanLine>(slots: T[]) {
     groups.set(key, group);
   }
   return [...groups.values()].map(({ first, networks }) => ({ ...first, where: `${formatOf(first.channel)} · ${networks.join(", ")}` }));
+}
+
+// "12 stories · 2 feeds na semana", counting arts, not channels.
+function planTotals(days: Array<{ regular: PlanLine[] }>) {
+  const counts = new Map<string, number>();
+  for (const line of days.flatMap((day) => groupPlanLines(day.regular))) {
+    const format = formatOf(line.channel);
+    counts.set(format, (counts.get(format) || 0) + 1);
+  }
+  const names: Record<string, [string, string]> = { Story: ["story", "stories"], Feed: ["feed", "feeds"], Reels: ["reels", "reels"] };
+  return [...counts].map(([format, n]) => `${n} ${names[format][n === 1 ? 0 : 1]}`).join(" · ") + " na semana";
 }
 
 const dayLabel = (date: string) => {
@@ -226,7 +238,7 @@ export function Brain() {
             ) : (
               state.chat.messages.map((message, index) => (
                 <div key={index} className={`${styles.message} ${styles[message.role]}`}>
-                  {message.text}
+                  {message.role === "assistant" ? <ChatText text={message.text} /> : message.text}
                 </div>
               ))
             )}
@@ -274,28 +286,33 @@ export function Brain() {
         </Card>
 
         <div className={styles.side}>
-          <Card>
-            <h3 style={{ marginTop: 0 }}>Plano</h3>
+          <Card className={styles.plan}>
+            <h3 style={{ margin: 0 }}>Plano</h3>
             {stored ? (
               <>
-                {stored.plan.dayPlans.filter((day) => day.regular.length).map((day) => (
+                <p className="muted" style={{ margin: "2px 0 12px", fontSize: 13 }}>{planTotals(stored.plan.dayPlans)}</p>
+                {stored.plan.dayPlans.filter((day) => day.regular.length || day.extras.length).map((day) => (
                   <div key={day.date} className={styles.day}>
                     <b>{dayLabel(day.date)}</b>
-                    {groupPlanLines(day.regular).map((slot) => (
+                    {[...groupPlanLines(day.regular), ...groupPlanLines(day.extras).map((extra) => ({ ...extra, scheduledTime: "extra" }))].map((slot) => (
                       <div key={slot.id} className={styles.slot}>
-                        <span className="muted">
-                          {slot.scheduledTime} · {slot.where}
-                        </span>{" "}
-                        <span>{slot.label}</span>
-                      </div>
-                    ))}
-                    {groupPlanLines(day.extras).map((extra) => (
-                      <div key={extra.id} className={styles.slot}>
-                        <span className="muted">extra · {extra.where}</span> <span>{extra.label}</span>
+                        <span className={styles.time}>{slot.scheduledTime}</span>
+                        <div>
+                          <div>{slot.label}</div>
+                          <div className={`muted ${styles.where}`}>{slot.where}</div>
+                        </div>
                       </div>
                     ))}
                   </div>
                 ))}
+                {stored.plan.warnings?.length ? (
+                  <div className={styles.warnings}>
+                    <b>⚠️ Avisos</b>
+                    <ul>
+                      {stored.plan.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+                    </ul>
+                  </div>
+                ) : null}
                 {stored.approvedAt ? (
                   <p className="muted">Aprovado em {dayMonth(stored.approvedAt.slice(0, 10))}. Para outra semana, peça um plano novo ao cérebro.</p>
                 ) : planIsPast ? (

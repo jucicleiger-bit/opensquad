@@ -719,6 +719,8 @@ export interface PlannedContentSchedule {
   dayPlans: PlannedContentDay[];
   rules: { groupIds: string[]; offersOnly: boolean; usesBrandXray: boolean; extraDatesDoNotConsumeDailyQuota: boolean };
   businessHoursWarnings?: string[];
+  // Set on plans the cérebro saved: what it must fix or explain.
+  warnings?: string[];
 }
 
 export function previewContentPlan(

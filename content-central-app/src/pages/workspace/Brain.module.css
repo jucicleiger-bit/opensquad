@@ -82,7 +82,55 @@
   text-transform: uppercase;
 }
 
+.plan {
+  padding: 16px;
+}
+
 .slot {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 8px;
   font-size: 14px;
-  margin-top: 4px;
+  margin-top: 8px;
+}
+
+.time {
+  font-weight: 700;
+}
+
+.where {
+  font-size: 12px;
+}
+
+.warnings {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  font-size: 13px;
+}
+
+.warnings ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.assistant {
+  white-space: normal;
+}
+
+.assistant p {
+  margin: 0 0 8px;
+}
+
+.assistant p:last-child,
+.assistant ul:last-child,
+.assistant ol:last-child {
+  margin-bottom: 0;
+}
+
+.assistant ul,
+.assistant ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
 }

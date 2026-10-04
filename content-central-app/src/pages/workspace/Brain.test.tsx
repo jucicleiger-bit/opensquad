@@ -99,10 +99,34 @@ describe("Brain", () => {
     stubApi({ "/brain": () => brain({ plan: stored }) });
     renderBrain();
 
-    expect(await screen.findByText("13:00 · Story · Instagram, Facebook, WhatsApp")).toBeInTheDocument();
-    expect(screen.getByText("17:00 · Story · Instagram")).toBeInTheDocument();
-    expect(screen.getByText("18:00 · Feed · Instagram, Facebook")).toBeInTheDocument();
+    expect(await screen.findByText("Story · Instagram, Facebook, WhatsApp")).toBeInTheDocument();
+    expect(screen.getByText("Story · Instagram")).toBeInTheDocument();
+    expect(screen.getByText("Feed · Instagram, Facebook")).toBeInTheDocument();
+    // In time order, whatever order the channels came in.
+    expect(screen.getAllByText(/^\d\d:\d\d$/).map((node) => node.textContent)).toEqual(["13:00", "17:00", "18:00"]);
     expect(screen.getAllByText("Venda — Café")).toHaveLength(1);
+    expect(screen.getByText("2 stories · 1 feed na semana")).toBeInTheDocument();
+  });
+
+  it("shows the cérebro's answer formatted, not as raw asterisks and table pipes", async () => {
+    const text = "**Atenção:** o Treto está sem preço.\n\n| Dia | Story 13h |\n|---|---|\n| Seg 05 | Café |\n\n**Falta você:**\n1. Cadastrar o preço.\n2. Aprovar.";
+    stubApi({ "/brain": () => brain({ chat: { sessionId: "s1", messages: [{ role: "assistant", text, at: "x" }] } }) });
+    renderBrain();
+
+    expect(await screen.findByText("Atenção:")).toContainHTML("Atenção:");
+    expect(screen.getByText("Atenção:").tagName).toBe("STRONG");
+    expect(screen.getByText("Seg 05 · Café")).toBeInTheDocument();
+    expect(screen.queryByText(/\|---/)).not.toBeInTheDocument();
+    expect(screen.getByText("Cadastrar o preço.").tagName).toBe("LI");
+  });
+
+  it("shows the plan warnings before the approve button", async () => {
+    const stored = plan();
+    (stored.plan as Record<string, unknown>).warnings = ["Treto chocolate está sem preço no post de 2999-10-05 às 09:00."];
+    stubApi({ "/brain": () => brain({ plan: stored }) });
+    renderBrain();
+
+    expect(await screen.findByText("Treto chocolate está sem preço no post de 2999-10-05 às 09:00.")).toBeInTheDocument();
   });
 
   it("shows the conversation and the notebook, and sends a message", async () => {
