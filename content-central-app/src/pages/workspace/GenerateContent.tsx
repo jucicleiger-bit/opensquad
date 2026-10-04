@@ -591,6 +591,11 @@ function GenerateMarketingContent() {
         <Card style={{ padding: 20, marginTop: 20 }}>
           <h3 className="section-heading" style={{ marginTop: 0 }}>Resumo do que será postado</h3>
           <p className="muted" style={{ marginTop: 0 }}>{plannedSchedule.summary}</p>
+          {plannedSchedule.businessHoursWarnings?.length ? (
+            <div className="pill warn" style={{ display: "block", marginBottom: 10 }}>
+              Fora do horário de funcionamento do Raio-X: {plannedSchedule.businessHoursWarnings.join(" · ")}
+            </div>
+          ) : null}
           {plannedSchedule.rules?.offersOnly ? (
             <div className="notice" style={{ marginBottom: 12 }}>
               Gerando apenas o(s) grupo(s) selecionado(s). Datas comemorativas entram como extras por fora da contagem.

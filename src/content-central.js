@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
-import { isClockTime, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
+import { isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_MODES = new Set(['manual', 'semi_automatic', 'automatic']);
@@ -4087,6 +4087,15 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
     }
   }
 
+  // "Agenda e geração" keeps the operator's times (only the cérebro plans
+  // inside opening hours); it just points out the ones outside.
+  const hours = normalizeBusinessHours(project.businessHours);
+  const businessHoursWarnings = hours
+    ? dayPlans.flatMap((day) => day.regular
+      .filter((slot) => !isOpenAt(hours, day.date, slot.scheduledTime))
+      .map((slot) => `${day.date} às ${slot.scheduledTime} (${slot.channelLabel}): ${isOpenDay(hours, day.date) ? 'fora do horário de funcionamento' : 'loja fechada nesse dia'}`))
+    : [];
+
   const plan = {
     projectId: project.projectId,
     projectName: project.name,
@@ -4102,6 +4111,7 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
       extraDatesDoNotConsumeDailyQuota: true,
     },
     dayPlans,
+    businessHoursWarnings,
   };
   return { ...plan, summary: buildPlanSummary(plan) };
 }

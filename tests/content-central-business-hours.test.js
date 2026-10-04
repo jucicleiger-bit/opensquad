@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import {
   describeBusinessHours, firstOpenTime, isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, openHours, validateBusinessHours,
 } from '../src/content-central-business-hours.js';
-import { createCentralProject, listCentralProjects, updateProjectBusinessHours } from '../src/content-central.js';
+import { createCentralProject, listCentralProjects, previewContentSchedulePlan, updateProjectBusinessHours } from '../src/content-central.js';
 
 const OPEN = [{ from: '07:00', to: '11:00' }, { from: '13:00', to: '20:00' }];
 const WEEK = { mon: OPEN, tue: OPEN, wed: OPEN, thu: OPEN, fri: OPEN, sat: [{ from: '07:00', to: '12:00' }], sun: [] };
@@ -53,6 +53,26 @@ test('opening hours are saved on the project and listed with it', async () => {
     await assert.rejects(updateProjectBusinessHours('loja', { mon: [{ from: '9', to: '10:00' }] }, dir), /HH:MM/);
     await updateProjectBusinessHours('loja', null, dir);
     assert.equal((await listCentralProjects(dir)).find((project) => project.projectId === 'loja').businessHours, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the Agenda preview warns about posts outside opening hours without dropping them', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-hours-'));
+  try {
+    await createCentralProject({ projectId: 'agenda', name: 'Agenda' }, dir);
+    const STORY = [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '12:00', intervalMinutes: 0 }];
+    const before = await previewContentSchedulePlan('agenda', { days: 2, startDate: '2026-10-11', formats: STORY }, dir);
+    assert.deepEqual(before.businessHoursWarnings, []);
+
+    await updateProjectBusinessHours('agenda', WEEK, dir);
+    const plan = await previewContentSchedulePlan('agenda', { days: 2, startDate: '2026-10-11', formats: STORY }, dir);
+    assert.equal(plan.regularCount, 2);
+    assert.deepEqual(plan.businessHoursWarnings, [
+      '2026-10-11 às 12:00 (Instagram Stories): loja fechada nesse dia',
+      '2026-10-12 às 12:00 (Instagram Stories): fora do horário de funcionamento',
+    ]);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
