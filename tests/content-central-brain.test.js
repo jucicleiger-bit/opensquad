@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   createCentralProject, getCentralPaths, loadProjectForTest, saveProjectOffer, saveProjectOfferGroup, updateProjectBrandInput,
+  updateProjectBusinessHours,
 } from '../src/content-central.js';
 import {
-  buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, resolveProposal, saveBrainPlan, saveNotebook,
+  brainSystemPrompt, buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, resolveProposal, saveBrainPlan, saveNotebook,
 } from '../src/content-central-brain.js';
 
 async function withProject(fn) {
@@ -141,4 +142,77 @@ test('the context names the offers with sector and validity, the notebook and re
     assert.match(text, /Dono não quer post no domingo/);
     assert.match(text, /Novo caderno: recusada/);
   });
+});
+
+const OPEN = [{ from: '07:00', to: '11:00' }, { from: '13:00', to: '20:00' }];
+const WEEK_HOURS = { mon: OPEN, tue: OPEN, wed: OPEN, thu: OPEN, fri: OPEN, sat: [{ from: '07:00', to: '12:00' }], sun: [] };
+
+test('a closed day loses its posts and generation is told to skip them', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBusinessHours('loja', WEEK_HOURS, dir);
+    // 2026-10-11 is a Sunday.
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-11', days: 2, formats: STORY }, dir);
+    assert.deepEqual(stored.plan.skippedSlotIds, ['2026-10-11-instagram_story-01']);
+    assert.deepEqual(stored.plan.dayPlans[0].regular, []);
+    assert.equal(stored.plan.dayPlans[1].regular[0].scheduledTime, '09:00');
+    assert.equal(stored.plan.regularCount, 1);
+  });
+});
+
+test('a post at a closed hour is refused; a chosen open hour is kept and extras move to the opening', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBusinessHours('loja', { ...WEEK_HOURS, mon: [{ from: '13:00', to: '20:00' }] }, dir);
+    await assert.rejects(
+      saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir),
+      /2026-10-12-instagram_story-01.*fora do horário de funcionamento/,
+    );
+    // 2026-10-12 (Monday) is Dia das Crianças, so the plan has extras at the format's 09:00.
+    const stored = await saveBrainPlan('loja', {
+      startDate: '2026-10-12', days: 1, formats: STORY, slots: [{ id: '2026-10-12-instagram_story-01', time: '14:00' }],
+    }, dir);
+    assert.equal(stored.plan.dayPlans[0].regular[0].scheduledTime, '14:00');
+    assert.ok(stored.plan.dayPlans[0].extras.length > 0);
+    assert.ok(stored.plan.dayPlans[0].extras.every((extra) => extra.scheduledTime === '13:00'));
+  });
+});
+
+test('without opening hours nothing is dropped', async () => {
+  await withProject(async (dir) => {
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-11', days: 1, formats: STORY }, dir);
+    assert.equal(stored.plan.skippedSlotIds, undefined);
+    assert.equal(stored.plan.dayPlans[0].regular.length, 1);
+  });
+});
+
+test('the context shows the Raio-X in words, the bank, the hours and reach by hour', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBrandInput('loja', {
+      brandName: 'Loja', segment: 'Mercado', productsOrServices: 'Alimentos', audience: 'Famílias do bairro',
+      contentGoals: ['authority'], contentGoalWeights: { sales: 85, authority: 15 },
+    }, dir);
+    await saveProjectOffer('loja', { name: 'Arroz', type: 'offer', price: '9,90' }, dir);
+    await updateProjectBusinessHours('loja', WEEK_HOURS, dir);
+    const { metricsPath } = getCentralPaths(dir, 'loja');
+    await mkdir(dirname(metricsPath), { recursive: true });
+    await writeFile(metricsPath, JSON.stringify({ media: { s1: { kind: 'story', reach: 230, postedAt: new Date(2026, 9, 3, 13).toISOString() } } }), 'utf-8');
+    await saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir);
+
+    const text = await buildBrainContext('loja', dir);
+    assert.match(text, /Venda 85%, Gerar autoridade 15%/);
+    assert.match(text, /Famílias do bairro/);
+    assert.match(text, /## Banco de assuntos\n\n- \[authority-/);
+    assert.match(text, /segunda: 07:00–11:00 e 13:00–20:00/);
+    assert.match(text, /domingo: fechado/);
+    assert.match(text, /Story às 13h: alcance médio 230 em 1 post\(s\).*em teste/);
+    assert.match(text, /Story: horas abertas nunca testadas: 7h, 8h, 9h, 10h, 11h, 14h/);
+    assert.match(text, /2026-10-12-instagram_story-01 09:00 \[(venda|Gerar autoridade)\]/);
+  });
+});
+
+test('the prompt teaches time, bank topics and the Raio-X rules', () => {
+  const prompt = brainSystemPrompt('loja');
+  assert.match(prompt, /"time":"HH:MM"/);
+  assert.match(prompt, /"topicId"/);
+  assert.match(prompt, /oferta só/i);
+  assert.match(prompt, /em teste/);
 });

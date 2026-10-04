@@ -8,10 +8,14 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  applyPlanSlotChoices, buildOfferUsage, getCentralPaths, listProjectContent, loadProject, localDateKey,
-  normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer, updateProjectContentGoalWeights,
-  validContentGoalWeights,
+  applyPlanSlotChoices, buildOfferUsage, CONTENT_GOAL_LABELS, getCentralPaths, listProjectContent, listProjectGoalTopics,
+  loadProject, localDateKey, normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer,
+  updateProjectContentGoalWeights, validContentGoalWeights,
 } from './content-central.js';
+import {
+  describeBusinessHours, firstOpenTime, isOpenAt, isOpenDay, normalizeBusinessHours, openHours,
+} from './content-central-business-hours.js';
+import { buildPostingTimeStats, loadProjectMetrics } from './content-central-metrics.js';
 
 // What the cérebro may propose to change on an offer. Price, name and photos
 // stay with the operator's own form.
@@ -82,6 +86,36 @@ export async function saveNotebook(projectId, text, targetDir) {
   await write(brainPaths(targetDir, projectId).notebookPath, String(text || ''));
 }
 
+// A plan's formats repeat every day, so a closed day can't be avoided by the
+// formats alone: its slots leave the plan and are listed in skippedSlotIds,
+// which generation skips (after their rotation turn, so the other slots keep
+// what the preview showed). A slot at a closed hour of an open day is the
+// cérebro's to move with "time". Commemorative extras have no time of their
+// own, so one at a closed hour moves to the day's opening.
+function fitPlanToBusinessHours(plan, hours) {
+  if (!hours) return plan;
+  const skippedSlotIds = [];
+  const dayPlans = plan.dayPlans.map((day) => {
+    if (!isOpenDay(hours, day.date)) {
+      skippedSlotIds.push(...day.regular.map((slot) => slot.id));
+      return { ...day, regular: [], extras: [] };
+    }
+    const outside = day.regular.find((slot) => !isOpenAt(hours, day.date, slot.scheduledTime));
+    if (outside) {
+      throw new Error(`Horário ${outside.id} (${outside.scheduledTime}) fica fora do horário de funcionamento de ${day.date}. Escolha uma hora aberta com "time" ou mude o startTime do formato.`);
+    }
+    const extras = day.extras.map((extra) => (isOpenAt(hours, day.date, extra.scheduledTime) ? extra : { ...extra, scheduledTime: firstOpenTime(hours, day.date) }));
+    return { ...day, extras };
+  });
+  return {
+    ...plan,
+    dayPlans,
+    skippedSlotIds,
+    regularCount: dayPlans.reduce((sum, day) => sum + day.regular.length, 0),
+    extraCount: dayPlans.reduce((sum, day) => sum + day.extras.length, 0),
+  };
+}
+
 // Builds the week through the same preview "Agenda e geração" uses, then
 // pins the cérebro's choices. The stored formats are the normalized ones the
 // preview used, so approving sends generation exactly what was shown.
@@ -97,7 +131,11 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
     formats: formats.map((format, index) => ({ ...format, channel: channels[index] })),
     topicIdeaGenerator,
   }, targetDir);
-  const plan = await applyPlanSlotChoices(projectId, preview, slots || [], targetDir);
+  const project = await loadProject(getCentralPaths(targetDir, projectId));
+  const plan = fitPlanToBusinessHours(
+    await applyPlanSlotChoices(projectId, preview, slots || [], targetDir),
+    normalizeBusinessHours(project.businessHours),
+  );
   const stored = { startDate: plan.startDate, days: plan.days, formats: plan.formats, plan, approvedAt: null, updatedAt: new Date().toISOString() };
   await write(brainPaths(targetDir, projectId).planPath, stored);
   return stored;
@@ -231,33 +269,102 @@ function offerLine(offer, groups, usage) {
 
 const PROPOSAL_STATUS_LABELS = { applied: 'aplicada', rejected: 'recusada', failed: 'não aplicada' };
 
+const goalName = (key) => (key === 'sales' ? 'Venda' : CONTENT_GOAL_LABELS[key] || key);
+const KIND_LABELS = { story: 'Story', feed: 'Feed', reels: 'Reels' };
+
+function clip(text, max) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max)}…` : clean;
+}
+
+function slotTag(slot) {
+  if (slot.source === 'offer') return 'venda';
+  if (slot.source === 'goal') return goalName(slot.goalKey);
+  return slot.source || 'assunto';
+}
+
+function brandLines(project) {
+  const input = project.brandInput || {};
+  const xray = project.brandXray?.status === 'approved' ? project.brandXray.blocks || {} : {};
+  return [
+    `Público: ${input.audience || '-'}`,
+    `Região: ${input.serviceRegion || '-'}`,
+    `Diferencial: ${input.mainDifferential || '-'}`,
+    `Tom: ${(input.tone || []).join(', ') || '-'}`,
+    `Evitar: ${input.avoid || '-'}`,
+    xray.summary?.text ? `Resumo aprovado: ${clip(xray.summary.text, 600)}` : 'Raio-X da marca ainda não aprovado.',
+    xray.communication?.text ? `Comunicação: ${clip(xray.communication.text, 600)}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function topicBankLines(project, items) {
+  const lastUse = new Map();
+  for (const item of items) {
+    const id = item.contentTopic?.ideaId;
+    if (id && String(item.scheduledDate || '') > (lastUse.get(id) || '')) lastUse.set(id, item.scheduledDate);
+  }
+  return listProjectGoalTopics(project)
+    .map((topic) => `- [${topic.ideaId}] (${goalName(topic.goalKey)}) ${topic.title} — ${topic.detail}${lastUse.has(topic.ideaId) ? ` · já saiu ${lastUse.get(topic.ideaId)}` : ''}`)
+    .join('\n');
+}
+
+function postingTimeLines(stats, hours) {
+  const lines = stats.map((entry) => `- ${KIND_LABELS[entry.kind] || entry.kind} às ${entry.hour}h: alcance médio ${entry.avgReach} em ${entry.count} post(s) (maior ${entry.best}, menor ${entry.worst})${entry.count < 3 ? ' — em teste' : ''}`);
+  if (hours) {
+    const open = openHours(hours);
+    for (const kind of ['story', 'feed']) {
+      const tried = new Set(stats.filter((entry) => entry.kind === kind).map((entry) => entry.hour));
+      const untried = open.filter((hour) => !tried.has(hour));
+      if (untried.length) lines.push(`- ${KIND_LABELS[kind]}: horas abertas nunca testadas: ${untried.map((hour) => `${hour}h`).join(', ')}`);
+    }
+  }
+  return lines.join('\n') || '(nenhum post medido ainda)';
+}
+
 export async function buildBrainContext(projectId, targetDir) {
   const project = await loadProject(getCentralPaths(targetDir, projectId));
   const state = await readBrainState(projectId, targetDir);
-  const usage = buildOfferUsage(project, await listProjectContent(projectId, targetDir));
+  const items = await listProjectContent(projectId, targetDir);
+  const usage = buildOfferUsage(project, items);
+  const hours = normalizeBusinessHours(project.businessHours);
+  const stats = buildPostingTimeStats(await loadProjectMetrics(projectId, targetDir), items);
   const groups = new Map((project.contentStrategy?.offerGroups || []).map((group) => [group.id, `${group.name} [${group.id}]`]));
   const offers = normalizeProjectOffers(project.contentStrategy?.offers || []).map((offer) => offerLine(offer, groups, usage));
+  const skipped = state.plan?.plan?.skippedSlotIds || [];
   const plan = state.plan
     ? [
       `Início ${state.plan.startDate}, ${state.plan.days} dia(s), formatos: ${JSON.stringify(state.plan.formats)}`
         + (state.plan.approvedAt ? ` — JÁ APROVADO e gerado em ${state.plan.approvedAt.slice(0, 10)}; para outra semana monte um plano novo.` : ''),
-      ...state.plan.plan.dayPlans.flatMap((day) => day.regular.map((slot) => `- ${slot.id} ${slot.scheduledTime}: ${slot.label}`)),
+      ...state.plan.plan.dayPlans.flatMap((day) => day.regular.map((slot) => `- ${slot.id} ${slot.scheduledTime} [${slotTag(slot)}]: ${slot.label}`)),
+      ...(skipped.length ? [`Sem post por loja fechada: ${skipped.join(', ')}`] : []),
     ].join('\n')
     : '(nenhum)';
   const resolved = state.proposals.filter((proposal) => proposal.status !== 'pending').slice(-5).map((proposal) => {
     const errors = (proposal.results || []).filter((result) => !result.ok).map((result) => result.error);
     return `- ${proposal.summary}: ${PROPOSAL_STATUS_LABELS[proposal.status] || proposal.status}${errors.length ? ` (falhou: ${errors.join('; ')})` : ''}`;
   });
+  const weights = Object.entries(project.brandInput?.contentGoalWeights || {}).map(([key, value]) => `${goalName(key)} ${value}%`).join(', ');
+  const avoid = [...(project.learnings?.avoid || []), ...(project.segmentLearnings?.avoid || [])].slice(0, 10).map((entry) => `- ${entry}`);
   const now = new Date();
   return [
     `# Projeto ${project.name} (${project.projectId})`,
     `Hoje: ${localDateKey(now)} (${now.toLocaleDateString('pt-BR', { weekday: 'long' })})`,
     '## Caderno do cliente',
     state.notebook.trim() || '(vazio)',
+    '## Raio-X da marca',
+    brandLines(project),
+    '## O que evitar',
+    avoid.join('\n') || '(nada registrado)',
+    '## Objetivos e percentuais do Raio-X',
+    `${weights || '(sem percentuais; o sistema divide por igual)'}. O sistema já divide os horários do plano por esses percentuais: cada horário vem marcado [venda] ou com o objetivo.`,
+    '## Banco de assuntos',
+    topicBankLines(project, items) || '(vazio — marque objetivos no Raio-X)',
+    '## Horário de funcionamento',
+    hours ? describeBusinessHours(hours) : '(não configurado — peça ao operador para configurar na aba Empresa / Raio-X)',
+    '## Desempenho por horário (Instagram)',
+    `Alcance de posts com mais de 24h, por hora em que saíram.\n${postingTimeLines(stats, hours)}`,
     '## Ofertas',
     offers.join('\n') || '(nenhuma)',
-    '## Objetivos e percentuais do Raio-X',
-    `Objetivos marcados: ${(project.brandInput?.contentGoals || []).join(', ') || '(nenhum)'}; percentuais: ${JSON.stringify(project.brandInput?.contentGoalWeights || {})}`,
     '## Plano atual',
     plan,
     '## Propostas pendentes',
@@ -277,12 +384,17 @@ export function brainSystemPrompt(projectId) {
     'O operador (dono da agência) conversa com você para planejar a semana. Fale em português simples e direto, como um gerente de marketing. Não fale de código nem de arquivos.',
     'Você só age pelo comando abaixo, usando a ferramenta Bash. Não leia nem edite arquivos.',
     `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas. Rode no começo de cada resposta: o operador pode ter aplicado ou recusado propostas e mudado ofertas na tela.`,
-    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo,"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático.`,
+    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático.`,
     `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"sales":N,"<cada objetivo marcado>":N}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD ("" apaga a validade); active é true ou false; groupId é o id entre colchetes no context; goalWeights traz "sales" e todos os objetivos marcados, somando 100.`,
     'Regras:',
     '- O plano você monta direto. Ofertas, percentuais do Raio-X e caderno você só PROPÕE; o operador aplica na tela.',
     '- O caderno guarda o que vale sempre para esse cliente. Quando o operador disser algo que deve ser lembrado, ou que contradiz o caderno, proponha o caderno novo e diga o que sai e o que entra.',
     '- Combo junta só ofertas do mesmo setor. Oferta fora da validade não entra.',
+    '- O Raio-X manda na divisão: oferta só entra em horário marcado [venda]. Nos horários de objetivo, escolha no banco de assuntos (topicId) o que faz sentido para a semana, sem repetir o que saiu há pouco.',
+    '- Horário de funcionamento: só programe dentro dele. Dias fechados ficam sem post sozinhos. Se não estiver configurado, peça ao operador para configurar no Raio-X.',
+    '- Horários: use o desempenho por horário. Hora com menos de 3 posts medidos está em teste. Enquanto houver horas abertas nunca testadas, ponha cerca de 1 em cada 3 posts numa hora nova (com "time") e diga quais são teste. Com 3 ou mais posts medidos, prefira as horas de maior alcance e cite os números. Nunca tire conclusão de um post só.',
+    '- Oferta sem preço em post de venda: avise o operador.',
+    '- Não repita a mesma oferta em dias seguidos nem na mesma hora. Se faltar oferta, diga isso em vez de repetir.',
     '- Story, Reels, Facebook Story e Status do WhatsApp no mesmo horário dividem a mesma arte, assim como Feed e Facebook Feed: a oferta escolhida para um vale para todos.',
     '- Não monte plano começando antes de hoje.',
     '- Você nunca gera nem publica. O operador aprova o plano na tela com "Aprovar e gerar".',
