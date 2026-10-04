@@ -880,4 +880,47 @@ describe("Offers", () => {
     expect(calls.map((call) => call[0])).not.toContain("/api/projects/boss-pizzaria/assets");
     expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/offer-drafts-delete");
   });
+  it("keeps the draft and the form when the chosen photo cannot be downloaded", async () => {
+    stubFetchSequence([
+      { body: catalogState([], [CATALOG_DRAFT]) },
+      { ok: false, body: { error: "Não consegui baixar a foto" } },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Revisar Coca-Cola 2L" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar produto" }));
+
+    expect(await screen.findByText("Não consegui baixar a foto")).toBeInTheDocument();
+    const urls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls.map((call) => call[0]);
+    expect(urls).toEqual(["/api/state", "/api/projects/boss-pizzaria/assets"]);
+    expect(screen.getByLabelText("Nome do produto")).toHaveValue("Coca-Cola 2L");
+    expect(screen.getByText("Para revisar (1)")).toBeInTheDocument();
+  });
+
+  it("still resets the form and refreshes when the draft cannot be removed after the product was saved", async () => {
+    const savedProduct = { id: "coca", name: "Coca-Cola 2L", type: "offer", price: "R$ 9,99", photoReferenceIds: ["foto-coca"] };
+    stubFetchSequence([
+      { body: catalogState([], [CATALOG_DRAFT]) },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-coca" } } } },
+      { body: { project: {}, offer: savedProduct } },
+      { ok: false, body: { error: "falha ao apagar" } },
+      { body: catalogState([savedProduct], [CATALOG_DRAFT]) },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Revisar Coca-Cola 2L" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar produto" }));
+
+    expect(await screen.findByText(/Produto salvo, mas não consegui tirar o rascunho/)).toBeInTheDocument();
+    await screen.findByRole("button", { name: /Sem grupo/ });
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls.map((call) => call[0])).toEqual([
+      "/api/state",
+      "/api/projects/boss-pizzaria/assets",
+      "/api/projects/boss-pizzaria/offers",
+      "/api/projects/boss-pizzaria/offer-drafts-delete",
+      "/api/state",
+    ]);
+    expect(screen.getByLabelText("Nome do produto")).toHaveValue("");
+  });
 });

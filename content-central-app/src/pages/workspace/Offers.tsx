@@ -481,7 +481,13 @@ export function Offers() {
       const payload = { ...form, photoReferenceIds: [...form.photoReferenceIds, ...uploadedIds], flavors };
       await saveOffer(project.projectId, editingId ? { ...payload, id: editingId } : payload);
       if (reviewingDraft) {
-        await deleteOfferDraft(project.projectId, reviewingDraft.draft.id);
+        // The product is already saved here, so a failed draft delete must not
+        // abort the reset/refresh (a second save would create a duplicate).
+        try {
+          await deleteOfferDraft(project.projectId, reviewingDraft.draft.id);
+        } catch (err) {
+          setDraftError(`Produto salvo, mas não consegui tirar o rascunho de "Para revisar" (${(err as Error).message}). Descarte-o à mão.`);
+        }
         setReviewingDraft(null);
       }
       setForm({ ...EMPTY_FORM, groupId: defaultGroupId });
