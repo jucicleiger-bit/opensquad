@@ -3970,19 +3970,26 @@ export async function applyPlanSlotChoices(projectId, plan, choices, targetDir =
   }, 'canais que dividem a arte saem no mesmo horário — use a mesma hora neles.');
   const topicBySlot = resolveGroupChoice(slots, (id) => String(byId.get(id)?.topicId || '').trim() || undefined,
     'canais que dividem a arte falam do mesmo assunto — use o mesmo assunto neles.');
+  const skipBySlot = resolveGroupChoice(slots, (id) => (byId.get(id)?.skip === true ? true : undefined),
+    'canais que dividem a arte são pulados juntos.');
   for (const id of pinsBySlot.keys()) {
+    if (skipBySlot.has(id)) continue;
     const slot = slotById.get(id);
     if (slot.source !== 'offer') {
       throw new Error(`Horário ${id} é de ${CONTENT_GOAL_LABELS[slot.goalKey] || 'objetivo do Raio-X'} pelo Raio-X; oferta só entra em horário de venda.`);
     }
   }
   for (const id of topicBySlot.keys()) {
+    if (skipBySlot.has(id)) continue;
     if (slotById.get(id).source !== 'goal') throw new Error(`Horário ${id} é de venda; assunto do banco só entra em horário de objetivo.`);
   }
   const dayPlans = [];
   for (const day of plan.dayPlans) {
     const regular = [];
     for (const slot of day.regular) {
+      // Skipped (e.g. the days a weekly feed doesn't go out): saveBrainPlan
+      // moves it to skippedSlotIds; nothing else chosen for it matters.
+      if (skipBySlot.has(slot.id)) { regular.push({ ...slot, skip: true }); continue; }
       const choice = byId.get(slot.id);
       const offerIds = pinsBySlot.get(slot.id) || [];
       const time = timeBySlot.get(slot.id);

@@ -141,3 +141,16 @@ test('a bank topic that no longer exists fails before anything is written', asyn
     assert.deepEqual(await listProjectContent('sumiu', dir), []);
   });
 });
+
+test('skipping a slot skips every channel that shares its art', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pula-par', name: 'Pula Par' }, dir);
+    await saveProjectOffer('pula-par', { name: 'A', type: 'offer' }, dir);
+    const preview = await previewContentSchedulePlan('pula-par', { days: 2, startDate: '2026-10-05', formats: STORY_AND_REELS }, dir);
+
+    const plan = await applyPlanSlotChoices('pula-par', preview, [{ id: '2026-10-05-instagram_story-01', skip: true }], dir);
+
+    assert.deepEqual(plan.dayPlans[0].regular.map((slot) => slot.skip), [true, true]);
+    assert.deepEqual(plan.dayPlans[1].regular.map((slot) => slot.skip), [undefined, undefined]);
+  });
+});
