@@ -18,7 +18,9 @@ async function withServer(fn, options = {}) {
     return await fn(dir, server);
   } finally {
     await server.close();
-    await rm(dir, { recursive: true, force: true });
+    // The server's schedulers can still be writing their first files when a
+    // quick test ends; Windows then refuses the delete for a moment.
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 }
 
@@ -85,5 +87,55 @@ test('the cerebro CLI saves a plan and a proposal through the server', async () 
     const applied = await call(server, `/api/projects/loja/brain/proposals/${state.body.proposals[0].id}/apply`, {});
     assert.equal(applied.body.proposal.status, 'applied');
     await assert.rejects(run('plan', 'loja', '{"startDate":"2026-10-05","days":1,"formats":[]}'), /formato/);
+  });
+});
+
+test('the cérebro is pointed at the server that called it, not at the default port', async () => {
+  const calls = [];
+  const brainRunner = async (input) => {
+    calls.push(input);
+    return { sessionId: 's', text: 'ok' };
+  };
+  await withServer(async (_dir, server) => {
+    await call(server, '/api/projects/loja/brain/messages', { text: 'oi' });
+    assert.equal(calls[0].serverUrl, server.url);
+  }, { brainRunner });
+});
+
+test('a session Claude Code no longer has is replaced by a new one with the full context', async () => {
+  const calls = [];
+  const brainRunner = async (input) => {
+    calls.push(input);
+    if (calls.length === 1) return { sessionId: 'velha', text: 'primeira' };
+    if (input.sessionId === 'velha') throw new Error('No conversation found with session ID: velha');
+    return { sessionId: 'nova', text: 'recomecei' };
+  };
+  await withServer(async (_dir, server) => {
+    await call(server, '/api/projects/loja/brain/messages', { text: 'oi' });
+    const result = await call(server, '/api/projects/loja/brain/messages', { text: 'de novo' });
+    assert.equal(result.status, 200);
+    assert.equal(result.body.chat.sessionId, 'nova');
+    assert.equal(result.body.chat.messages.at(-1).text, 'recomecei');
+    assert.equal(calls[2].sessionId, null);
+    assert.match(calls[2].prompt, /Projeto Loja[\s\S]*de novo/);
+  }, { brainRunner });
+});
+
+test('brain routes answer 404 for a project that does not exist, and create nothing', async () => {
+  await withServer(async (dir, server) => {
+    assert.equal((await call(server, '/api/projects/nao-existe/brain')).status, 404);
+    assert.equal((await call(server, '/api/projects/nao-existe/brain/notebook', { text: 'x' })).status, 404);
+    const { readdir } = await import('node:fs/promises');
+    assert.deepEqual((await readdir(join(dir, '_opensquad', 'content-central', 'projects'))).sort(), ['loja']);
+  });
+});
+
+test('approving marks the plan so it cannot be generated twice by accident', async () => {
+  await withServer(async (_dir, server) => {
+    const formats = [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }];
+    await call(server, '/api/projects/loja/brain/plan', { startDate: '2026-10-05', days: 1, formats });
+    const marked = await call(server, '/api/projects/loja/brain/plan/approved', {});
+    assert.equal(marked.status, 200);
+    assert.ok((await call(server, '/api/projects/loja/brain')).body.plan.approvedAt);
   });
 });

@@ -22,7 +22,8 @@ import {
 import { collectAllProjectsMetrics, INSIGHTS_PERMISSION, loadProjectMetrics } from './content-central-metrics.js';
 import { buildMonthlyReport, listReportMonths, renderReportPage } from './content-central-report.js';
 import {
-  buildBrainContext, createProposal, readBrainState, resolveProposal, runClaudeTurn, saveBrainPlan, saveNotebook, sendBrainMessage,
+  buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, requireBrainProject, resolveProposal, runClaudeTurn,
+  saveBrainPlan, saveNotebook, sendBrainMessage,
 } from './content-central-brain.js';
 import {
   analyzeLearningImage,
@@ -447,6 +448,8 @@ export async function startContentCentralServer({
 
   const address = server.address();
   const url = `http://${host}:${address.port}`;
+  // The cérebro's CLI calls back into this same server (see runClaudeTurn).
+  context.serverUrl = url;
   if (openBrowser) openUrl(url);
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
@@ -858,12 +861,18 @@ async function handleRequest(req, res, targetDir, context = {}) {
   // operator's to read in the chat, so they come back as JSON, not a 500.
   if (parts[3] === 'brain') {
     try {
+      await requireBrainProject(projectId, targetDir);
       if (method === 'GET' && parts.length === 4) return sendJson(res, 200, await readBrainState(projectId, targetDir));
       if (method === 'GET' && parts.length === 5 && parts[4] === 'context') return sendJson(res, 200, { text: await buildBrainContext(projectId, targetDir) });
       if (method === 'POST') {
         const body = await readBody(req);
-        if (parts.length === 5 && parts[4] === 'messages') return sendJson(res, 200, await sendBrainMessage(projectId, body.text, targetDir, context.brainRunner));
-        if (parts.length === 5 && parts[4] === 'plan') return sendJson(res, 200, await saveBrainPlan(projectId, body, targetDir));
+        if (parts.length === 5 && parts[4] === 'messages') {
+          return sendJson(res, 200, await sendBrainMessage(projectId, body.text, targetDir, context.brainRunner, { serverUrl: context.serverUrl }));
+        }
+        if (parts.length === 5 && parts[4] === 'plan') {
+          return sendJson(res, 200, await saveBrainPlan(projectId, body, targetDir, { topicIdeaGenerator: context.topicIdeaGenerator }));
+        }
+        if (parts.length === 6 && parts[4] === 'plan' && parts[5] === 'approved') return sendJson(res, 200, await markBrainPlanApproved(projectId, targetDir));
         if (parts.length === 5 && parts[4] === 'notebook') {
           await saveNotebook(projectId, body.text, targetDir);
           return sendJson(res, 200, { notebook: String(body.text || '') });

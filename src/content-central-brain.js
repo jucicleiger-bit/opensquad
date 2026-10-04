@@ -8,14 +8,21 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  applyPlanSlotChoices, buildOfferUsage, getCentralPaths, listProjectContent, loadProject,
-  normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer, updateProjectBrandInput,
+  applyPlanSlotChoices, buildOfferUsage, getCentralPaths, listProjectContent, loadProject, localDateKey,
+  normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer, updateProjectContentGoalWeights,
+  validContentGoalWeights,
 } from './content-central.js';
 
 // What the cérebro may propose to change on an offer. Price, name and photos
 // stay with the operator's own form.
 const OFFER_FIELDS = new Set(['validFrom', 'validUntil', 'sector', 'active', 'groupId']);
 const CHANGE_KINDS = new Set(['offer', 'goalWeights', 'notebook']);
+// Same list the generate route accepts (API_SUPPORTED_CHANNELS in
+// content-central-server.js): a plan built on any other channel would only
+// fail when the operator approves it.
+const PLAN_CHANNELS = new Set(['instagram_feed', 'instagram_story', 'instagram_reels', 'facebook_feed', 'facebook_story', 'whatsapp_status']);
+
+const isDateKey = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00Z`));
 
 export function brainPaths(targetDir, projectId) {
   const dir = join(getCentralPaths(targetDir, projectId).projectDir, 'brain');
@@ -26,6 +33,17 @@ export function brainPaths(targetDir, projectId) {
     proposalsPath: join(dir, 'proposals.json'),
     notebookPath: join(dir, 'notebook.md'),
   };
+}
+
+// Every brain route goes through here first, so a mistyped project id is a
+// 404 instead of a brain/ folder created where no project exists.
+export async function requireBrainProject(projectId, targetDir) {
+  try {
+    return await loadProject(getCentralPaths(targetDir, projectId));
+  } catch (err) {
+    if (/^Project not found/.test(err.message)) throw Object.assign(new Error('Projeto não encontrado.'), { status: 404 });
+    throw err;
+  }
 }
 
 async function readOr(path, fallback, parse = JSON.parse) {
@@ -64,36 +82,84 @@ export async function saveNotebook(projectId, text, targetDir) {
   await write(brainPaths(targetDir, projectId).notebookPath, String(text || ''));
 }
 
-export async function saveBrainPlan(projectId, { startDate, days, formats, slots } = {}, targetDir) {
+// Builds the week through the same preview "Agenda e geração" uses, then
+// pins the cérebro's choices. The stored formats are the normalized ones the
+// preview used, so approving sends generation exactly what was shown.
+export async function saveBrainPlan(projectId, { startDate, days, formats, slots } = {}, targetDir, { topicIdeaGenerator } = {}) {
+  if (!isDateKey(String(startDate || ''))) throw new Error('Data inicial inválida: use AAAA-MM-DD.');
   if (!Array.isArray(formats) || !formats.length) throw new Error('O plano precisa de pelo menos um formato (canal, posts por dia, horário).');
-  const preview = await previewContentSchedulePlan(projectId, { startDate, days: Number(days), formats }, targetDir);
+  const channels = formats.map((format) => String(format?.channel || '').trim());
+  const unsupported = channels.find((channel) => !PLAN_CHANNELS.has(channel));
+  if (unsupported !== undefined) throw new Error(`Canal não suportado: "${unsupported}". Use: ${[...PLAN_CHANNELS].join(', ')}.`);
+  const preview = await previewContentSchedulePlan(projectId, {
+    startDate,
+    days: Number(days),
+    formats: formats.map((format, index) => ({ ...format, channel: channels[index] })),
+    topicIdeaGenerator,
+  }, targetDir);
   const plan = await applyPlanSlotChoices(projectId, preview, slots || [], targetDir);
-  const stored = { startDate: plan.startDate, days: plan.days, formats, plan, updatedAt: new Date().toISOString() };
+  const stored = { startDate: plan.startDate, days: plan.days, formats: plan.formats, plan, approvedAt: null, updatedAt: new Date().toISOString() };
   await write(brainPaths(targetDir, projectId).planPath, stored);
   return stored;
 }
 
-function checkChange(change) {
-  if (!CHANGE_KINDS.has(change?.kind)) throw new Error(`Tipo de mudança desconhecido: ${change?.kind}`);
-  if (change.kind === 'offer' && !OFFER_FIELDS.has(change.field)) throw new Error(`Campo de oferta não permitido: ${change.field}`);
+// Recorded after "Aprovar e gerar" succeeds, so the same plan can't be
+// generated twice by accident; a new plan from the cérebro starts unapproved.
+export async function markBrainPlanApproved(projectId, targetDir) {
+  const { planPath } = brainPaths(targetDir, projectId);
+  const stored = await readOr(planPath, null);
+  if (!stored) throw new Error('Não há plano para aprovar.');
+  stored.approvedAt = new Date().toISOString();
+  await write(planPath, stored);
+  return stored;
 }
 
-async function currentValue(projectId, change, targetDir) {
-  if (change.kind === 'notebook') return (await readBrainState(projectId, targetDir)).notebook;
-  const project = await loadProject(getCentralPaths(targetDir, projectId));
+function findOffer(project, offerId) {
+  const offer = normalizeProjectOffers(project.contentStrategy?.offers || []).find((entry) => entry.id === offerId);
+  if (!offer) throw new Error(`Oferta ${offerId} não existe.`);
+  return offer;
+}
+
+// Checks and normalizes what a change would write, so the "antes → depois"
+// the operator approves is exactly what gets saved (a malformed date would
+// otherwise be saved as "no validity", and "false" as text as active).
+function normalizeChange(project, change) {
+  if (!CHANGE_KINDS.has(change?.kind)) throw new Error(`Tipo de mudança desconhecido: ${change?.kind}`);
+  if (change.kind === 'notebook') return { kind: 'notebook', after: String(change.after ?? '') };
+  if (change.kind === 'goalWeights') return { kind: 'goalWeights', after: validContentGoalWeights(project, change.after) };
+  if (!OFFER_FIELDS.has(change.field)) throw new Error(`Campo de oferta não permitido: ${change.field}`);
+  const offer = findOffer(project, change.offerId);
+  let after = change.after;
+  if (change.field === 'validFrom' || change.field === 'validUntil') {
+    after = String(after ?? '').trim();
+    if (after && !isDateKey(after)) throw new Error(`Data inválida em ${change.field} de ${offer.name}: use AAAA-MM-DD, ou "" para apagar.`);
+  } else if (change.field === 'sector') {
+    after = String(after ?? '').trim();
+  } else if (change.field === 'active') {
+    if (typeof after !== 'boolean') throw new Error(`"active" de ${offer.name} precisa ser true ou false.`);
+  } else {
+    after = after ? String(after) : null;
+    if (after && !(project.contentStrategy?.offerGroups || []).some((group) => group.id === after)) {
+      throw new Error(`Grupo ${after} não existe.`);
+    }
+  }
+  return { kind: 'offer', offerId: offer.id, field: change.field, after };
+}
+
+function valueIn(project, notebook, change) {
+  if (change.kind === 'notebook') return notebook;
   if (change.kind === 'goalWeights') return project.brandInput?.contentGoalWeights || {};
-  const offer = normalizeProjectOffers(project.contentStrategy?.offers || []).find((entry) => entry.id === change.offerId);
-  if (!offer) throw new Error(`Oferta ${change.offerId} não existe.`);
-  return offer[change.field];
+  return findOffer(project, change.offerId)[change.field];
 }
 
 export async function createProposal(projectId, { summary, changes } = {}, targetDir) {
   if (!Array.isArray(changes) || !changes.length) throw new Error('A proposta precisa de pelo menos uma mudança.');
-  const withBefore = [];
-  for (const change of changes) {
-    checkChange(change);
-    withBefore.push({ ...change, before: await currentValue(projectId, change, targetDir) });
-  }
+  const project = await requireBrainProject(projectId, targetDir);
+  const { notebook } = await readBrainState(projectId, targetDir);
+  const withBefore = changes.map((change) => {
+    const normalized = normalizeChange(project, change);
+    return { ...normalized, before: valueIn(project, notebook, normalized) };
+  });
   const proposal = {
     id: randomUUID(),
     summary: String(summary || '').trim(),
@@ -109,17 +175,14 @@ export async function createProposal(projectId, { summary, changes } = {}, targe
 // Refuses a change whose data moved since it was proposed: the operator
 // approved "antes → depois", not whatever happens to be there now.
 async function applyChange(projectId, change, targetDir) {
-  const now = await currentValue(projectId, change, targetDir);
-  if (JSON.stringify(now ?? null) !== JSON.stringify(change.before ?? null)) {
+  const project = await loadProject(getCentralPaths(targetDir, projectId));
+  const { notebook } = await readBrainState(projectId, targetDir);
+  if (JSON.stringify(valueIn(project, notebook, change) ?? null) !== JSON.stringify(change.before ?? null)) {
     throw new Error('O dado mudou desde a proposta; peça ao cérebro para propor de novo.');
   }
   if (change.kind === 'notebook') return saveNotebook(projectId, change.after, targetDir);
-  const project = await loadProject(getCentralPaths(targetDir, projectId));
-  if (change.kind === 'goalWeights') {
-    return updateProjectBrandInput(projectId, { ...project.brandInput, contentGoalWeights: change.after }, targetDir);
-  }
-  const offer = normalizeProjectOffers(project.contentStrategy?.offers || []).find((entry) => entry.id === change.offerId);
-  return saveProjectOffer(projectId, { ...offer, [change.field]: change.after }, targetDir);
+  if (change.kind === 'goalWeights') return updateProjectContentGoalWeights(projectId, change.after, targetDir);
+  return saveProjectOffer(projectId, { ...findOffer(project, change.offerId), [change.field]: change.after }, targetDir);
 }
 
 export async function resolveProposal(projectId, proposalId, action, targetDir) {
@@ -140,7 +203,7 @@ export async function resolveProposal(projectId, proposalId, action, targetDir) 
       }
     }
   }
-  proposal.status = action === 'apply' ? 'applied' : 'rejected';
+  proposal.status = action === 'reject' ? 'rejected' : results.some((result) => result.ok) ? 'applied' : 'failed';
   proposal.results = results;
   proposal.resolvedAt = new Date().toISOString();
   await write(paths.proposalsPath, proposals);
@@ -166,21 +229,29 @@ function offerLine(offer, groups, usage) {
     + (use.nextScheduledDate ? ` · na fila ${use.nextScheduledDate}` : '');
 }
 
+const PROPOSAL_STATUS_LABELS = { applied: 'aplicada', rejected: 'recusada', failed: 'não aplicada' };
+
 export async function buildBrainContext(projectId, targetDir) {
   const project = await loadProject(getCentralPaths(targetDir, projectId));
   const state = await readBrainState(projectId, targetDir);
   const usage = buildOfferUsage(project, await listProjectContent(projectId, targetDir));
-  const groups = new Map((project.contentStrategy?.offerGroups || []).map((group) => [group.id, group.name]));
+  const groups = new Map((project.contentStrategy?.offerGroups || []).map((group) => [group.id, `${group.name} [${group.id}]`]));
   const offers = normalizeProjectOffers(project.contentStrategy?.offers || []).map((offer) => offerLine(offer, groups, usage));
   const plan = state.plan
     ? [
-      `Início ${state.plan.startDate}, ${state.plan.days} dia(s), formatos: ${JSON.stringify(state.plan.formats)}`,
+      `Início ${state.plan.startDate}, ${state.plan.days} dia(s), formatos: ${JSON.stringify(state.plan.formats)}`
+        + (state.plan.approvedAt ? ` — JÁ APROVADO e gerado em ${state.plan.approvedAt.slice(0, 10)}; para outra semana monte um plano novo.` : ''),
       ...state.plan.plan.dayPlans.flatMap((day) => day.regular.map((slot) => `- ${slot.id} ${slot.scheduledTime}: ${slot.label}`)),
     ].join('\n')
     : '(nenhum)';
+  const resolved = state.proposals.filter((proposal) => proposal.status !== 'pending').slice(-5).map((proposal) => {
+    const errors = (proposal.results || []).filter((result) => !result.ok).map((result) => result.error);
+    return `- ${proposal.summary}: ${PROPOSAL_STATUS_LABELS[proposal.status] || proposal.status}${errors.length ? ` (falhou: ${errors.join('; ')})` : ''}`;
+  });
+  const now = new Date();
   return [
     `# Projeto ${project.name} (${project.projectId})`,
-    `Hoje: ${new Date().toISOString().slice(0, 10)}`,
+    `Hoje: ${localDateKey(now)} (${now.toLocaleDateString('pt-BR', { weekday: 'long' })})`,
     '## Caderno do cliente',
     state.notebook.trim() || '(vazio)',
     '## Ofertas',
@@ -191,6 +262,8 @@ export async function buildBrainContext(projectId, targetDir) {
     plan,
     '## Propostas pendentes',
     state.proposals.filter((proposal) => proposal.status === 'pending').map((proposal) => `- ${proposal.id}: ${proposal.summary}`).join('\n') || '(nenhuma)',
+    '## Últimas propostas resolvidas',
+    resolved.join('\n') || '(nenhuma)',
   ].join('\n\n');
 }
 
@@ -203,13 +276,15 @@ export function brainSystemPrompt(projectId) {
     `Você é o cérebro do projeto "${projectId}" no Content Central: o administrador do planejamento de conteúdo desse cliente (uma loja local).`,
     'O operador (dono da agência) conversa com você para planejar a semana. Fale em português simples e direto, como um gerente de marketing. Não fale de código nem de arquivos.',
     'Você só age pelo comando abaixo, usando a ferramenta Bash. Não leia nem edite arquivos.',
-    `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas.`,
-    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"instagram_feed|instagram_story|instagram_reels|facebook_feed|facebook_story|whatsapp_status","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo,"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático.`,
-    `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"<objetivo>":<percentual>}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD; "" apaga a validade.`,
+    `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas. Rode no começo de cada resposta: o operador pode ter aplicado ou recusado propostas e mudado ofertas na tela.`,
+    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo,"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático.`,
+    `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"sales":N,"<cada objetivo marcado>":N}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD ("" apaga a validade); active é true ou false; groupId é o id entre colchetes no context; goalWeights traz "sales" e todos os objetivos marcados, somando 100.`,
     'Regras:',
     '- O plano você monta direto. Ofertas, percentuais do Raio-X e caderno você só PROPÕE; o operador aplica na tela.',
     '- O caderno guarda o que vale sempre para esse cliente. Quando o operador disser algo que deve ser lembrado, ou que contradiz o caderno, proponha o caderno novo e diga o que sai e o que entra.',
-    '- Combo junta só ofertas do mesmo setor. Oferta fora da validade não entra. Story, Reels e Facebook Story no mesmo horário dividem a mesma arte, assim como Feed e Facebook Feed: use a mesma oferta neles.',
+    '- Combo junta só ofertas do mesmo setor. Oferta fora da validade não entra.',
+    '- Story, Reels, Facebook Story e Status do WhatsApp no mesmo horário dividem a mesma arte, assim como Feed e Facebook Feed: a oferta escolhida para um vale para todos.',
+    '- Não monte plano começando antes de hoje.',
     '- Você nunca gera nem publica. O operador aprova o plano na tela com "Aprovar e gerar".',
     '- Termine cada resposta dizendo o que você fez e o que espera do operador.',
   ].join('\n');
@@ -220,13 +295,16 @@ export function brainSystemPrompt(projectId) {
 // (which restyle answers) out; the only tool is Bash, and only the cerebro
 // CLI runs without a prompt — anything else is denied in print mode. The
 // prompt goes through stdin: the first turn carries the whole project
-// context, which can outgrow Windows' command-line limit.
-export function runClaudeTurn({ prompt, sessionId, systemPrompt, cwd }) {
+// context, which can outgrow Windows' command-line limit. serverUrl points
+// the CLI at the server that asked, not at the default port: a test bench
+// must never write into production.
+export function runClaudeTurn({ prompt, sessionId, systemPrompt, cwd, serverUrl }) {
   const args = ['-p', '--output-format', 'json', '--setting-sources', 'project', '--tools', 'Bash',
     '--allowedTools', `Bash(node ${CEREBRO_CLI}:*)`, '--append-system-prompt', systemPrompt];
   if (sessionId) args.push('--resume', sessionId);
+  const env = serverUrl ? { ...process.env, CONTENT_CENTRAL_URL: serverUrl } : process.env;
   return new Promise((resolve, reject) => {
-    const child = spawn(process.env.CLAUDE_BIN || 'claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(process.env.CLAUDE_BIN || 'claude', args, { cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => {
@@ -256,21 +334,30 @@ export function runClaudeTurn({ prompt, sessionId, systemPrompt, cwd }) {
 
 const busyProjects = new Set();
 
-export async function sendBrainMessage(projectId, text, targetDir, runner = runClaudeTurn) {
+export async function sendBrainMessage(projectId, text, targetDir, runner = runClaudeTurn, { serverUrl } = {}) {
   const message = String(text || '').trim();
   if (!message) throw Object.assign(new Error('Mensagem vazia.'), { status: 400 });
+  await requireBrainProject(projectId, targetDir);
   if (busyProjects.has(projectId)) throw Object.assign(new Error('O cérebro ainda está respondendo.'), { status: 409 });
   busyProjects.add(projectId);
   try {
     const { chat } = await readBrainState(projectId, targetDir);
     await appendBrainMessages(projectId, [{ role: 'user', text: message, at: new Date().toISOString() }], null, targetDir);
-    const prompt = chat.sessionId
-      ? message
-      : `${await buildBrainContext(projectId, targetDir)}\n\n---\nMensagem do operador:\n${message}`;
     const { dir } = brainPaths(targetDir, projectId);
     await mkdir(dir, { recursive: true });
+    const withContext = async () => `${await buildBrainContext(projectId, targetDir)}\n\n---\nMensagem do operador:\n${message}`;
+    const turn = async (sessionId, prompt) => runner({ prompt, sessionId, systemPrompt: brainSystemPrompt(projectId), cwd: dir, serverUrl });
     try {
-      const reply = await runner({ prompt, sessionId: chat.sessionId, systemPrompt: brainSystemPrompt(projectId), cwd: dir });
+      let reply;
+      try {
+        reply = await turn(chat.sessionId, chat.sessionId ? message : await withContext());
+      } catch (err) {
+        // Claude Code deletes old transcripts (after 30 days by default); a
+        // session that is gone would fail every turn from then on. Start a
+        // new one with the full context — the notebook keeps what matters.
+        if (!chat.sessionId || !/No conversation found/i.test(err.message)) throw err;
+        reply = await turn(null, await withContext());
+      }
       const next = await appendBrainMessages(projectId, [{ role: 'assistant', text: reply.text, at: new Date().toISOString() }], reply.sessionId, targetDir);
       return { chat: next };
     } catch (err) {

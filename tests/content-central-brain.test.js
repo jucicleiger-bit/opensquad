@@ -1,11 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createCentralProject, loadProjectForTest, saveProjectOffer } from '../src/content-central.js';
 import {
-  buildBrainContext, createProposal, readBrainState, resolveProposal, saveBrainPlan, saveNotebook,
+  createCentralProject, getCentralPaths, loadProjectForTest, saveProjectOffer, saveProjectOfferGroup, updateProjectBrandInput,
+} from '../src/content-central.js';
+import {
+  buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, resolveProposal, saveBrainPlan, saveNotebook,
 } from '../src/content-central-brain.js';
 
 async function withProject(fn) {
@@ -30,11 +32,13 @@ test('empty brain state reads as defaults', async () => {
 test('an offer proposal captures before, applies, and refuses when data changed since', async () => {
   await withProject(async (dir) => {
     const { offer } = await saveProjectOffer('loja', { name: 'Arroz', type: 'offer' }, dir);
-    const first = await createProposal('loja', { summary: 'Setor', changes: [{ kind: 'offer', offerId: offer.id, field: 'sector', after: 'Mercearia' }] }, dir);
+    const first = await createProposal('loja', { summary: 'Setor', changes: [{ kind: 'offer', offerId: offer.id, field: 'sector', after: ' Mercearia ' }] }, dir);
     assert.equal(first.changes[0].before, '');
+    assert.equal(first.changes[0].after, 'Mercearia');
 
     const applied = await resolveProposal('loja', first.id, 'apply', dir);
     assert.deepEqual(applied.results, [{ index: 0, ok: true }]);
+    assert.equal(applied.proposal.status, 'applied');
     const saved = (await loadProjectForTest('loja', dir)).contentStrategy.offers[0];
     assert.equal(saved.sector, 'Mercearia');
     assert.equal(saved.name, 'Arroz');
@@ -44,14 +48,42 @@ test('an offer proposal captures before, applies, and refuses when data changed 
     const refused = await resolveProposal('loja', stale.id, 'apply', dir);
     assert.equal(refused.results[0].ok, false);
     assert.match(refused.results[0].error, /mudou/);
+    assert.equal(refused.proposal.status, 'failed');
   });
 });
 
-test('a proposal with an unknown field or kind is refused up front', async () => {
+test('a proposal is refused up front when what it would save is not valid', async () => {
   await withProject(async (dir) => {
     const { offer } = await saveProjectOffer('loja', { name: 'Arroz', type: 'offer' }, dir);
-    await assert.rejects(createProposal('loja', { summary: 'x', changes: [{ kind: 'offer', offerId: offer.id, field: 'price', after: '1' }] }, dir), /não permitido/);
+    const propose = (change) => createProposal('loja', { summary: 'x', changes: [{ kind: 'offer', offerId: offer.id, ...change }] }, dir);
+    await assert.rejects(propose({ field: 'price', after: '1' }), /não permitido/);
+    await assert.rejects(propose({ field: 'validUntil', after: '20/10/2026' }), /AAAA-MM-DD/);
+    await assert.rejects(propose({ field: 'active', after: 'false' }), /true ou false/);
+    await assert.rejects(propose({ field: 'groupId', after: 'nao-existe' }), /Grupo nao-existe não existe/);
     await assert.rejects(createProposal('loja', { summary: 'x', changes: [{ kind: 'apagar', after: 1 }] }, dir), /desconhecido/);
+
+    const { group } = await saveProjectOfferGroup('loja', { name: 'Hortifruti' }, dir);
+    const ok = await propose({ field: 'groupId', after: group.id });
+    assert.equal(ok.changes[0].before, null);
+    assert.equal((await propose({ field: 'validUntil', after: '' })).changes[0].after, '');
+  });
+});
+
+test('new percentages keep the Raio-X approved and must name every active goal', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBrandInput('loja', { brandName: 'Loja', contentGoals: ['authority'], contentGoalWeights: { sales: 80, authority: 20 } }, dir);
+    const projectPath = getCentralPaths(dir, 'loja').projectPath;
+    const raw = JSON.parse(await readFile(projectPath, 'utf-8'));
+    await writeFile(projectPath, JSON.stringify({ ...raw, brandXray: { ...raw.brandXray, status: 'approved' } }), 'utf-8');
+
+    await assert.rejects(createProposal('loja', { summary: 'x', changes: [{ kind: 'goalWeights', after: { sales: 70 } }] }, dir), /Faltam os percentuais de: authority/);
+    await assert.rejects(createProposal('loja', { summary: 'x', changes: [{ kind: 'goalWeights', after: { sales: 70, authority: 20 } }] }, dir), /somar 100/);
+
+    const proposal = await createProposal('loja', { summary: 'Mais venda', changes: [{ kind: 'goalWeights', after: { sales: 70, authority: 30 } }] }, dir);
+    await resolveProposal('loja', proposal.id, 'apply', dir);
+    const project = await loadProjectForTest('loja', dir);
+    assert.deepEqual(project.brandInput.contentGoalWeights, { sales: 70, authority: 30 });
+    assert.equal(project.brandXray.status, 'approved');
   });
 });
 
@@ -68,23 +100,45 @@ test('a notebook proposal replaces the notebook only when applied; reject change
   });
 });
 
-test('saveBrainPlan stores the preview with the chosen offers', async () => {
+test('saveBrainPlan stores the preview with the chosen offers and the normalized formats', async () => {
   await withProject(async (dir) => {
     const { offer } = await saveProjectOffer('loja', { name: 'Feijão', type: 'offer' }, dir);
     const stored = await saveBrainPlan('loja', { startDate: '2026-10-05', days: 1, formats: STORY, slots: [{ id: '2026-10-05-instagram_story-01', offerIds: [offer.id] }] }, dir);
     assert.equal(stored.plan.dayPlans[0].regular[0].offerName, 'Feijão');
-    assert.deepEqual((await readBrainState('loja', dir)).plan.formats, STORY);
+    assert.equal(stored.approvedAt, null);
+    const { formats } = (await readBrainState('loja', dir)).plan;
+    assert.deepEqual(formats.map((format) => [format.channel, format.startTime, format.label]), [['instagram_story', '09:00', 'Instagram Stories']]);
   });
 });
 
-test('the context names the offers with sector and validity and includes the notebook', async () => {
+test('saveBrainPlan refuses a channel generation would reject and a malformed start date', async () => {
+  await withProject(async (dir) => {
+    await assert.rejects(saveBrainPlan('loja', { startDate: '2026-10-05', days: 1, formats: [{ ...STORY[0], channel: 'story' }] }, dir), /Canal não suportado: "story"/);
+    await assert.rejects(saveBrainPlan('loja', { startDate: '05/10/2026', days: 1, formats: STORY }, dir), /AAAA-MM-DD/);
+  });
+});
+
+test('an approved plan is marked, and the next plan from the cérebro starts unapproved', async () => {
+  await withProject(async (dir) => {
+    await saveBrainPlan('loja', { startDate: '2026-10-05', days: 1, formats: STORY }, dir);
+    assert.ok((await markBrainPlanApproved('loja', dir)).approvedAt);
+    assert.match(await buildBrainContext('loja', dir), /JÁ APROVADO/);
+    await saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir);
+    assert.equal((await readBrainState('loja', dir)).plan.approvedAt, null);
+  });
+});
+
+test('the context names the offers with sector and validity, the notebook and resolved proposals', async () => {
   await withProject(async (dir) => {
     await saveProjectOffer('loja', { name: 'Sabonete', type: 'offer', sector: 'Higiene', validUntil: '2026-10-20' }, dir);
     await saveNotebook('loja', 'Dono não quer post no domingo.', dir);
+    const p = await createProposal('loja', { summary: 'Novo caderno', changes: [{ kind: 'notebook', after: 'x' }] }, dir);
+    await resolveProposal('loja', p.id, 'reject', dir);
     const text = await buildBrainContext('loja', dir);
     assert.match(text, /Sabonete/);
     assert.match(text, /Higiene/);
     assert.match(text, /até 2026-10-20/);
     assert.match(text, /Dono não quer post no domingo/);
+    assert.match(text, /Novo caderno: recusada/);
   });
 });
