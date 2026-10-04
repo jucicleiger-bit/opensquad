@@ -15,6 +15,7 @@ import {
 import {
   describeBusinessHours, firstOpenTime, isOpenAt, isOpenDay, normalizeBusinessHours, openHours,
 } from './content-central-business-hours.js';
+import { contractProblems, describeContractedPlan, normalizeContractedPlan } from './content-central-contract.js';
 import { goalName, slotTag } from './content-central-goals.js';
 import { buildPostingTimeStats, loadProjectMetrics } from './content-central-metrics.js';
 
@@ -87,24 +88,26 @@ export async function saveNotebook(projectId, text, targetDir) {
   await write(brainPaths(targetDir, projectId).notebookPath, String(text || ''));
 }
 
-// A plan's formats repeat every day, so a closed day can't be avoided by the
-// formats alone: its slots leave the plan and are listed in skippedSlotIds,
-// which generation skips (after their rotation turn, so the other slots keep
-// what the preview showed). A slot at a closed hour of an open day is the
-// cérebro's to move with "time". Commemorative extras have no time of their
-// own, so one at a closed hour moves to the day's opening.
-function fitPlanToBusinessHours(plan, hours) {
-  if (!hours) return plan;
+// A plan's formats repeat every day, so closed days and the slots the cérebro
+// skips ("skip", e.g. the days a weekly feed doesn't go out) leave the plan
+// and are listed in skippedSlotIds, which generation skips (after their
+// rotation turn, so the other slots keep what the preview showed). A slot at
+// a closed hour of an open day is the cérebro's to move with "time". A
+// closed day keeps its holiday / commemorative post; an extra at a closed
+// hour of an open day moves to the day's opening.
+function fitPlan(plan, hours) {
   const skippedSlotIds = [];
   const outside = [];
   const dayPlans = plan.dayPlans.map((day) => {
-    if (!isOpenDay(hours, day.date)) {
-      skippedSlotIds.push(...day.regular.map((slot) => slot.id));
-      return { ...day, regular: [], extras: [] };
-    }
-    outside.push(...day.regular.filter((slot) => !isOpenAt(hours, day.date, slot.scheduledTime)).map((slot) => `${slot.id} (${slot.scheduledTime})`));
+    const closed = !isOpenDay(hours, day.date);
+    const regular = day.regular.filter((slot) => {
+      if (closed || slot.skip) { skippedSlotIds.push(slot.id); return false; }
+      return true;
+    });
+    if (closed || !hours) return { ...day, regular };
+    outside.push(...regular.filter((slot) => !isOpenAt(hours, day.date, slot.scheduledTime)).map((slot) => `${slot.id} (${slot.scheduledTime})`));
     const extras = day.extras.map((extra) => (isOpenAt(hours, day.date, extra.scheduledTime) ? extra : { ...extra, scheduledTime: firstOpenTime(hours, day.date) }));
-    return { ...day, extras };
+    return { ...day, regular, extras };
   });
   if (outside.length) throw new Error(`Fora do horário de funcionamento: ${outside.join(', ')}. Mova esses horários com "time" ou mude o startTime do formato.`);
   return {
@@ -114,6 +117,63 @@ function fitPlanToBusinessHours(plan, hours) {
     regularCount: dayPlans.reduce((sum, day) => sum + day.regular.length, 0),
     extraCount: dayPlans.reduce((sum, day) => sum + day.extras.length, 0),
   };
+}
+
+const KIND_OF_CHANNEL = {
+  instagram_story: 'story', facebook_story: 'story', whatsapp_status: 'story', instagram_feed: 'feed', facebook_feed: 'feed', instagram_reels: 'reels',
+};
+
+function nextDay(dateKey) {
+  const [year, month, day] = dateKey.split('-').map(Number);
+  return new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+}
+
+// What the cérebro must fix or explain to the operator. With few products a
+// repeat is normal, so a consecutive-day repeat only warns while some active
+// offer valid on both days went unused on both.
+function planWarnings(plan, project, stats, hours) {
+  const warnings = new Set();
+  const offers = normalizeProjectOffers(project.contentStrategy?.offers || []);
+  const byId = new Map(offers.map((offer) => [offer.id, offer]));
+  const days = plan.dayPlans.filter((day) => day.regular.length);
+  // Rotation-picked slots carry only offerId; offerIds exists once the cérebro pins offers.
+  const idsOf = (slot) => (slot.offerIds?.length ? slot.offerIds : (slot.offerId ? [slot.offerId] : []));
+  const offersOn = (day) => new Set(day.regular.flatMap(idsOf));
+  for (const day of days) {
+    for (const slot of day.regular) {
+      for (const id of idsOf(slot)) {
+        if (byId.has(id) && !byId.get(id).price) warnings.add(`${byId.get(id).name} está sem preço no post de ${day.date} às ${slot.scheduledTime}.`);
+      }
+    }
+  }
+  for (let index = 1; index < days.length; index += 1) {
+    const [before, after] = [days[index - 1], days[index]];
+    if (nextDay(before.date) !== after.date) continue;
+    const used = new Set([...offersOn(before), ...offersOn(after)]);
+    const idle = offers
+      .filter((offer) => offer.active && !used.has(offer.id)
+        && (!offer.validFrom || offer.validFrom <= before.date) && (!offer.validUntil || offer.validUntil >= after.date))
+      .map((offer) => offer.name);
+    if (!idle.length) continue;
+    for (const id of offersOn(before)) {
+      if (offersOn(after).has(id) && byId.has(id)) {
+        warnings.add(`${byId.get(id).name} sai em dias seguidos (${before.date} e ${after.date}) e há ofertas sem usar nesses dias: ${idle.slice(0, 5).join(', ')}.`);
+      }
+    }
+  }
+  if (hours) {
+    const open = openHours(hours);
+    for (const kind of ['story', 'feed']) {
+      const planned = days.flatMap((day) => day.regular).filter((slot) => KIND_OF_CHANNEL[slot.channel] === kind).map((slot) => Number(slot.scheduledTime.slice(0, 2)));
+      if (!planned.length) continue;
+      const tried = new Set(stats.filter((entry) => entry.kind === kind).map((entry) => entry.hour));
+      const untried = open.filter((hour) => !tried.has(hour));
+      if (untried.length && !planned.some((hour) => untried.includes(hour))) {
+        warnings.add(`Nenhum ${kind} em horário novo; horas abertas nunca testadas: ${untried.map((hour) => `${hour}h`).join(', ')}.`);
+      }
+    }
+  }
+  return [...warnings];
 }
 
 // Builds the week through the same preview "Agenda e geração" uses, then
@@ -135,7 +195,15 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
   // summary and businessHoursWarnings describe the preview before the choices
   // and the trimming, so they would be stale here; nothing reads them.
   const { summary, businessHoursWarnings, ...chosen } = await applyPlanSlotChoices(projectId, preview, slots || [], targetDir);
-  const plan = fitPlanToBusinessHours(chosen, normalizeBusinessHours(project.businessHours));
+  const hours = normalizeBusinessHours(project.businessHours);
+  const fitted = fitPlan(chosen, hours);
+  const problems = contractProblems(fitted, normalizeContractedPlan(project.contractedPlan), hours);
+  if (problems.length) {
+    throw new Error(`O plano não bate com o plano contratado: ${problems.join('; ')}. Ajuste os formatos ou pule horários com "skip".`);
+  }
+  const items = await listProjectContent(projectId, targetDir);
+  const stats = buildPostingTimeStats(await loadProjectMetrics(projectId, targetDir), items);
+  const plan = { ...fitted, warnings: planWarnings(fitted, project, stats, hours) };
   const stored = { startDate: plan.startDate, days: plan.days, formats: plan.formats, plan, approvedAt: null, updatedAt: new Date().toISOString() };
   await write(brainPaths(targetDir, projectId).planPath, stored);
   return stored;
@@ -329,7 +397,8 @@ export async function buildBrainContext(projectId, targetDir) {
       `Início ${state.plan.startDate}, ${state.plan.days} dia(s), formatos: ${JSON.stringify(state.plan.formats)}`
         + (state.plan.approvedAt ? ` — JÁ APROVADO e gerado em ${state.plan.approvedAt.slice(0, 10)}; para outra semana monte um plano novo.` : ''),
       ...state.plan.plan.dayPlans.flatMap((day) => day.regular.map((slot) => `- ${slot.id} ${slot.scheduledTime} [${slotTag(slot)}]: ${slot.label}`)),
-      ...(skipped.length ? [`Sem post por loja fechada: ${skipped.join(', ')}`] : []),
+      ...(skipped.length ? [`Sem post (loja fechada ou pulado): ${skipped.join(', ')}`] : []),
+      ...(state.plan?.plan?.warnings?.length ? [`Avisos do plano:\n${state.plan.plan.warnings.map((warning) => `- ${warning}`).join('\n')}`] : []),
     ].join('\n')
     : '(nenhum)';
   const resolved = state.proposals.filter((proposal) => proposal.status !== 'pending').slice(-5).map((proposal) => {
@@ -354,6 +423,8 @@ export async function buildBrainContext(projectId, targetDir) {
     topicBankLines(project, items) || '(vazio — marque objetivos no Raio-X)',
     '## Horário de funcionamento',
     hours ? describeBusinessHours(hours) : '(não configurado — peça ao operador para configurar na aba Empresa / Raio-X)',
+    '## Plano contratado',
+    describeContractedPlan(normalizeContractedPlan(project.contractedPlan)) + (project.contractedPlan ? '' : '\nPeça ao operador para preencher na aba Empresa / Raio-X.'),
     '## Desempenho por horário (Instagram)',
     `Alcance de posts com mais de 24h, por hora em que saíram.\n${postingTimeLines(stats, hours)}`,
     '## Ofertas',
@@ -377,7 +448,7 @@ export function brainSystemPrompt(projectId) {
     'O operador (dono da agência) conversa com você para planejar a semana. Fale em português simples e direto, como um gerente de marketing. Não fale de código nem de arquivos.',
     'Você só age pelo comando abaixo, usando a ferramenta Bash. Não leia nem edite arquivos.',
     `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas. Rode no começo de cada resposta: o operador pode ter aplicado ou recusado propostas e mudado ofertas na tela.`,
-    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático.`,
+    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"skip":true (pula esse post),"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático. Depois de salvar, o comando mostra avisos: corrija cada um ou explique ao operador por que fica assim.`,
     `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"sales":N,"<cada objetivo marcado>":N}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD ("" apaga a validade); active é true ou false; groupId é o id entre colchetes no context; goalWeights traz "sales" e todos os objetivos marcados, somando 100.`,
     'Regras:',
     '- O plano você monta direto. Ofertas, percentuais do Raio-X e caderno você só PROPÕE; o operador aplica na tela.',
@@ -386,8 +457,9 @@ export function brainSystemPrompt(projectId) {
     '- O Raio-X manda na divisão: oferta só entra em horário marcado [venda]. Nos horários de objetivo, escolha no banco de assuntos (topicId) o que faz sentido para a semana, sem repetir o que saiu há pouco.',
     '- Horário de funcionamento: só programe dentro dele. Dias fechados ficam sem post sozinhos. Se não estiver configurado, peça ao operador para configurar no Raio-X.',
     '- Horários: use o desempenho por horário. Hora com menos de 3 posts medidos está em teste. Enquanto houver horas abertas nunca testadas, ponha cerca de 1 em cada 3 posts numa hora nova (com "time") e diga quais são teste. Com 3 ou mais posts medidos, prefira as horas de maior alcance e cite os números. Nunca tire conclusão de um post só.',
+    '- Plano contratado é a regra fixa: monte exatamente os stories por dia (em todos os canais do story, mesma arte) e os feeds por semana. Para feed por semana, use o formato de feed diário e pule ("skip": true) os dias sem feed, escolhendo o melhor dia. O sistema recusa plano fora do contratado. Encartes são feitos à mão pelo operador: você não gera, só lembra quando houver.',
+    '- Com poucas ofertas, repetir é normal: siga a sequência do rodízio (a que está há mais tempo sem sair vem primeiro) e só repita em dias seguidos quando não houver outra livre. Oferta sem setor não forma combo: se houver várias sem setor, proponha o setor delas para variar a semana com combos.',
     '- Oferta sem preço em post de venda: avise o operador.',
-    '- Não repita a mesma oferta em dias seguidos nem na mesma hora. Se faltar oferta, diga isso em vez de repetir.',
     '- Story, Reels, Facebook Story e Status do WhatsApp no mesmo horário dividem a mesma arte, assim como Feed e Facebook Feed: a oferta escolhida para um vale para todos.',
     '- Não monte plano começando antes de hoje.',
     '- Você nunca gera nem publica. O operador aprova o plano na tela com "Aprovar e gerar".',

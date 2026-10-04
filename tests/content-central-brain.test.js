@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   createCentralProject, generateContentSchedulePlan, getCentralPaths, loadProjectForTest, saveProjectOffer, saveProjectOfferGroup, updateProjectBrandInput,
-  updateProjectBusinessHours,
+  updateProjectBusinessHours, updateProjectContractedPlan,
 } from '../src/content-central.js';
 import {
   brainSystemPrompt, buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, resolveProposal, saveBrainPlan, saveNotebook,
@@ -208,7 +208,7 @@ test('an approved plan with a closed Sunday and a chosen time generates exactly 
 test('without opening hours nothing is dropped', async () => {
   await withProject(async (dir) => {
     const stored = await saveBrainPlan('loja', { startDate: '2026-10-11', days: 1, formats: STORY }, dir);
-    assert.equal(stored.plan.skippedSlotIds, undefined);
+    assert.deepEqual(stored.plan.skippedSlotIds, []);
     assert.equal(stored.plan.dayPlans[0].regular.length, 1);
   });
 });
@@ -244,4 +244,91 @@ test('the prompt teaches time, bank topics and the Raio-X rules', () => {
   assert.match(prompt, /"topicId"/);
   assert.match(prompt, /oferta só/i);
   assert.match(prompt, /em teste/);
+});
+
+const FEED_DAILY = { channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 };
+const TWO_STORIES_DAILY = { channel: 'instagram_story', postsPerDay: 2, everyDays: 1, startTime: '09:00', intervalMinutes: 240 };
+const ESSENCIAL = { storiesPerDay: 2, feedsPerWeek: 1, storyChannels: ['instagram_story'], feedChannels: ['instagram_feed'], flyersPerMonth: 2 };
+const DAY_LONG = [{ from: '07:00', to: '20:00' }];
+const MON_TO_SAT_OPEN = { mon: DAY_LONG, tue: DAY_LONG, wed: DAY_LONG, thu: DAY_LONG, fri: DAY_LONG, sat: DAY_LONG, sun: [] };
+const DAYS_WITHOUT_FEED = ['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-16', '2026-10-17'];
+
+test('skipped slots leave the plan even without opening hours', async () => {
+  await withProject(async (dir) => {
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-12', days: 2, formats: STORY, slots: [{ id: '2026-10-13-instagram_story-01', skip: true }] }, dir);
+    assert.deepEqual(stored.plan.skippedSlotIds, ['2026-10-13-instagram_story-01']);
+    assert.deepEqual(stored.plan.dayPlans[1].regular, []);
+    assert.equal(stored.plan.regularCount, 1);
+  });
+});
+
+test('a closed day keeps its holiday post', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBusinessHours('loja', { ...WEEK_HOURS, mon: [] }, dir);
+    // 2026-10-12 (Monday, closed here) is Dia das Crianças.
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir);
+    assert.deepEqual(stored.plan.dayPlans[0].regular, []);
+    assert.ok(stored.plan.dayPlans[0].extras.length > 0);
+  });
+});
+
+test('the plan must follow the contracted plan; a weekly feed is the daily feed with the other days skipped', async () => {
+  await withProject(async (dir) => {
+    // Mon–Sat 07–20, Sunday closed: a Mon–Sat plan covers every open day, so exactly one feed.
+    await updateProjectBusinessHours('loja', MON_TO_SAT_OPEN, dir);
+    await updateProjectContractedPlan('loja', ESSENCIAL, dir);
+    const formats = [TWO_STORIES_DAILY, FEED_DAILY];
+    await assert.rejects(saveBrainPlan('loja', { startDate: '2026-10-12', days: 6, formats }, dir), /plano contratado.*6 feed\(s\) em instagram_feed/);
+    await assert.rejects(saveBrainPlan('loja', { startDate: '2026-10-12', days: 6, formats: [{ ...TWO_STORIES_DAILY, postsPerDay: 1 }, FEED_DAILY] }, dir), /o contratado é 2 por dia/);
+
+    const slots = DAYS_WITHOUT_FEED.map((date) => ({ id: `${date}-instagram_feed-01`, skip: true }));
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-12', days: 6, formats, slots }, dir);
+    const feeds = stored.plan.dayPlans.flatMap((day) => day.regular).filter((slot) => slot.channel === 'instagram_feed');
+    assert.deepEqual(feeds.map((slot) => slot.date), ['2026-10-15']);
+  });
+});
+
+test('the plan warns about an offer without price, a repeat on consecutive days and no new hour', async () => {
+  await withProject(async (dir) => {
+    const a = (await saveProjectOffer('loja', { name: 'Chocolate', type: 'offer' }, dir)).offer;
+    await saveProjectOffer('loja', { name: 'Arroz', type: 'offer', price: '9,90' }, dir);
+    await saveProjectOffer('loja', { name: 'Feijão', type: 'offer', price: '7,90' }, dir);
+    await updateProjectBusinessHours('loja', WEEK_HOURS, dir);
+    const { metricsPath } = getCentralPaths(dir, 'loja');
+    await mkdir(dirname(metricsPath), { recursive: true });
+    await writeFile(metricsPath, JSON.stringify({ media: { s1: { kind: 'story', reach: 30, postedAt: new Date(2026, 9, 3, 9).toISOString() } } }), 'utf-8');
+
+    const stored = await saveBrainPlan('loja', {
+      startDate: '2026-10-12', days: 2, formats: STORY,
+      slots: [{ id: '2026-10-12-instagram_story-01', offerIds: [a.id] }, { id: '2026-10-13-instagram_story-01', offerIds: [a.id] }],
+    }, dir);
+
+    const text = stored.plan.warnings.join(' | ');
+    assert.match(text, /Chocolate está sem preço no post de 2026-10-12 às 09:00/);
+    assert.match(text, /Chocolate sai em dias seguidos \(2026-10-12 e 2026-10-13\) e há ofertas sem usar nesses dias: Arroz, Feijão/);
+    assert.match(text, /Nenhum story em horário novo; horas abertas nunca testadas: 7h, 8h, 10h/);
+  });
+});
+
+test('with few offers a repeat on consecutive days is not a warning', async () => {
+  await withProject(async (dir) => {
+    const a = (await saveProjectOffer('loja', { name: 'Arroz', type: 'offer', price: '9,90' }, dir)).offer;
+    const stored = await saveBrainPlan('loja', {
+      startDate: '2026-10-12', days: 2, formats: STORY,
+      slots: [{ id: '2026-10-12-instagram_story-01', offerIds: [a.id] }, { id: '2026-10-13-instagram_story-01', offerIds: [a.id] }],
+    }, dir);
+    assert.deepEqual(stored.plan.warnings, []);
+  });
+});
+
+test('the context shows the contracted plan and the plan warnings', async () => {
+  await withProject(async (dir) => {
+    await updateProjectContractedPlan('loja', { ...ESSENCIAL, feedsPerWeek: 0, feedChannels: [], storiesPerDay: 1 }, dir);
+    await saveProjectOffer('loja', { name: 'Chocolate', type: 'offer' }, dir);
+    await saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir);
+    const text = await buildBrainContext('loja', dir);
+    assert.match(text, /## Plano contratado\n\n- Stories por dia: 1 \(mesma arte em: Instagram\)/);
+    assert.match(text, /Encartes por mês: 2/);
+    assert.match(text, /Avisos do plano:\n- Chocolate está sem preço/);
+  });
 });

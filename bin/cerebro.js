@@ -36,7 +36,8 @@ try {
       for (const slot of day.regular) console.log(`${slot.id} · ${slot.scheduledTime} · ${slot.channelLabel} [${slotTag(slot)}]${slot.topicId ? ` (assunto ${slot.topicId})` : ''}: ${slot.label}`);
       for (const extra of day.extras) console.log(`${day.date} · extra: ${extra.label}`);
     }
-    if (stored.plan.skippedSlotIds?.length) console.log(`Sem post por loja fechada: ${stored.plan.skippedSlotIds.join(', ')}`);
+    if (stored.plan.skippedSlotIds?.length) console.log(`Sem post (loja fechada ou pulado): ${stored.plan.skippedSlotIds.join(', ')}`);
+    for (const warning of stored.plan.warnings || []) console.log(`Aviso: ${warning}`);
     console.log('Plano salvo; o operador vê e aprova na tela.');
   } else if (command === 'propose') {
     const proposal = await call('/proposals', parse(json));

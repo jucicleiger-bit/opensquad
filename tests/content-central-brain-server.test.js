@@ -80,12 +80,14 @@ test('the cerebro CLI saves a plan and a proposal through the server', async () 
     const formats = [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }];
     const planOut = await run('plan', 'loja', JSON.stringify({ startDate: '2026-10-05', days: 1, formats, slots: [{ id: '2026-10-05-instagram_story-01', offerIds: [offer.id] }] }));
     assert.match(planOut.stdout, /2026-10-05-instagram_story-01 · 09:00 · Instagram Stories \[venda\].*Venda — Arroz/);
-    assert.doesNotMatch(planOut.stdout, /Sem post por loja fechada/);
+    assert.doesNotMatch(planOut.stdout, /Sem post \(loja fechada ou pulado\)/);
+    // Arroz has no price: the plan prints a warning line the cérebro must act on.
+    assert.match(planOut.stdout, /^Aviso: Arroz está sem preço/m);
     // 2026-10-11 is a Sunday: its slot leaves the plan and the cérebro is told so.
     const open = [{ from: '07:00', to: '20:00' }];
     await updateProjectBusinessHours('loja', { mon: open, tue: open, wed: open, thu: open, fri: open, sat: open, sun: [] }, dir);
     const closedOut = await run('plan', 'loja', JSON.stringify({ startDate: '2026-10-11', days: 2, formats }));
-    assert.match(closedOut.stdout, /Sem post por loja fechada: 2026-10-11-instagram_story-01/);
+    assert.match(closedOut.stdout, /Sem post \(loja fechada ou pulado\): 2026-10-11-instagram_story-01/);
     const propOut = await run('propose', 'loja', JSON.stringify({ summary: 'Setor', changes: [{ kind: 'offer', offerId: offer.id, field: 'sector', after: 'Mercearia' }] }));
     assert.match(propOut.stdout, /Proposta criada/);
     const state = await call(server, '/api/projects/loja/brain');
