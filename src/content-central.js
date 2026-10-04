@@ -6900,6 +6900,12 @@ function activeProjectOffers(project) {
     .filter((offer) => !offer.groupId || existingGroupIds.has(offer.groupId));
 }
 
+// The active offers that can go out on every one of these dates: weekday,
+// validity and group the same way the rotation and the pins check them.
+export function offersEligibleOn(project, dates) {
+  return activeProjectOffers(project).filter((offer) => dates.every((date) => fitsSlot(offer, weekdayFromDate(date), date)));
+}
+
 // The offers a content item put on screen: one, or both offers of a
 // side-by-side pair (see buildComboOfferTopic). Safe test posts never count
 // — they are rehearsals, not something the client's audience saw.

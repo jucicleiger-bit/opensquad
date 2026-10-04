@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
   applyPlanSlotChoices, buildOfferUsage, getCentralPaths, listProjectContent, listProjectGoalTopics,
-  loadProject, localDateKey, normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer,
+  loadProject, localDateKey, normalizeProjectOffers, offersEligibleOn, previewContentSchedulePlan, saveProjectOffer,
   updateProjectContentGoalWeights, validContentGoalWeights,
 } from './content-central.js';
 import {
@@ -150,10 +150,7 @@ function planWarnings(plan, project, stats, hours) {
     const [before, after] = [days[index - 1], days[index]];
     if (nextDay(before.date) !== after.date) continue;
     const used = new Set([...offersOn(before), ...offersOn(after)]);
-    const idle = offers
-      .filter((offer) => offer.active && !used.has(offer.id)
-        && (!offer.validFrom || offer.validFrom <= before.date) && (!offer.validUntil || offer.validUntil >= after.date))
-      .map((offer) => offer.name);
+    const idle = offersEligibleOn(project, [before.date, after.date]).filter((offer) => !used.has(offer.id)).map((offer) => offer.name);
     if (!idle.length) continue;
     for (const id of offersOn(before)) {
       if (offersOn(after).has(id) && byId.has(id)) {
@@ -197,11 +194,17 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
   const { summary, businessHoursWarnings, ...chosen } = await applyPlanSlotChoices(projectId, preview, slots || [], targetDir);
   const hours = normalizeBusinessHours(project.businessHours);
   const fitted = fitPlan(chosen, hours);
-  const problems = contractProblems(fitted, normalizeContractedPlan(project.contractedPlan), hours);
+  const items = await listProjectContent(projectId, targetDir);
+  // Content already scheduled outside the plan's own dates (contractProblems
+  // keeps the plan's weeks); a rehearsal (test post) never went to the audience.
+  const planDates = new Set(fitted.dayPlans.map((day) => day.date));
+  const existing = items
+    .filter((item) => item.status !== 'test_post_simulated' && !planDates.has(item.scheduledDate))
+    .map((item) => ({ date: item.scheduledDate, channel: item.channel }));
+  const problems = contractProblems(fitted, normalizeContractedPlan(project.contractedPlan), hours, existing);
   if (problems.length) {
     throw new Error(`O plano não bate com o plano contratado: ${problems.join('; ')}. Ajuste os formatos ou pule horários com "skip".`);
   }
-  const items = await listProjectContent(projectId, targetDir);
   const stats = buildPostingTimeStats(await loadProjectMetrics(projectId, targetDir), items);
   const plan = { ...fitted, warnings: planWarnings(fitted, project, stats, hours) };
   const stored = { startDate: plan.startDate, days: plan.days, formats: plan.formats, plan, approvedAt: null, updatedAt: new Date().toISOString() };
@@ -448,14 +451,14 @@ export function brainSystemPrompt(projectId) {
     'O operador (dono da agência) conversa com você para planejar a semana. Fale em português simples e direto, como um gerente de marketing. Não fale de código nem de arquivos.',
     'Você só age pelo comando abaixo, usando a ferramenta Bash. Não leia nem edite arquivos.',
     `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas. Rode no começo de cada resposta: o operador pode ter aplicado ou recusado propostas e mudado ofertas na tela.`,
-    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"skip":true (pula esse post),"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Horário sem escolha fica com o rodízio automático. Depois de salvar, o comando mostra avisos: corrija cada um ou explique ao operador por que fica assim.`,
+    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"skip":true (pula esse post),"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Os ids seguem AAAA-MM-DD-<canal>-NN (NN = 01, 02… por canal por dia). Com plano contratado, a primeira rodada pode ser recusada: leia a mensagem e corrija com "skip"/"time". Horário sem escolha fica com o rodízio automático. Depois de salvar, o comando mostra avisos: corrija cada um ou explique ao operador por que fica assim.`,
     `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"sales":N,"<cada objetivo marcado>":N}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD ("" apaga a validade); active é true ou false; groupId é o id entre colchetes no context; goalWeights traz "sales" e todos os objetivos marcados, somando 100.`,
     'Regras:',
     '- O plano você monta direto. Ofertas, percentuais do Raio-X e caderno você só PROPÕE; o operador aplica na tela.',
     '- O caderno guarda o que vale sempre para esse cliente. Quando o operador disser algo que deve ser lembrado, ou que contradiz o caderno, proponha o caderno novo e diga o que sai e o que entra.',
     '- Combo junta só ofertas do mesmo setor. Oferta fora da validade não entra.',
     '- O Raio-X manda na divisão: oferta só entra em horário marcado [venda]. Nos horários de objetivo, escolha no banco de assuntos (topicId) o que faz sentido para a semana, sem repetir o que saiu há pouco.',
-    '- Horário de funcionamento: só programe dentro dele. Dias fechados ficam sem post sozinhos. Se não estiver configurado, peça ao operador para configurar no Raio-X.',
+    '- Horário de funcionamento: só programe dentro dele. Dias fechados ficam sem post sozinhos, exceto o post de feriado ou data comemorativa. Se não estiver configurado, peça ao operador para configurar no Raio-X.',
     '- Horários: use o desempenho por horário. Hora com menos de 3 posts medidos está em teste. Enquanto houver horas abertas nunca testadas, ponha cerca de 1 em cada 3 posts numa hora nova (com "time") e diga quais são teste. Com 3 ou mais posts medidos, prefira as horas de maior alcance e cite os números. Nunca tire conclusão de um post só.',
     '- Plano contratado é a regra fixa: monte exatamente os stories por dia (em todos os canais do story, mesma arte) e os feeds por semana. Para feed por semana, use o formato de feed diário e pule ("skip": true) os dias sem feed, escolhendo o melhor dia. O sistema recusa plano fora do contratado. Encartes são feitos à mão pelo operador: você não gera, só lembra quando houver.',
     '- Com poucas ofertas, repetir é normal: siga a sequência do rodízio (a que está há mais tempo sem sair vem primeiro) e só repita em dias seguidos quando não houver outra livre. Oferta sem setor não forma combo: se houver várias sem setor, proponha o setor delas para variar a semana com combos.',

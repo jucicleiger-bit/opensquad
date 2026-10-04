@@ -244,6 +244,9 @@ test('the prompt teaches time, bank topics and the Raio-X rules', () => {
   assert.match(prompt, /"topicId"/);
   assert.match(prompt, /oferta só/i);
   assert.match(prompt, /em teste/);
+  assert.match(prompt, /AAAA-MM-DD-<canal>-NN/);
+  assert.match(prompt, /primeira rodada pode ser recusada/);
+  assert.match(prompt, /Dias fechados ficam sem post sozinhos, exceto o post de feriado ou data comemorativa\./);
 });
 
 const FEED_DAILY = { channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 };
@@ -318,6 +321,46 @@ test('with few offers a repeat on consecutive days is not a warning', async () =
       slots: [{ id: '2026-10-12-instagram_story-01', offerIds: [a.id] }, { id: '2026-10-13-instagram_story-01', offerIds: [a.id] }],
     }, dir);
     assert.deepEqual(stored.plan.warnings, []);
+  });
+});
+
+test('feeds already scheduled in the week count, and a plan that starts mid-week is checked from its first day', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBusinessHours('loja', MON_TO_SAT_OPEN, dir);
+    await updateProjectContractedPlan('loja', ESSENCIAL, dir);
+    const formats = [TWO_STORIES_DAILY, FEED_DAILY];
+    const skipFeeds = (dates) => dates.map((date) => ({ id: `${date}-instagram_feed-01`, skip: true }));
+    // Wed 10-07 to Tue 10-13, every feed skipped: Wed–Sat is the first week's whole remaining open stretch, with no feed.
+    const wedToTue = ['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13'];
+    await assert.rejects(saveBrainPlan('loja', { startDate: '2026-10-07', days: 7, formats, slots: skipFeeds(wedToTue) }, dir), /semana de 2026-10-05: 0 feed\(s\)/);
+
+    // The week's feed already went to Monday 10-05 (outside the plan).
+    await generateContentSchedulePlan('loja', { days: 1, startDate: '2026-10-05', formats: [FEED_DAILY], now: new Date(2026, 9, 3, 9) }, dir);
+    const wedToSun = wedToTue.slice(0, 5);
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-07', days: 5, formats, slots: skipFeeds(wedToSun) }, dir);
+    assert.equal(stored.plan.dayPlans.flatMap((day) => day.regular).filter((slot) => slot.channel === 'instagram_feed').length, 0);
+    await assert.rejects(saveBrainPlan('loja', { startDate: '2026-10-07', days: 5, formats, slots: skipFeeds(wedToSun.slice(1)) }, dir), /semana de 2026-10-05: 2 feed\(s\)/);
+  });
+});
+
+test('a consecutive-day repeat does not blame offers that cannot go out those days', async () => {
+  await withProject(async (dir) => {
+    const a = (await saveProjectOffer('loja', { name: 'Arroz', type: 'offer', price: '9,90' }, dir)).offer;
+    await saveProjectOffer('loja', { name: 'Só sábado', type: 'offer', price: '5,00', daysOfWeek: ['sat'] }, dir);
+    // 2026-10-12 is a Monday, 10-13 a Tuesday: the Saturday-only offer is not idle, it is not eligible.
+    const stored = await saveBrainPlan('loja', {
+      startDate: '2026-10-12', days: 2, formats: STORY,
+      slots: [{ id: '2026-10-12-instagram_story-01', offerIds: [a.id] }, { id: '2026-10-13-instagram_story-01', offerIds: [a.id] }],
+    }, dir);
+    assert.deepEqual(stored.plan.warnings, []);
+  });
+});
+
+test('an offer the rotation picked, with no price, is warned about', async () => {
+  await withProject(async (dir) => {
+    await saveProjectOffer('loja', { name: 'Chocolate', type: 'offer' }, dir);
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir);
+    assert.match(stored.plan.warnings.join(' | '), /Chocolate está sem preço no post de 2026-10-12 às 09:00/);
   });
 });
 

@@ -54,6 +54,35 @@ test('a plan must match the contract: channels, stories per open day, feeds per 
   assert.match(contractProblems({ dayPlans: missing }, contract, SUN_CLOSED).join(' | '), /falta o canal whatsapp_status/);
 });
 
+test('an over-count names the feed slot ids the cérebro could skip', () => {
+  const contract = validateContractedPlan(ESSENCIAL);
+  const dayPlans = week(['2026-10-12', '2026-10-13', '2026-10-15']).map((entry) => ({
+    ...entry, regular: entry.regular.map((slot) => ({ ...slot, id: `${entry.date}-${slot.channel}-01` })),
+  }));
+  const text = contractProblems({ dayPlans }, contract, SUN_CLOSED).join(' | ');
+  assert.match(text, /3 feed\(s\) em instagram_feed, o contratado é 1 por semana — pule \("skip": true\) até sobrar 1: 2026-10-12-instagram_feed-01, 2026-10-13-instagram_feed-01, 2026-10-15-instagram_feed-01/);
+  // Slots without ids (tests, callers outside the cérebro): no list.
+  assert.doesNotMatch(contractProblems({ dayPlans: week(['2026-10-12', '2026-10-13']) }, contract, SUN_CLOSED).join(' | '), /pule/);
+});
+
+test('the weekly feed check covers a plan that starts mid-week and counts feeds already scheduled', () => {
+  const contract = validateContractedPlan(ESSENCIAL);
+  const days = (dates, feedDays) => dates.map((date) => day(date, { instagram_story: 2, whatsapp_status: 2, instagram_feed: feedDays.includes(date) ? 1 : 0 }));
+  // Wed 2026-10-07 to Tue 10-13: Wed–Sat is every open day of the first week from the start on, with no feed.
+  const wedToTue = days(['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13'], []);
+  const text = contractProblems({ dayPlans: wedToTue }, contract, SUN_CLOSED).join(' | ');
+  assert.match(text, /semana de 2026-10-05: 0 feed\(s\)/);
+  assert.doesNotMatch(text, /semana de 2026-10-12/);
+
+  // Wed–Sun with the week's feed already scheduled on Monday: nothing more to plan, and one more is too many.
+  const wedToSun = (feedDays) => days(['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11'], feedDays);
+  const existing = [{ date: '2026-10-05', channel: 'instagram_feed' }];
+  assert.deepEqual(contractProblems({ dayPlans: wedToSun([]) }, contract, SUN_CLOSED, existing), []);
+  assert.match(contractProblems({ dayPlans: wedToSun(['2026-10-08']) }, contract, SUN_CLOSED, existing).join(' | '), /semana de 2026-10-05: 2 feed\(s\)/);
+  // Another channel's or another week's feed does not count.
+  assert.match(contractProblems({ dayPlans: wedToSun([]) }, contract, SUN_CLOSED, [{ date: '2026-10-05', channel: 'facebook_feed' }, { date: '2026-10-12', channel: 'instagram_feed' }]).join(' | '), /0 feed\(s\)/);
+});
+
 test('the contracted plan is saved on the project and listed with it', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-contract-'));
   try {

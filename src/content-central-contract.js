@@ -74,9 +74,11 @@ function weekStart(dateKey) {
 
 // Every way the plan departs from the contract, [] when it matches. Closed
 // days are expected empty (saveBrainPlan empties them first). Feeds are
-// counted per Monday–Sunday week: never more than contracted, and exactly
-// that many when the plan covers every open day of the week.
-export function contractProblems(plan, contract, hours) {
+// counted per Monday–Sunday week, the plan's plus `existing` ([{ date,
+// channel }]: content already scheduled outside the plan's dates): never more
+// than contracted, and exactly that many when the plan covers every open day
+// of the week from its first date on (earlier days are past or already planned).
+export function contractProblems(plan, contract, hours, existing = []) {
   if (!contract) return [];
   const problems = [];
   const storyChannels = contract.storiesPerDay ? contract.storyChannels : [];
@@ -93,13 +95,18 @@ export function contractProblems(plan, contract, hours) {
   }
   if (feedChannels.length) {
     const covered = new Set(plan.dayPlans.map((day) => day.date));
+    const first = [...covered].sort()[0];
     for (const start of new Set(plan.dayPlans.map((day) => weekStart(day.date)))) {
       const weekDays = Array.from({ length: 7 }, (_, index) => addDays(start, index));
-      const coversWeek = weekDays.filter((date) => isOpenDay(hours, date)).every((date) => covered.has(date));
+      const toCover = weekDays.filter((date) => date >= first && isOpenDay(hours, date));
+      const coversWeek = toCover.length > 0 && toCover.every((date) => covered.has(date));
       for (const channel of feedChannels) {
-        const feeds = plan.dayPlans.filter((day) => weekDays.includes(day.date)).flatMap((day) => day.regular).filter((slot) => slot.channel === channel).length;
+        const slots = plan.dayPlans.filter((day) => weekDays.includes(day.date)).flatMap((day) => day.regular).filter((slot) => slot.channel === channel);
+        const feeds = slots.length + existing.filter((entry) => entry.channel === channel && weekDays.includes(entry.date)).length;
         if (feeds > contract.feedsPerWeek || (coversWeek && feeds < contract.feedsPerWeek)) {
-          problems.push(`semana de ${start}: ${feeds} feed(s) em ${channel}, o contratado é ${contract.feedsPerWeek} por semana`);
+          const ids = feeds > contract.feedsPerWeek && slots.every((slot) => slot.id) ? slots.map((slot) => slot.id) : [];
+          const skip = ids.length ? ` — pule ("skip": true) até sobrar ${contract.feedsPerWeek}: ${ids.join(', ')}` : '';
+          problems.push(`semana de ${start}: ${feeds} feed(s) em ${channel}, o contratado é ${contract.feedsPerWeek} por semana${skip}`);
         }
       }
     }
