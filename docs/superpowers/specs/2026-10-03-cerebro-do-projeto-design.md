@@ -144,3 +144,31 @@ New workspace tab "Cérebro" (`content-central-app/src/pages/workspace/Brain.tsx
 Cloud panel (`cloud-panel-app`), client-facing use, auto-generation
 without approval, performance metrics as planning input (no insights are
 collected yet).
+
+## After review (2026-10-03)
+
+A max-effort review of the first build found eight problems; all fixed:
+
+- A pin on one channel now pins every same-shape sibling at that slot
+  (Story/Reels/Facebook Story/WhatsApp Status, or Feed/Facebook Feed), since
+  they share one image and caption; two different pins there are refused.
+- Every pin is checked before generation writes anything — a bad pin used to
+  leave the first half of the batch on disk as orphan drafts.
+- The cérebro's CLI calls back the server that started it
+  (`CONTENT_CENTRAL_URL`), never the default 3333: a test bench must not
+  write into production.
+- A resumed session Claude Code no longer has ("No conversation found",
+  transcripts are cleaned after ~30 days) restarts with the full context
+  instead of failing every turn.
+- Percentages are saved alone (`updateProjectContentGoalWeights`), keeping
+  the Raio-X approved, and must name "sales" plus every marked goal.
+- Proposals validate what they would save (dates, booleans, group ids); a
+  proposal whose changes all failed is `failed`, not `applied`.
+- "Aprovar e gerar" also generates the plan's commemorative extras (shared
+  `generatePlanExtras` with Agenda e geração), records `approvedAt` so the
+  same plan can't be generated twice, and refuses a plan whose first day
+  passed.
+- The plan stores the normalized formats and rejects unsupported channels;
+  the preview gets the same topic-idea generator as generation; the context
+  shows the local date with its weekday and the last resolved proposals, and
+  the cérebro runs `context` at the start of every turn.
