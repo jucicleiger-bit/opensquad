@@ -19,6 +19,13 @@ export interface ProjectWhatsApp {
   sessionName?: string;
 }
 
+export interface BusinessPeriod {
+  from: string;
+  to: string;
+}
+
+export type BusinessHours = Record<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun", BusinessPeriod[]>;
+
 export interface BrandInput {
   brandName?: string;
   segmentGroup?: string;
@@ -103,6 +110,11 @@ export interface ProjectOffer {
   pillarId?: string | null;
   groupId?: string | null;
   daysOfWeek?: string[];
+  // YYYY-MM-DD, inclusive; empty = always valid.
+  validFrom?: string;
+  validUntil?: string;
+  // A combo only pairs offers of the same sector.
+  sector?: string;
   photoReferenceIds?: string[];
   flavors?: OfferFlavor[];
   productTreatment?: "faithful_enhance" | "faithful_enhance_photo_integration" | "creative_redraw" | "exact_asset" | "";
@@ -327,6 +339,8 @@ export interface ProjectSummary {
   prospectSource?: ProspectSource | null;
   approvalEmail?: string;
   timezone?: string;
+  businessHours?: BusinessHours | null;
+  contractedPlan?: ContractedPlan | null;
   instagram?: ProjectInstagram;
   companyProfile?: unknown;
   brandInput?: BrandInput;
@@ -677,6 +691,8 @@ export interface PlannedContentSlot {
   source: string;
   label: string;
   offerId?: string | null;
+  // Set when the cérebro pinned this slot to one offer or a same-sector pair.
+  offerIds?: string[];
   offerName?: string;
   price?: string;
   goalKey?: string;
@@ -702,6 +718,9 @@ export interface PlannedContentSchedule {
   summary: string;
   dayPlans: PlannedContentDay[];
   rules: { groupIds: string[]; offersOnly: boolean; usesBrandXray: boolean; extraDatesDoNotConsumeDailyQuota: boolean };
+  businessHoursWarnings?: string[];
+  // Set on plans the cérebro saved: what it must fix or explain.
+  warnings?: string[];
 }
 
 export function previewContentPlan(
@@ -750,6 +769,30 @@ export function generateSpecialDateContent(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+// The holiday/commercial-date extras a reviewed plan lists are generated on
+// their own, after the plan's regular slots — one call per date, with every
+// channel of that date together so same-shape channels share one creative.
+export async function generatePlanExtras(projectId: string, plan: PlannedContentSchedule): Promise<void> {
+  const byDateAndLabel = new Map<string, { date: string; label: string; channels: Set<string>; postTime?: string }>();
+  for (const day of plan.dayPlans) {
+    for (const extra of day.extras || []) {
+      const label = (extra.label || "").replace(/^Extra —\s*/, "") || extra.specialDateLabel || "Data comemorativa";
+      const key = `${extra.date}__${label}`;
+      const entry = byDateAndLabel.get(key) || { date: extra.date, label, channels: new Set<string>(), postTime: extra.scheduledTime };
+      entry.channels.add(extra.channel);
+      byDateAndLabel.set(key, entry);
+    }
+  }
+  for (const extra of byDateAndLabel.values()) {
+    await generateSpecialDateContent(projectId, {
+      date: extra.date,
+      label: extra.label,
+      channels: Array.from(extra.channels),
+      postTime: extra.postTime,
+    });
+  }
 }
 
 export interface AdCopyVariation {
@@ -1059,6 +1102,28 @@ export function saveBrandInput(projectId: string, input: BrandInput): Promise<{ 
   });
 }
 
+export interface ContractedPlan {
+  storiesPerDay: number;
+  feedsPerWeek: number;
+  storyChannels: string[];
+  feedChannels: string[];
+  flyersPerMonth: number;
+}
+
+export function saveContractedPlan(projectId: string, contractedPlan: ContractedPlan | null): Promise<{ contractedPlan: ContractedPlan | null }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/contracted-plan`, {
+    method: "POST",
+    body: JSON.stringify({ contractedPlan }),
+  });
+}
+
+export function saveBusinessHours(projectId: string, businessHours: BusinessHours | null): Promise<{ businessHours: BusinessHours | null }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/business-hours`, {
+    method: "POST",
+    body: JSON.stringify({ businessHours }),
+  });
+}
+
 export function analyzeTechnicalBase(projectId: string, sourceText: string): Promise<{ project: ProjectSummary; technicalBase: TechnicalBase }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/technical-base/analyze`, {
     method: "POST",
@@ -1199,6 +1264,9 @@ export interface SaveOfferInput {
   pillarId?: string | null;
   groupId?: string | null;
   daysOfWeek?: string[];
+  validFrom?: string;
+  validUntil?: string;
+  sector?: string;
   active?: boolean;
   uniqueProposal?: boolean;
   photoReferenceIds?: string[];
@@ -1670,4 +1738,72 @@ export function roleForReferenceCategory(category: string, usageRoles: string[])
   if (category === "official_asset") return "brand_asset";
   if (category === "real_product") return "product_photo";
   return usageRoles[0] || "visual_reference";
+}
+
+// The per-project planning agent ("cérebro") — see
+// src/content-central-brain.js and the Brain workspace tab.
+export interface BrainMessage {
+  role: "user" | "assistant" | "error";
+  text: string;
+  at: string;
+}
+
+export interface BrainChange {
+  kind: "offer" | "goalWeights" | "notebook";
+  offerId?: string;
+  field?: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface BrainProposal {
+  id: string;
+  summary: string;
+  changes: BrainChange[];
+  status: "pending" | "applied" | "rejected" | "failed";
+  results?: { index: number; ok: boolean; error?: string }[];
+  createdAt: string;
+}
+
+export interface BrainPlan {
+  startDate: string;
+  days: number;
+  formats: GenerateFormatInput[];
+  plan: PlannedContentSchedule;
+  // Set once "Aprovar e gerar" went through; a new plan comes back null.
+  approvedAt: string | null;
+  updatedAt: string;
+}
+
+export interface BrainState {
+  chat: { sessionId: string | null; messages: BrainMessage[] };
+  plan: BrainPlan | null;
+  proposals: BrainProposal[];
+  notebook: string;
+}
+
+const brainPath = (projectId: string) => `/api/projects/${encodeURIComponent(projectId)}/brain`;
+
+export function getBrain(projectId: string): Promise<BrainState> {
+  return api(brainPath(projectId));
+}
+
+export function sendBrainMessage(projectId: string, text: string): Promise<{ chat: BrainState["chat"] }> {
+  return api(`${brainPath(projectId)}/messages`, { method: "POST", body: JSON.stringify({ text }) });
+}
+
+export function resolveBrainProposal(
+  projectId: string,
+  proposalId: string,
+  action: "apply" | "reject",
+): Promise<{ proposal: BrainProposal }> {
+  return api(`${brainPath(projectId)}/proposals/${encodeURIComponent(proposalId)}/${action}`, { method: "POST", body: "{}" });
+}
+
+export function markBrainPlanApproved(projectId: string): Promise<BrainPlan> {
+  return api(`${brainPath(projectId)}/plan/approved`, { method: "POST", body: "{}" });
+}
+
+export function saveBrainNotebook(projectId: string, text: string): Promise<{ notebook: string }> {
+  return api(`${brainPath(projectId)}/notebook`, { method: "POST", body: JSON.stringify({ text }) });
 }

@@ -19,6 +19,8 @@ import {
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import { BusinessHoursCard } from "./BusinessHoursCard";
+import { ContractedPlanCard } from "./ContractedPlanCard";
 
 const REQUIRED_MESSAGE = "Preencha nome da empresa, o segmento (setor + nicho, ou o segmento detalhado) e o que a empresa vende/oferece.";
 
@@ -769,6 +771,9 @@ export function Company() {
             ) : null}
           </div>
         ) : null}
+
+        <BusinessHoursCard project={project} refreshProject={refreshProject} />
+        <ContractedPlanCard project={project} refreshProject={refreshProject} />
 
         <Button
           className="full-width"

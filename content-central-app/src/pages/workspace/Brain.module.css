@@ -1,0 +1,139 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+  gap: var(--space-lg);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-bottom: 12px;
+}
+
+.message {
+  white-space: pre-wrap;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  max-width: 90%;
+  line-height: 1.45;
+}
+
+/* --soft is a light text color: as a background it hid the operator's own
+   white text. A tint of the brand accent keeps it readable. */
+.user {
+  align-self: flex-end;
+  background: color-mix(in oklch, var(--accent) 30%, transparent);
+  color: var(--text);
+}
+
+.assistant {
+  align-self: flex-start;
+  background: var(--surface-2);
+}
+
+.error {
+  align-self: stretch;
+  background: var(--bad-soft);
+  color: var(--bad);
+}
+
+.proposal {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.proposal ul {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+}
+
+.notebookAfter {
+  white-space: pre-wrap;
+  font-family: inherit;
+  margin: 6px 0 0;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.day {
+  margin-bottom: 12px;
+  text-transform: none;
+}
+
+.day b::first-letter {
+  text-transform: uppercase;
+}
+
+.panel {
+  padding: 16px;
+}
+
+.slot {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 8px;
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+.time {
+  font-weight: 700;
+}
+
+.where {
+  font-size: 12px;
+}
+
+.warnings {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  margin: 4px 0 12px;
+  font-size: 13px;
+}
+
+.warnings ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.assistant {
+  white-space: normal;
+}
+
+.assistant p {
+  margin: 0 0 8px;
+}
+
+.assistant p:last-child,
+.assistant ul:last-child,
+.assistant ol:last-child {
+  margin-bottom: 0;
+}
+
+.assistant ul,
+.assistant ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}

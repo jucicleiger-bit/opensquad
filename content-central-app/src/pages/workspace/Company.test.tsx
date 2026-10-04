@@ -535,4 +535,52 @@ describe("Company", () => {
     expect(await screen.findByLabelText("Nome da empresa")).toHaveValue("Boss Pizzaria");
     expect(screen.getByText("Pizza Grande — R$ 49,90", { exact: false })).toBeInTheDocument();
   });
+
+  it("saves the opening hours from the Raio-X", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { businessHours: null } },
+      { body: projectState() },
+    ]);
+    renderCompany();
+
+    expect(await screen.findByText("Horário de funcionamento")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Abrir segunda" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar horário" }));
+
+    const calls = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls;
+    const save = calls.find(([url]) => url === "/api/projects/boss-pizzaria/business-hours");
+    expect(save).toBeTruthy();
+    const body = JSON.parse(String(save?.[1]?.body));
+    expect(body.businessHours.mon).toEqual([{ from: "08:00", to: "18:00" }]);
+    expect(body.businessHours.sun).toEqual([]);
+  });
+
+  it("saves the contracted plan from the Raio-X", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { contractedPlan: null } },
+      { body: projectState() },
+    ]);
+    renderCompany();
+
+    expect(await screen.findByText("Plano contratado")).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText("Stories por dia"));
+    await userEvent.type(screen.getByLabelText("Stories por dia"), "2");
+    await userEvent.clear(screen.getByLabelText("Feed por semana"));
+    await userEvent.type(screen.getByLabelText("Feed por semana"), "1");
+    await userEvent.click(screen.getByRole("checkbox", { name: "Story no Status do WhatsApp" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar plano contratado" }));
+
+    const calls = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls;
+    const save = calls.find(([url]) => url === "/api/projects/boss-pizzaria/contracted-plan");
+    expect(save).toBeTruthy();
+    expect(JSON.parse(String(save?.[1]?.body)).contractedPlan).toEqual({
+      storiesPerDay: 2,
+      feedsPerWeek: 1,
+      storyChannels: ["instagram_story", "facebook_story", "whatsapp_status"],
+      feedChannels: ["instagram_feed", "facebook_feed"],
+      flyersPerMonth: 0,
+    });
+  });
 });

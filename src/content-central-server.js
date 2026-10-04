@@ -22,6 +22,10 @@ import {
 import { collectAllProjectsMetrics, INSIGHTS_PERMISSION, loadProjectMetrics } from './content-central-metrics.js';
 import { buildMonthlyReport, listReportMonths, renderReportPage } from './content-central-report.js';
 import {
+  buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, requireBrainProject, resolveProposal, runClaudeTurn,
+  saveBrainPlan, saveNotebook, sendBrainMessage,
+} from './content-central-brain.js';
+import {
   analyzeLearningImage,
   animateContentForReels,
   applyExternalPublishResult,
@@ -125,6 +129,8 @@ import {
   updateCatalogSettings,
   updateContentCaption,
   updateProjectBrandInput,
+  updateProjectBusinessHours,
+  updateProjectContractedPlan,
   updateProjectCompanyProfile,
   updateProjectSettings,
   updateProjectReference,
@@ -403,6 +409,7 @@ export async function startContentCentralServer({
   videoAnimator = null,
   prospectScreenshotAnalyzer = null,
   bioImprover = null,
+  brainRunner = null,
 } = {}) {
   await loadContentCentralEnv(targetDir);
   await reconcileInterruptedGenerations(targetDir).catch((err) => console.error('[content-central] reconcile interrupted generations failed:', err.message));
@@ -425,6 +432,7 @@ export async function startContentCentralServer({
     videoAnimator: videoAnimator || (enableAiImages ? (payload) => animateImageForReelsWithFfmpeg(payload, targetDir) : null),
     prospectScreenshotAnalyzer: prospectScreenshotAnalyzer || (enableAiImages ? analyzeProspectScreenshotWithHermes : null),
     bioImprover: bioImprover || (enableAiImages ? improveProspectBioWithAi : null),
+    brainRunner: brainRunner || runClaudeTurn,
   };
   const server = createServer((req, res) => {
     handleRequest(req, res, targetDir, context).catch((err) => sendJson(res, 500, {
@@ -442,6 +450,8 @@ export async function startContentCentralServer({
 
   const address = server.address();
   const url = `http://${host}:${address.port}`;
+  // The cérebro's CLI calls back into this same server (see runClaudeTurn).
+  context.serverUrl = url;
   if (openBrowser) openUrl(url);
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
@@ -849,6 +859,37 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, result);
   }
 
+  // The cérebro (see content-central-brain.js). Its errors are the
+  // operator's to read in the chat, so they come back as JSON, not a 500.
+  if (parts[3] === 'brain') {
+    try {
+      await requireBrainProject(projectId, targetDir);
+      if (method === 'GET' && parts.length === 4) return sendJson(res, 200, await readBrainState(projectId, targetDir));
+      if (method === 'GET' && parts.length === 5 && parts[4] === 'context') return sendJson(res, 200, { text: await buildBrainContext(projectId, targetDir) });
+      if (method === 'POST') {
+        const body = await readBody(req);
+        if (parts.length === 5 && parts[4] === 'messages') {
+          return sendJson(res, 200, await sendBrainMessage(projectId, body.text, targetDir, context.brainRunner, { serverUrl: context.serverUrl }));
+        }
+        if (parts.length === 5 && parts[4] === 'plan') {
+          return sendJson(res, 200, await saveBrainPlan(projectId, body, targetDir, { topicIdeaGenerator: context.topicIdeaGenerator }));
+        }
+        if (parts.length === 6 && parts[4] === 'plan' && parts[5] === 'approved') return sendJson(res, 200, await markBrainPlanApproved(projectId, targetDir));
+        if (parts.length === 5 && parts[4] === 'notebook') {
+          await saveNotebook(projectId, body.text, targetDir);
+          return sendJson(res, 200, { notebook: String(body.text || '') });
+        }
+        if (parts.length === 5 && parts[4] === 'proposals') return sendJson(res, 201, await createProposal(projectId, body, targetDir));
+        if (parts.length === 7 && parts[4] === 'proposals' && ['apply', 'reject'].includes(parts[6])) {
+          return sendJson(res, 200, await resolveProposal(projectId, parts[5], parts[6], targetDir));
+        }
+      }
+      return sendJson(res, 404, { error: 'Not found' });
+    } catch (err) {
+      return sendJson(res, err.status || 400, { error: err.message, ...(err.chat ? { chat: err.chat } : {}) });
+    }
+  }
+
   if (method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' });
 
   if (parts.length === 3) {
@@ -934,6 +975,26 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const project = await updateProjectBrandInput(projectId, body, targetDir);
     return sendJson(res, 200, { project });
+  }
+
+  if (parts.length === 4 && parts[3] === 'business-hours') {
+    const body = await readBody(req);
+    try {
+      const project = await updateProjectBusinessHours(projectId, body.businessHours ?? null, targetDir);
+      return sendJson(res, 200, { businessHours: project.businessHours ?? null });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
+  if (parts.length === 4 && parts[3] === 'contracted-plan') {
+    const body = await readBody(req);
+    try {
+      const project = await updateProjectContractedPlan(projectId, body.contractedPlan ?? null, targetDir);
+      return sendJson(res, 200, { contractedPlan: project.contractedPlan ?? null });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
   }
 
   if (parts.length === 5 && parts[3] === 'technical-base' && parts[4] === 'analyze') {

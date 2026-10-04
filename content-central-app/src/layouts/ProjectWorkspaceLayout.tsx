@@ -20,6 +20,7 @@ const SECTIONS = [
   { to: "referencias", label: "Imagem e referências", group: "Configuração" },
   { to: "ofertas", label: "Ofertas e assuntos", catalogLabel: "Produtos", group: "Configuração" },
   { to: "pilares", label: "Pilares", hideForCatalog: true, group: "Configuração" },
+  { to: "cerebro", label: "Cérebro", group: "Conteúdo" },
   { to: "gerar", label: "Agenda e geração", group: "Conteúdo" },
   { to: "anuncios", label: "Criativos de Anúncio", group: "Conteúdo" },
   { to: "carrossel", label: "Carrossel", group: "Conteúdo" },

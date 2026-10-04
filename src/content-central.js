@@ -2,6 +2,10 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
+import { CONTENT_GOAL_LABELS } from './content-central-goals.js';
+import { normalizeContractedPlan, validateContractedPlan } from './content-central-contract.js';
+import { isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
+export { CONTENT_GOAL_LABELS };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_MODES = new Set(['manual', 'semi_automatic', 'automatic']);
@@ -129,21 +133,6 @@ const BRAND_XRAY_SUGGESTION_LABELS = {
   positioning: 'Posicionamento recomendado',
   tone: 'Tom de voz recomendado',
   segment: 'Segmento detalhado sugerido',
-};
-
-const CONTENT_GOAL_LABELS = {
-  sell_products: 'Vender produtos',
-  sell_services: 'Vender serviços',
-  promotions: 'Divulgar promoções',
-  whatsapp_orders: 'Receber pedidos no WhatsApp',
-  leads: 'Gerar leads',
-  authority: 'Gerar autoridade',
-  brand_awareness: 'Aumentar reconhecimento da marca',
-  relationship: 'Criar relacionamento',
-  engagement: 'Aumentar engajamento',
-  events: 'Divulgar eventos',
-  show_products: 'Mostrar produtos',
-  education: 'Educar o público',
 };
 
 const CONTENT_GOAL_OPTIONS = new Set(Object.keys(CONTENT_GOAL_LABELS));
@@ -1129,6 +1118,58 @@ export async function updateProjectBrandInput(projectId, input = {}, targetDir =
   await writeJson(paths.projectPath, project);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
   return project;
+  });
+}
+
+// The content-goal split must name every bucket that is active now ("sales"
+// plus each marked goal): a split missing one makes generation fall back to
+// an even split (see resolveContentGoalWeights), not the percentages the
+// operator approved. Returns the normalized split, or throws.
+export function validContentGoalWeights(project, weights) {
+  const goals = project.brandInput?.contentGoals || [];
+  const missing = ['sales', ...goals].filter((key) => !Number.isFinite(Number(weights?.[key])));
+  if (missing.length) throw new Error(`Faltam os percentuais de: ${missing.join(', ')}.`);
+  return normalizeContentGoalWeights(weights, goals, { validate: true });
+}
+
+// Saves only the content-goal percentages. Unlike updateProjectBrandInput,
+// the Raio-X stays approved: the mix of what to post changed, the brand
+// strategy didn't, and an unapproved Raio-X drops out of every prompt.
+export async function updateProjectContentGoalWeights(projectId, weights, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    project.brandInput = { ...(project.brandInput || {}), contentGoalWeights: validContentGoalWeights(project, weights) };
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
+    await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+    return project;
+  });
+}
+
+export async function updateProjectBusinessHours(projectId, hours, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const businessHours = validateBusinessHours(hours);
+    if (businessHours) project.businessHours = businessHours;
+    else delete project.businessHours;
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
+    return project;
+  });
+}
+
+export async function updateProjectContractedPlan(projectId, plan, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const contractedPlan = validateContractedPlan(plan);
+    if (contractedPlan) project.contractedPlan = contractedPlan;
+    else delete project.contractedPlan;
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
+    return project;
   });
 }
 
@@ -3530,8 +3571,14 @@ function buildApprovedPlanOverrideMap(approvedPlan) {
       const id = cleanApprovedPlanText(slot?.id, 120);
       const label = cleanApprovedPlanText(slot?.label, 220);
       const reason = cleanApprovedPlanText(slot?.reason, 500);
-      if (!id || (!label && !reason)) continue;
-      map.set(id, { id, label, reason });
+      const offerIds = Array.isArray(slot?.offerIds)
+        ? slot.offerIds.map((value) => cleanApprovedPlanText(value, 120)).filter(Boolean).slice(0, 2)
+        : [];
+      const time = isClockTime(slot?.scheduledTime) ? slot.scheduledTime : '';
+      const topicId = cleanApprovedPlanText(slot?.topicId, 160);
+      const goalKey = cleanApprovedPlanText(slot?.goalKey, 60);
+      if (!id || (!label && !reason && !offerIds.length && !time && !topicId)) continue;
+      map.set(id, { id, label, reason, offerIds, time, topicId, goalKey });
     }
   }
   return map;
@@ -3606,7 +3653,18 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const takenContentIds = new Set(existingItems.map((item) => item.contentId));
   const contentRules = Array.isArray(options.contentRules) ? options.contentRules : [];
   const approvedPlanOverrides = buildApprovedPlanOverrideMap(options.approvedPlan);
+  // Pins are resolved and checked before anything is written: a bad one
+  // found halfway through would leave the first half of the batch on disk
+  // as orphan drafts.
+  const pinsBySlot = resolveGroupPins(scheduleSlotsFor(startDate, days, formats), (id) => approvedPlanOverrides.get(id)?.offerIds);
+  for (const [slotId, offerIds] of pinsBySlot) pinnedOffersFor(project, slotId, offerIds, slotId.slice(0, 10));
   await refreshProjectTopicIdeasInPlace(project, paths, { topicIdeaGenerator: options.topicIdeaGenerator }, new Date());
+  // A bank topic the cérebro chose must still exist (the bank refreshes every
+  // 15 days) — checked here, after the refresh and before anything is written.
+  for (const override of approvedPlanOverrides.values()) {
+    if (override.topicId) goalTopicForIdea(project, override.goalKey, override.topicId);
+  }
+  const skippedSlotIds = new Set(Array.isArray(options.approvedPlan?.skippedSlotIds) ? options.approvedPlan.skippedSlotIds.map(String) : []);
   const picker = await createScheduleTopicPicker(project, options, targetDir, existingItems);
   // Same date+days used to reuse the folder and overwrite the earlier plan's
   // files; a stacked plan gets its own.
@@ -3641,19 +3699,38 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
       if (dayIndex % format.everyDays !== 0) continue;
       for (let slotIndex = 0; slotIndex < format.postsPerDay; slotIndex += 1) {
         const slotNumber = slotIndex + 1;
-        const scheduledTime = addMinutesToTime(format.startTime, slotIndex * format.intervalMinutes);
+        const rotationTime = addMinutesToTime(format.startTime, slotIndex * format.intervalMinutes);
+        const planSlotId = `${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
+        const approvedPlanOverride = approvedPlanOverrides.get(planSlotId);
+        // The approved plan's time wins (the cérebro may move a slot); the
+        // rotation keeps asking with the format's time, as the preview did.
+        const scheduledTime = approvedPlanOverride?.time || rotationTime;
         const dimensions = imageDimensionsForChannel(format.channel);
         const aspectRatio = imageAspectRatioForChannel(format.channel);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
         const creativeGroupKey = shapeGroup ? `${batchId}::${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
-        const planSlotId = `${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
-        const approvedPlanOverride = approvedPlanOverrides.get(planSlotId);
-        const baseContentTopic = applyApprovedPlanOverrideToTopic(
-          { ...(await picker.next(format.channel, creativeGroupKey, weekday, `${scheduledDate} ${scheduledTime}`)), channel: format.channel },
-          approvedPlanOverride
-        );
+        const rotationTopic = await picker.next(format.channel, creativeGroupKey, weekday, `${scheduledDate} ${rotationTime}`);
+        // A closed day's slot (fitPlanToBusinessHours in content-central-brain.js)
+        // still takes its rotation turn, so the slots after it keep the preview's picks.
+        if (skippedSlotIds.has(planSlotId)) continue;
+        const baseContentTopic = applyApprovedPlanOverrideToTopic({ ...rotationTopic, channel: format.channel }, approvedPlanOverride);
         const contentId = nextFreeContentId(`${project.projectId}-${scheduledDate}-${format.channel}`, slotNumber, takenContentIds);
-        const contentTopic = withProductRotationSeed(baseContentTopic, contentId);
+        // A pinned slot (the operator's or the cérebro's choice of offer)
+        // replaces the rotation's pick. The picker still ran above so the
+        // other slots stay exactly as the reviewed preview showed them.
+        const pinnedOfferIds = pinsBySlot.get(planSlotId) || [];
+        const slotTopic = pinnedOfferIds.length
+          ? applyApprovedPlanOverrideToTopic(
+            { ...(await topicForPinnedOffers(project, planSlotId, pinnedOfferIds, scheduledDate, targetDir)), channel: format.channel },
+            { ...approvedPlanOverride, label: '' },
+          )
+          : approvedPlanOverride?.topicId
+            ? applyApprovedPlanOverrideToTopic(
+              { ...goalTopicForIdea(project, approvedPlanOverride.goalKey, approvedPlanOverride.topicId), channel: format.channel },
+              { ...approvedPlanOverride, label: '' },
+            )
+            : baseContentTopic;
+        const contentTopic = withProductRotationSeed(slotTopic, contentId);
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const filePath = join(batchDir, `${fileName}.json`);
         const imageLocalPath = `content/drafts/${batchId}/images/${fileName}.svg`;
@@ -3812,7 +3889,9 @@ function planReasonForTopic(topic, options = {}) {
 function planSlotFromTopic({ topic, channel, format, scheduledDate, scheduledTime, dayNumber, slotNumber, options }) {
   const kind = planKindForTopic(topic);
   const name = topic.offerName || topic.specialDateLabel || topic.label || topic.objective || 'Assunto';
-  const label = topic.source === 'special_date' && topic.label ? topic.label : `${kind} — ${name}`;
+  // A goal topic's label already reads "<goal> — <topic>"; prefixing the
+  // kind (which is that same label) repeated both.
+  const label = (topic.source === 'special_date' || topic.source === 'goal') && topic.label ? topic.label : `${kind} — ${name}`;
   return {
     id: `${scheduledDate}-${channel}-${String(slotNumber).padStart(2, '0')}`,
     dayNumber,
@@ -3843,6 +3922,127 @@ function buildPlanSummary(plan) {
     ? 'gerando apenas o(s) grupo(s) selecionado(s)'
     : 'misturando ofertas permitidas com objetivos do Raio-X quando houver';
   return `${parts.join(' + ')} em ${plan.days} dia(s), ${mode}. Extras não descontam da meta diária.`;
+}
+
+// One entry per regular slot a schedule of these formats creates, with the
+// same ids previewContentSchedulePlan gives them.
+function scheduleSlotsFor(startDate, days, formats) {
+  const slots = [];
+  for (let dayIndex = 0; dayIndex < days; dayIndex += 1) {
+    const date = addDays(startDate, dayIndex);
+    for (const format of formats) {
+      if (dayIndex % format.everyDays !== 0) continue;
+      for (let slotIndex = 0; slotIndex < format.postsPerDay; slotIndex += 1) {
+        const slotNumber = slotIndex + 1;
+        slots.push({ id: `${date}-${format.channel}-${String(slotNumber).padStart(2, '0')}`, date, channel: format.channel, slotNumber });
+      }
+    }
+  }
+  return slots;
+}
+
+// Same-shape channels at one day and slot (Story/Reels/Facebook Story, or
+// Feed/Facebook Feed) share one creative, image and caption alike (see
+// creativeGroupKey). So a pin on any of them pins all of them — otherwise a
+// pinned Story could go out with the art of the Reels' rotation pick — and
+// two different pins in one group can't both be honored.
+// The cérebro's time and bank topic follow the same rule: one art goes out
+// once, about one thing.
+// Returns slot id → chosen value for every chosen slot and its siblings.
+function resolveGroupChoice(slots, valueOf, conflict) {
+  const groupOf = (slot) => `${slot.date}::${creativeShapeGroupForChannel(slot.channel) || slot.channel}::${slot.slotNumber}`;
+  const byGroup = new Map();
+  for (const slot of slots) {
+    const value = valueOf(slot.id);
+    if (value === undefined) continue;
+    const key = groupOf(slot);
+    if (byGroup.has(key) && JSON.stringify(byGroup.get(key)) !== JSON.stringify(value)) throw new Error(`Horário ${slot.id}: ${conflict}`);
+    byGroup.set(key, value);
+  }
+  return new Map(slots.filter((slot) => byGroup.has(groupOf(slot))).map((slot) => [slot.id, byGroup.get(groupOf(slot))]));
+}
+
+function resolveGroupPins(slots, pinOf) {
+  return resolveGroupChoice(slots, (id) => {
+    const offerIds = pinOf(id) || [];
+    return offerIds.length ? offerIds : undefined;
+  }, 'canais do mesmo formato no mesmo horário dividem a arte — use a mesma oferta neles.');
+}
+
+// Applies the cérebro's per-slot choices to a preview plan, validating each
+// pinned slot with the same rules generation uses, so a plan shown in the
+// panel is a plan that will generate. The Raio-X split stays the preview's:
+// offers only on sales slots, bank topics only on goal slots.
+export async function applyPlanSlotChoices(projectId, plan, choices, targetDir = process.cwd()) {
+  const project = await loadProject(getCentralPaths(targetDir, projectId));
+  const byId = new Map((Array.isArray(choices) ? choices : []).map((choice) => [String(choice?.id || ''), choice]));
+  const slots = plan.dayPlans.flatMap((day) => day.regular);
+  const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+  for (const id of byId.keys()) if (!slotById.has(id)) throw new Error(`Horário ${id} não existe neste plano.`);
+  const offerIdsOf = (choice) => (Array.isArray(choice?.offerIds) ? choice.offerIds.map(String).filter(Boolean).slice(0, 2) : []);
+  const pinsBySlot = resolveGroupPins(slots, (id) => offerIdsOf(byId.get(id)));
+  const timeBySlot = resolveGroupChoice(slots, (id) => {
+    const time = byId.get(id)?.time;
+    if (time === undefined || time === null || time === '') return undefined;
+    if (!isClockTime(time)) throw new Error(`Horário ${id}: hora "${time}" inválida, use HH:MM.`);
+    return String(time);
+  }, 'canais que dividem a arte saem no mesmo horário — use a mesma hora neles.');
+  const topicBySlot = resolveGroupChoice(slots, (id) => String(byId.get(id)?.topicId || '').trim() || undefined,
+    'canais que dividem a arte falam do mesmo assunto — use o mesmo assunto neles.');
+  const skipBySlot = resolveGroupChoice(slots, (id) => (byId.get(id)?.skip === true ? true : undefined),
+    'canais que dividem a arte são pulados juntos.');
+  for (const id of pinsBySlot.keys()) {
+    if (skipBySlot.has(id)) continue;
+    const slot = slotById.get(id);
+    if (slot.source !== 'offer') {
+      throw new Error(`Horário ${id} é de ${CONTENT_GOAL_LABELS[slot.goalKey] || 'objetivo do Raio-X'} pelo Raio-X; oferta só entra em horário de venda.`);
+    }
+  }
+  for (const id of topicBySlot.keys()) {
+    if (skipBySlot.has(id)) continue;
+    if (slotById.get(id).source !== 'goal') throw new Error(`Horário ${id} é de venda; assunto do banco só entra em horário de objetivo.`);
+  }
+  const dayPlans = [];
+  for (const day of plan.dayPlans) {
+    const regular = [];
+    for (const slot of day.regular) {
+      // Skipped (e.g. the days a weekly feed doesn't go out): saveBrainPlan
+      // moves it to skippedSlotIds; nothing else chosen for it matters.
+      if (skipBySlot.has(slot.id)) { regular.push({ ...slot, skip: true }); continue; }
+      const choice = byId.get(slot.id);
+      const offerIds = pinsBySlot.get(slot.id) || [];
+      const time = timeBySlot.get(slot.id);
+      const topicId = topicBySlot.get(slot.id);
+      if (!choice && !offerIds.length && !time && !topicId) { regular.push(slot); continue; }
+      let next = time ? { ...slot, scheduledTime: time } : slot;
+      if (topicId) {
+        const topic = { ...goalTopicForIdea(project, slot.goalKey, topicId), channel: slot.channel };
+        next = { ...next, topic, topicId, label: topic.label };
+      }
+      const reason = cleanApprovedPlanText(choice?.reason, 500) || next.reason;
+      if (!offerIds.length) {
+        regular.push({ ...next, label: cleanApprovedPlanText(choice?.label, 220) || next.label, reason });
+        continue;
+      }
+      const topic = await topicForPinnedOffers(project, slot.id, offerIds, slot.date, targetDir);
+      const name = topic.products?.length ? topic.products.map((product) => product.name).join(' + ') : topic.offerName;
+      const rest = { ...next };
+      delete rest.topic;
+      regular.push({
+        ...rest,
+        kind: 'Venda',
+        source: 'offer',
+        offerIds,
+        offerId: offerIds[0],
+        offerName: name,
+        price: topic.products?.length ? topic.products.map((product) => product.price).join(' + ') : topic.price,
+        label: `Venda — ${name}`,
+        reason,
+      });
+    }
+    dayPlans.push({ ...day, regular });
+  }
+  return { ...plan, dayPlans };
 }
 
 export async function previewContentSchedulePlan(projectId, options = {}, targetDir = process.cwd()) {
@@ -3914,6 +4114,15 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
     }
   }
 
+  // "Agenda e geração" keeps the operator's times (only the cérebro plans
+  // inside opening hours); it just points out the ones outside.
+  const hours = normalizeBusinessHours(project.businessHours);
+  const businessHoursWarnings = hours
+    ? dayPlans.flatMap((day) => day.regular
+      .filter((slot) => !isOpenAt(hours, day.date, slot.scheduledTime))
+      .map((slot) => `${day.date} às ${slot.scheduledTime} (${slot.channelLabel}): ${isOpenDay(hours, day.date) ? 'fora do horário de funcionamento' : 'loja fechada nesse dia'}`))
+    : [];
+
   const plan = {
     projectId: project.projectId,
     projectName: project.name,
@@ -3929,6 +4138,7 @@ export async function previewContentSchedulePlan(projectId, options = {}, target
       extraDatesDoNotConsumeDailyQuota: true,
     },
     dayPlans,
+    businessHoursWarnings,
   };
   return { ...plan, summary: buildPlanSummary(plan) };
 }
@@ -6014,6 +6224,8 @@ async function toProjectSummary(project) {
     prospectSource: project.isProspect ? normalizeProspectSource(project.prospectSource) : null,
     approvalEmail: project.approvalEmail,
     timezone: project.timezone,
+    businessHours: normalizeBusinessHours(project.businessHours),
+    contractedPlan: normalizeContractedPlan(project.contractedPlan),
     instagram: project.instagram,
     companyProfile: normalizeCompanyProfile(project.companyProfile),
     brandInput: normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name)),
@@ -6476,6 +6688,21 @@ function buildGoalContentTopics(goalKey, project) {
   return ideas.map((idea, index) => buildGoalContentTopic(goalKey, project, idea, index)).filter(Boolean);
 }
 
+// The bank as the cérebro sees it. ideaId is the topic's own id (the stored
+// bank item's id gets the goal prefixed when normalized), so a pick made from
+// this list is found again by goalTopicForIdea and by generation.
+export function listProjectGoalTopics(project) {
+  return selectedTopicIdeaGoalKeys(project).flatMap((goalKey) => buildGoalContentTopics(goalKey, project)
+    .filter((topic) => topic.ideaId)
+    .map((topic) => ({ goalKey, ideaId: topic.ideaId, title: topic.ideaTitle, detail: topic.items })));
+}
+
+export function goalTopicForIdea(project, goalKey, ideaId) {
+  const topic = buildGoalContentTopics(goalKey, project).find((entry) => entry.ideaId === ideaId);
+  if (!topic) throw new Error(`Assunto ${ideaId} não existe no banco de ${CONTENT_GOAL_LABELS[goalKey] || goalKey}.`);
+  return topic;
+}
+
 function buildGoalContentTopic(goalKey, project, idea = null, index = 0) {
   const template = GOAL_TOPIC_TEMPLATES[goalKey];
   if (!template) return null;
@@ -6652,7 +6879,7 @@ async function buildTopicPool(project, options = {}, targetDir) {
   const offerTopics = await Promise.all(
     activeProjectOffers(project)
       .filter((offer) => !groupIds || groupIds.has(offer.groupId))
-      .filter((offer) => !options.weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(options.weekday))
+      .filter((offer) => fitsSlot(offer, options.weekday, options.date))
       .map((offer) => offerToContentTopic(offer, targetDir))
   );
   if (options.offersOnly) return offerTopics;
@@ -6691,6 +6918,12 @@ function activeProjectOffers(project) {
   return normalizeProjectOffers(project.contentStrategy?.offers || [])
     .filter((offer) => offer.active)
     .filter((offer) => !offer.groupId || existingGroupIds.has(offer.groupId));
+}
+
+// The active offers that can go out on every one of these dates: weekday,
+// validity and group the same way the rotation and the pins check them.
+export function offersEligibleOn(project, dates) {
+  return activeProjectOffers(project).filter((offer) => dates.every((date) => fitsSlot(offer, weekdayFromDate(date), date)));
 }
 
 // The offers a content item put on screen: one, or both offers of a
@@ -6760,7 +6993,8 @@ function createOfferChooser(project, existingItems, options, targetDir) {
   const usage = offerUsageFromItems(existingItems, options.now || new Date());
   const groupIds = Array.isArray(options.groupIds) && options.groupIds.length ? new Set(options.groupIds) : null;
   return async function chooseOffer({ weekday, slotKey, pillar = null, activePillars = [] }) {
-    let candidates = activeProjectOffers(project).filter((offer) => fitsWeekday(offer, weekday));
+    const date = String(slotKey || '').slice(0, 10) || null;
+    let candidates = activeProjectOffers(project).filter((offer) => fitsSlot(offer, weekday, date));
     if (groupIds) candidates = candidates.filter((offer) => groupIds.has(offer.groupId));
     if (pillar) {
       candidates = candidates.filter((offer) => (
@@ -6769,7 +7003,7 @@ function createOfferChooser(project, existingItems, options, targetDir) {
     }
     if (!candidates.length) return null;
     const primary = leastRecentlyUsedOffer(candidates, usage);
-    const partner = groupIds ? pickComboPartner(candidates, primary, project, weekday) : null;
+    const partner = groupIds ? pickComboPartner(candidates, primary, project, weekday, date) : null;
     usage.set(primary.id, slotKey);
     if (partner) usage.set(partner.id, slotKey);
     return partner ? buildComboOfferTopic(primary, partner, targetDir) : offerToContentTopic(primary, targetDir);
@@ -6806,13 +7040,14 @@ async function createScheduleTopicPicker(project, options, targetDir, existingIt
   const topicByCreativeGroupKey = new Map();
 
   async function next(channel, creativeGroupKey, weekday, slotKey) {
+    const date = String(slotKey || '').slice(0, 10) || undefined;
     if (creativeGroupKey && topicByCreativeGroupKey.has(creativeGroupKey)) {
       return topicByCreativeGroupKey.get(creativeGroupKey);
     }
     let topic;
     let slotPillar = null;
     if (pillarSequence.length) {
-      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      const pool = await buildTopicPool(project, { groupIds: options.groupIds, offersOnly: options.offersOnly, weekday, date }, targetDir);
       const selected = selectNextPillarTopic(pool, activePillars, pillarSequence, pillarCursor, topicCursor);
       pillarCursor = selected.nextPillarCursor;
       topicCursor += 1;
@@ -6824,7 +7059,7 @@ async function createScheduleTopicPicker(project, options, targetDir, existingIt
         ...(selected.pillar ? { pillar: pillarSnapshotFrom(selected.pillar) } : {}),
       };
     } else {
-      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday }, targetDir);
+      topic = await buildContentTopic(project, topicCursor, { channel, groupIds: options.groupIds, offersOnly: options.offersOnly, weekday, date }, targetDir);
       topicCursor += 1;
     }
     if (topic.source === 'offer') {
@@ -6874,13 +7109,14 @@ export function buildOfferUsage(project, items, now = new Date()) {
   }
   const usage = offerUsageFromItems(items, now);
   const queue = [...activeProjectOffers(project)]
+    .filter((offer) => !offer.validUntil || offer.validUntil >= today)
     .sort((a, b) => (usage.get(a.id) || '').localeCompare(usage.get(b.id) || ''))
     .map((offer) => offer.id);
   return { offers, queue };
 }
 
 async function buildContentTopic(project, index, context = {}, targetDir) {
-  const topics = await buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday }, targetDir);
+  const topics = await buildTopicPool(project, { groupIds: context.groupIds, offersOnly: context.offersOnly, weekday: context.weekday, date: context.date }, targetDir);
   const topic = topics[index % topics.length];
   return {
     ...topic,
@@ -6987,6 +7223,47 @@ async function offerToContentTopic(offer, targetDir) {
   };
 }
 
+function fitsSlot(offer, weekday, date) {
+  if (weekday && offer.daysOfWeek?.length && !offer.daysOfWeek.includes(weekday)) return false;
+  if (date && offer.validFrom && date < offer.validFrom) return false;
+  if (date && offer.validUntil && date > offer.validUntil) return false;
+  return true;
+}
+
+function sameSector(a, b) {
+  return String(a.sector || '').trim().toLowerCase() === String(b.sector || '').trim().toLowerCase();
+}
+
+// The offers a plan slot pinned to one offer or a side-by-side pair must
+// show. Same eligibility as the automatic rotation; an invalid pin is an
+// error naming the slot, never a silent swap, because the operator approved
+// exactly this.
+function pinnedOffersFor(project, slotId, offerIds, date) {
+  const offers = activeProjectOffers(project);
+  const weekday = weekdayFromDate(date);
+  const picked = offerIds.map((offerId) => {
+    const offer = offers.find((entry) => entry.id === offerId);
+    if (!offer) throw new Error(`Horário ${slotId}: a oferta ${offerId} não existe ou está pausada.`);
+    if (!fitsSlot(offer, weekday, date)) throw new Error(`Horário ${slotId}: a oferta ${offer.name} não vale em ${date}.`);
+    return offer;
+  });
+  if (picked.length === 1) return picked;
+  const [a, b] = picked;
+  if (a.id === b.id) throw new Error(`Horário ${slotId}: o combo precisa de duas ofertas diferentes.`);
+  if (!sameSector(a, b)) throw new Error(`Horário ${slotId}: ${a.name} e ${b.name} são de setor diferente — combo só junta o mesmo setor.`);
+  for (const offer of picked) {
+    if (offer.type === 'combo' || offer.uniqueProposal || offer.flavors?.length) {
+      throw new Error(`Horário ${slotId}: ${offer.name} não pode entrar em combo.`);
+    }
+  }
+  return picked;
+}
+
+async function topicForPinnedOffers(project, slotId, offerIds, date, targetDir) {
+  const [a, b] = pinnedOffersFor(project, slotId, offerIds, date);
+  return b ? buildComboOfferTopic(a, b, targetDir) : offerToContentTopic(a, targetDir);
+}
+
 // Occasionally pairs the primary offer with a random same-group sibling
 // into one combo arte, instead of always a single product per post — a
 // large homogeneous catalog (e.g. 40 pizza flavors) otherwise reads as
@@ -6995,11 +7272,7 @@ async function offerToContentTopic(offer, targetDir) {
 // behavior. Never fires for an offer that is already a manual combo
 // (type: 'combo') — combos never nest — nor for an offer with flavors,
 // whose arte is already the full set of its own variations.
-function fitsWeekday(offer, weekday) {
-  return !weekday || !offer.daysOfWeek?.length || offer.daysOfWeek.includes(weekday);
-}
-
-function pickComboPartner(offers, primary, project, weekday) {
+function pickComboPartner(offers, primary, project, weekday, date) {
   if (primary.type === 'combo' || primary.uniqueProposal || primary.flavors?.length || !primary.groupId) return null;
   const group = normalizeProjectOfferGroups(project?.contentStrategy?.offerGroups || [])
     .find((entry) => entry.id === primary.groupId);
@@ -7007,7 +7280,7 @@ function pickComboPartner(offers, primary, project, weekday) {
   if (chance <= 0 || Math.random() * 100 >= chance) return null;
   const candidates = offers.filter((offer) => (
     offer.groupId === primary.groupId && offer.id !== primary.id && offer.type !== 'combo'
-    && !offer.uniqueProposal && !offer.flavors?.length && fitsWeekday(offer, weekday)
+    && !offer.uniqueProposal && !offer.flavors?.length && fitsSlot(offer, weekday, date) && sameSector(offer, primary)
   ));
   if (!candidates.length) return null;
   return candidates[Math.floor(Math.random() * candidates.length)];
@@ -9954,6 +10227,14 @@ function normalizeProjectOffer(input, now = new Date(), existingOffers = []) {
     // pizzeria's weekday rodízio price vs its separate weekend price, each
     // as its own offer. See buildTopicPool's weekday filter.
     daysOfWeek: normalizeDaysOfWeek(input?.daysOfWeek),
+    // Optional validity window (YYYY-MM-DD, inclusive). Empty = always
+    // valid, unchanged from before. See fitsSlot.
+    validFrom: normalizeDateKey(input?.validFrom),
+    validUntil: normalizeDateKey(input?.validUntil),
+    // Product sector ("Hortifruti", "Higiene"…). A combo only pairs offers
+    // of the same sector — groups mix sector and campaign, so grouping
+    // alone let hygiene pair with food. See sameSector.
+    sector: String(input?.sector || '').trim(),
     // Catalog-mode projects (venda direta) tie an offer/product to one or
     // more uploaded reference photos, unlike marketing-mode offers which
     // just draw from the general reference pool. Each id points at a
@@ -10719,6 +11000,11 @@ function weekdayFromDate(dateString) {
   const [year, month, day] = dateString.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
   return WEEKDAY_BY_INDEX[date.getUTCDay()];
+}
+
+function normalizeDateKey(value) {
+  const text = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(`${text}T00:00:00Z`)) ? text : '';
 }
 
 function normalizeDaysOfWeek(value) {
