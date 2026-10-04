@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createCentralProject, getCentralPaths, previousMonthKey, saveProjectToken } from '../src/content-central.js';
 import {
+  buildPostingTimeStats,
   collectAllProjectsMetrics,
   collectProjectMetrics,
   loadProjectMetrics,
@@ -187,4 +188,43 @@ test('collecting every project skips the ones without a token and survives a bro
     assert.equal((await loadProjectMetrics('c-ok', dir)).followers['2026-10-06'], 10);
     assert.deepEqual(graph.calls, ['ig-c', 'ig-c/media']);
   });
+});
+
+test('keeps when each story and post went out', async () => {
+  await withTempProject(async (dir) => {
+    await projectWithToken(dir, 'loja', WITH_INSIGHTS);
+    const graph = fakeGraph({
+      'ig-1/stories': { data: [{ id: 's1', timestamp: '2026-10-06T13:00:00+0000' }] },
+      's1/insights': mediaInsight({ views: 10, reach: 8, replies: 0 }),
+      'ig-1': { followers_count: 1 },
+      'ig-1/media': { data: [{ id: 'm1', media_product_type: 'FEED', like_count: 1, comments_count: 0, timestamp: '2026-10-05T21:30:00+0000' }] },
+      'm1/insights': mediaInsight({ views: 50, reach: 40 }),
+      'ig-1/insights': (url) => accountTotal(url.searchParams.get('metric'), 1),
+    });
+
+    await collectProjectMetrics('loja', dir, { fetchImpl: graph.fetchImpl, now: new Date(2026, 9, 6, 14) });
+
+    const metrics = await loadProjectMetrics('loja', dir);
+    assert.equal(metrics.media.s1.postedAt, '2026-10-06T13:00:00+0000');
+    assert.equal(metrics.media.m1.postedAt, '2026-10-05T21:30:00+0000');
+  });
+});
+
+test('reach is grouped by kind and local hour, only for posts at least a day old', () => {
+  const at = (day, hour) => new Date(2026, 9, day, hour, 10).toISOString();
+  const metrics = { media: {
+    a: { kind: 'story', reach: 200, postedAt: at(1, 13) },
+    b: { kind: 'story', reach: 100, postedAt: at(2, 13) },
+    c: { kind: 'story', reach: 30, postedAt: at(3, 9) },
+    fresh: { kind: 'story', reach: 999, postedAt: at(5, 13) },
+    noReach: { kind: 'feed', likes: 3, postedAt: at(1, 18) },
+    fromPublish: { kind: 'feed', reach: 50 },
+  } };
+  const items = [{ publish: { metaMediaId: 'fromPublish', publishedAt: at(2, 18) } }];
+
+  assert.deepEqual(buildPostingTimeStats(metrics, items, new Date(2026, 9, 5, 20)), [
+    { kind: 'feed', hour: 18, count: 1, avgReach: 50, best: 50, worst: 50 },
+    { kind: 'story', hour: 9, count: 1, avgReach: 30, best: 30, worst: 30 },
+    { kind: 'story', hour: 13, count: 2, avgReach: 150, best: 200, worst: 100 },
+  ]);
 });

@@ -103,7 +103,9 @@ export async function collectProjectMetrics(projectId, targetDir = process.cwd()
       for (const story of live.data || []) {
         try {
           const values = insightValues(await graphGet(`${story.id}/insights`, { metric: 'views,reach,replies' }, context));
-          metrics.media[story.id] = { ...metrics.media[story.id], kind: 'story', ...values, updatedAt: stamp };
+          metrics.media[story.id] = {
+            ...metrics.media[story.id], kind: 'story', ...(story.timestamp ? { postedAt: story.timestamp } : {}), ...values, updatedAt: stamp,
+          };
         } catch (err) {
           // Code 10: Meta withholds the numbers of a story with fewer than 5 viewers.
           if (err.code !== 10) errors.push(`story ${story.id}: ${err.message}`);
@@ -130,7 +132,7 @@ export async function collectProjectMetrics(projectId, targetDir = process.cwd()
       for (const media of list.data || []) {
         const kind = MEDIA_KINDS[media.media_product_type];
         if (!kind || !open.includes(localMonthKey(new Date(media.timestamp)))) continue;
-        const entry = { ...metrics.media[media.id], kind, updatedAt: stamp };
+        const entry = { ...metrics.media[media.id], kind, postedAt: media.timestamp, updatedAt: stamp };
         if (Number.isFinite(media.like_count)) entry.likes = media.like_count;
         if (Number.isFinite(media.comments_count)) entry.comments = media.comments_count;
         if (insights) {
@@ -159,6 +161,37 @@ export async function collectProjectMetrics(projectId, targetDir = process.cwd()
   await writeJson(paths.metricsPath, metrics);
   for (const message of errors) console.error(`[content-central] metrics ${projectId}: ${message}`);
   return { skipped: false, errors };
+}
+
+const DAY_MS = 86400000;
+
+// Reach by kind and local posting hour, for the cérebro to learn which hours
+// work. Only posts at least a day old: a story's reach is still growing
+// before that. Stories that went out before postedAt was kept get their time
+// from the content item that published them.
+export function buildPostingTimeStats(metrics, items = [], now = new Date()) {
+  const publishedAt = new Map(items
+    .filter((item) => item.publish?.metaMediaId && item.publish?.publishedAt)
+    .map((item) => [String(item.publish.metaMediaId), item.publish.publishedAt]));
+  const groups = new Map();
+  for (const [id, media] of Object.entries(metrics?.media || {})) {
+    const posted = new Date(media.postedAt || publishedAt.get(id) || NaN);
+    if (Number.isNaN(posted.getTime()) || now - posted < DAY_MS || !Number.isFinite(media.reach)) continue;
+    const key = `${media.kind}::${posted.getHours()}`;
+    const group = groups.get(key) || { kind: media.kind, hour: posted.getHours(), reaches: [] };
+    group.reaches.push(media.reach);
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .map(({ kind, hour, reaches }) => ({
+      kind,
+      hour,
+      count: reaches.length,
+      avgReach: Math.round(reaches.reduce((total, value) => total + value, 0) / reaches.length),
+      best: Math.max(...reaches),
+      worst: Math.min(...reaches),
+    }))
+    .sort((a, b) => a.kind.localeCompare(b.kind) || a.hour - b.hour);
 }
 
 export async function collectAllProjectsMetrics(targetDir = process.cwd(), options = {}) {
