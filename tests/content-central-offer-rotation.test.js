@@ -280,3 +280,59 @@ test('applyPlanSlotChoices rewrites the preview slot so the operator sees the pi
     assert.equal(slot.reason, 'Foco da semana');
   });
 });
+
+const STORY_AND_REELS = [
+  { channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 },
+  { channel: 'instagram_reels', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 },
+];
+
+test('a pin on the Story also pins the Reels of the same slot, since they share one art', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'irmaos', name: 'Irmãos' }, dir);
+    await saveProjectOffer('irmaos', { name: 'A', type: 'offer' }, dir);
+    const c = (await saveProjectOffer('irmaos', { name: 'C', type: 'offer' }, dir)).offer;
+    const choice = [{ id: '2026-10-05-instagram_story-01', offerIds: [c.id] }];
+
+    const preview = await previewContentSchedulePlan('irmaos', { days: 1, startDate: '2026-10-05', formats: STORY_AND_REELS }, dir);
+    const plan = await applyPlanSlotChoices('irmaos', preview, choice, dir);
+    assert.deepEqual(plan.dayPlans[0].regular.map((slot) => [slot.channel, slot.label]), [
+      ['instagram_story', 'Venda — C'],
+      ['instagram_reels', 'Venda — C'],
+    ]);
+
+    const batch = await generateContentSchedulePlan('irmaos', {
+      days: 1, startDate: '2026-10-05', formats: STORY_AND_REELS, now: NOW,
+      approvedPlan: { dayPlans: [{ date: '2026-10-05', regular: choice }] },
+    }, dir);
+    assert.deepEqual(batch.items.map((item) => item.contentTopic.offerName), ['C', 'C']);
+  });
+});
+
+test('two different pins on channels that share one art are refused', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'irmaos-brigados', name: 'Irmãos Brigados' }, dir);
+    const a = (await saveProjectOffer('irmaos-brigados', { name: 'A', type: 'offer' }, dir)).offer;
+    const c = (await saveProjectOffer('irmaos-brigados', { name: 'C', type: 'offer' }, dir)).offer;
+    const preview = await previewContentSchedulePlan('irmaos-brigados', { days: 1, startDate: '2026-10-05', formats: STORY_AND_REELS }, dir);
+
+    await assert.rejects(applyPlanSlotChoices('irmaos-brigados', preview, [
+      { id: '2026-10-05-instagram_story-01', offerIds: [a.id] },
+      { id: '2026-10-05-instagram_reels-01', offerIds: [c.id] },
+    ], dir), /dividem a arte/);
+  });
+});
+
+test('a bad pin later in the plan writes nothing at all', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'nada-escrito', name: 'Nada Escrito' }, dir);
+    await saveProjectOffer('nada-escrito', { name: 'Boa', type: 'offer' }, dir);
+    const old = (await saveProjectOffer('nada-escrito', { name: 'Velha', type: 'offer', validUntil: '2026-10-05' }, dir)).offer;
+    const approvedPlan = { dayPlans: [{ date: '2026-10-06', regular: [{ id: '2026-10-06-instagram_story-01', offerIds: [old.id] }] }] };
+
+    await assert.rejects(
+      generateContentSchedulePlan('nada-escrito', { days: 2, startDate: '2026-10-05', formats: ONE_STORY_A_DAY, approvedPlan, now: NOW }, dir),
+      /Velha/,
+    );
+    assert.deepEqual(await listProjectContent('nada-escrito', dir), []);
+  });
+});
