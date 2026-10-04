@@ -789,4 +789,95 @@ describe("Offers", () => {
     expect(JSON.parse(saveCall[1].body as string).groupId).toBe("geral");
   });
 
+  const CATALOG_DRAFT = {
+    id: "draft-coca",
+    name: "Coca-Cola 2L",
+    price: "R$ 9,99",
+    candidates: [
+      { imageUrl: "https://img.test/coca-1.jpg", thumbUrl: "https://img.test/coca-1t.jpg" },
+      { imageUrl: "https://img.test/coca-2.jpg", thumbUrl: "https://img.test/coca-2t.jpg" },
+    ],
+    createdAt: "2026-10-04T12:00:00.000Z",
+  };
+
+  function catalogState(offers: unknown[] = [], offerDrafts: unknown[] = []) {
+    return {
+      projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "catalog", contentStrategy: { offers, offerDrafts } }],
+      globalRules: {},
+    };
+  }
+
+  it("sends a pasted product list to the drafts endpoint and shows the review queue", async () => {
+    stubFetchSequence([
+      { body: catalogState() },
+      { body: { project: {}, drafts: [CATALOG_DRAFT] } },
+      { body: catalogState([], [CATALOG_DRAFT]) },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Adiantar fotos (lista)" }));
+    await userEvent.type(screen.getByLabelText("Um produto por linha (nome e preço, se tiver)"), "Coca-Cola 2L - 9,99");
+    await userEvent.click(screen.getByRole("button", { name: "Buscar fotos" }));
+
+    expect(await screen.findByText("Para revisar (1)")).toBeInTheDocument();
+    expect(screen.getByText("Coca-Cola 2L")).toBeInTheDocument();
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/offer-drafts");
+    expect(JSON.parse(calls[1][1].body as string)).toEqual({ text: "Coca-Cola 2L - 9,99" });
+  });
+
+  it("hides the list box outside catalog projects", async () => {
+    stubFetchSequence([{ body: projectState() }]);
+    renderOffers();
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    expect(screen.queryByRole("button", { name: "Adiantar fotos (lista)" })).not.toBeInTheDocument();
+  });
+
+  it("reviews a draft: form pre-filled, chosen online photo uploaded by URL, draft removed after saving", async () => {
+    const savedProduct = { id: "coca", name: "Coca-Cola 2L", type: "offer", price: "R$ 9,99", photoReferenceIds: ["foto-coca"] };
+    stubFetchSequence([
+      { body: catalogState([], [CATALOG_DRAFT]) },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-coca" } } } },
+      { body: { project: {}, offer: savedProduct } },
+      { body: { deleted: true, project: {} } },
+      { body: catalogState([savedProduct], []) },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Revisar Coca-Cola 2L" }));
+    expect(screen.getByLabelText("Nome do produto")).toHaveValue("Coca-Cola 2L");
+    expect(screen.getByLabelText(/Preço/)).toHaveValue("R$ 9,99");
+    expect(screen.getByRole("button", { name: "Usar foto 1" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Usar foto 2" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar produto" }));
+
+    await screen.findByRole("button", { name: /Sem grupo/ });
+    expect(screen.queryByText(/Para revisar/)).not.toBeInTheDocument();
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/assets");
+    const assetPayload = JSON.parse(calls[1][1].body as string);
+    expect(assetPayload.sourceUrl).toBe("https://img.test/coca-2.jpg");
+    expect(assetPayload.fallbackSourceUrl).toBe("https://img.test/coca-2t.jpg");
+    expect(assetPayload.role).toBe("product_photo");
+    expect(calls[2][0]).toBe("/api/projects/boss-pizzaria/offers");
+    expect(JSON.parse(calls[2][1].body as string).photoReferenceIds).toEqual(["foto-coca"]);
+    expect(calls[3][0]).toBe("/api/projects/boss-pizzaria/offer-drafts-delete");
+    expect(JSON.parse(calls[3][1].body as string)).toEqual({ draftId: "draft-coca" });
+  });
+
+  it("discards a draft without downloading anything", async () => {
+    stubFetchSequence([
+      { body: catalogState([], [CATALOG_DRAFT]) },
+      { body: { deleted: true, project: {} } },
+      { body: catalogState() },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Descartar Coca-Cola 2L" }));
+    await screen.findByText("Nenhum produto cadastrado ainda");
+    expect(screen.queryByText(/Para revisar/)).not.toBeInTheDocument();
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls.map((call) => call[0])).not.toContain("/api/projects/boss-pizzaria/assets");
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/offer-drafts-delete");
+  });
 });
