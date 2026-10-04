@@ -129,6 +129,7 @@ import {
   updateCatalogSettings,
   updateContentCaption,
   updateProjectBrandInput,
+  updateProjectBusinessHours,
   updateProjectCompanyProfile,
   updateProjectSettings,
   updateProjectReference,
@@ -973,6 +974,16 @@ async function handleRequest(req, res, targetDir, context = {}) {
     const body = await readBody(req);
     const project = await updateProjectBrandInput(projectId, body, targetDir);
     return sendJson(res, 200, { project });
+  }
+
+  if (parts.length === 4 && parts[3] === 'business-hours') {
+    const body = await readBody(req);
+    try {
+      const project = await updateProjectBusinessHours(projectId, body.businessHours ?? null, targetDir);
+      return sendJson(res, 200, { businessHours: project.businessHours ?? null });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
   }
 
   if (parts.length === 5 && parts[3] === 'technical-base' && parts[4] === 'analyze') {

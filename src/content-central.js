@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
+import { normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_MODES = new Set(['manual', 'semi_automatic', 'automatic']);
@@ -1140,6 +1141,19 @@ export async function updateProjectContentGoalWeights(projectId, weights, target
     project.updatedAt = now.toISOString();
     await writeJson(paths.projectPath, project);
     await writeFile(paths.manualPath, buildManual(project), 'utf-8');
+    return project;
+  });
+}
+
+export async function updateProjectBusinessHours(projectId, hours, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const businessHours = validateBusinessHours(hours);
+    if (businessHours) project.businessHours = businessHours;
+    else delete project.businessHours;
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
     return project;
   });
 }
@@ -6120,6 +6134,7 @@ async function toProjectSummary(project) {
     prospectSource: project.isProspect ? normalizeProspectSource(project.prospectSource) : null,
     approvalEmail: project.approvalEmail,
     timezone: project.timezone,
+    businessHours: normalizeBusinessHours(project.businessHours),
     instagram: project.instagram,
     companyProfile: normalizeCompanyProfile(project.companyProfile),
     brandInput: normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name)),
