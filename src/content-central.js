@@ -2,7 +2,9 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
+import { CONTENT_GOAL_LABELS } from './content-central-goals.js';
 import { isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
+export { CONTENT_GOAL_LABELS };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_MODES = new Set(['manual', 'semi_automatic', 'automatic']);
@@ -130,21 +132,6 @@ const BRAND_XRAY_SUGGESTION_LABELS = {
   positioning: 'Posicionamento recomendado',
   tone: 'Tom de voz recomendado',
   segment: 'Segmento detalhado sugerido',
-};
-
-export const CONTENT_GOAL_LABELS = {
-  sell_products: 'Vender produtos',
-  sell_services: 'Vender serviços',
-  promotions: 'Divulgar promoções',
-  whatsapp_orders: 'Receber pedidos no WhatsApp',
-  leads: 'Gerar leads',
-  authority: 'Gerar autoridade',
-  brand_awareness: 'Aumentar reconhecimento da marca',
-  relationship: 'Criar relacionamento',
-  engagement: 'Aumentar engajamento',
-  events: 'Divulgar eventos',
-  show_products: 'Mostrar produtos',
-  education: 'Educar o público',
 };
 
 const CONTENT_GOAL_OPTIONS = new Set(Object.keys(CONTENT_GOAL_LABELS));

@@ -8,13 +8,14 @@ import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import {
-  applyPlanSlotChoices, buildOfferUsage, CONTENT_GOAL_LABELS, getCentralPaths, listProjectContent, listProjectGoalTopics,
+  applyPlanSlotChoices, buildOfferUsage, getCentralPaths, listProjectContent, listProjectGoalTopics,
   loadProject, localDateKey, normalizeProjectOffers, previewContentSchedulePlan, saveProjectOffer,
   updateProjectContentGoalWeights, validContentGoalWeights,
 } from './content-central.js';
 import {
   describeBusinessHours, firstOpenTime, isOpenAt, isOpenDay, normalizeBusinessHours, openHours,
 } from './content-central-business-hours.js';
+import { goalName, slotTag } from './content-central-goals.js';
 import { buildPostingTimeStats, loadProjectMetrics } from './content-central-metrics.js';
 
 // What the cérebro may propose to change on an offer. Price, name and photos
@@ -268,18 +269,11 @@ function offerLine(offer, groups, usage) {
 
 const PROPOSAL_STATUS_LABELS = { applied: 'aplicada', rejected: 'recusada', failed: 'não aplicada' };
 
-const goalName = (key) => (key === 'sales' ? 'Venda' : CONTENT_GOAL_LABELS[key] || key);
 const KIND_LABELS = { story: 'Story', feed: 'Feed', reels: 'Reels' };
 
 function clip(text, max) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
-}
-
-export function slotTag(slot) {
-  if (slot.source === 'offer') return 'venda';
-  if (slot.source === 'goal') return goalName(slot.goalKey);
-  return slot.source || 'assunto';
 }
 
 function brandLines(project) {

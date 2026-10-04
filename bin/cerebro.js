@@ -2,8 +2,7 @@
 // The only door the cérebro (Claude Code, see src/content-central-brain.js)
 // has into Content Central. It goes through the local HTTP API, so every
 // existing validation and project lock applies.
-// (slotTag is a pure label helper; nothing is read or written through it.)
-import { slotTag } from '../src/content-central-brain.js';
+import { slotTag } from '../src/content-central-goals.js';
 
 const base = process.env.CONTENT_CENTRAL_URL || `http://127.0.0.1:${process.env.CONTENT_CENTRAL_PORT || 3333}`;
 const [command, projectId, json] = process.argv.slice(2);
