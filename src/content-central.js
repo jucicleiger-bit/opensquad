@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
-import { normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
+import { isClockTime, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_MODES = new Set(['manual', 'semi_automatic', 'automatic']);
@@ -132,7 +132,7 @@ const BRAND_XRAY_SUGGESTION_LABELS = {
   segment: 'Segmento detalhado sugerido',
 };
 
-const CONTENT_GOAL_LABELS = {
+export const CONTENT_GOAL_LABELS = {
   sell_products: 'Vender produtos',
   sell_services: 'Vender serviços',
   promotions: 'Divulgar promoções',
@@ -3851,7 +3851,9 @@ function planReasonForTopic(topic, options = {}) {
 function planSlotFromTopic({ topic, channel, format, scheduledDate, scheduledTime, dayNumber, slotNumber, options }) {
   const kind = planKindForTopic(topic);
   const name = topic.offerName || topic.specialDateLabel || topic.label || topic.objective || 'Assunto';
-  const label = topic.source === 'special_date' && topic.label ? topic.label : `${kind} — ${name}`;
+  // A goal topic's label already reads "<goal> — <topic>"; prefixing the
+  // kind (which is that same label) repeated both.
+  const label = (topic.source === 'special_date' || topic.source === 'goal') && topic.label ? topic.label : `${kind} — ${name}`;
   return {
     id: `${scheduledDate}-${channel}-${String(slotNumber).padStart(2, '0')}`,
     dayNumber,
@@ -3906,48 +3908,80 @@ function scheduleSlotsFor(startDate, days, formats) {
 // creativeGroupKey). So a pin on any of them pins all of them — otherwise a
 // pinned Story could go out with the art of the Reels' rotation pick — and
 // two different pins in one group can't both be honored.
-// Returns slot id → offerIds for every pinned slot and its siblings.
-function resolveGroupPins(slots, pinOf) {
+// The cérebro's time and bank topic follow the same rule: one art goes out
+// once, about one thing.
+// Returns slot id → chosen value for every chosen slot and its siblings.
+function resolveGroupChoice(slots, valueOf, conflict) {
   const groupOf = (slot) => `${slot.date}::${creativeShapeGroupForChannel(slot.channel) || slot.channel}::${slot.slotNumber}`;
   const byGroup = new Map();
   for (const slot of slots) {
-    const offerIds = pinOf(slot.id) || [];
-    if (!offerIds.length) continue;
-    const seen = byGroup.get(groupOf(slot));
-    if (seen && seen.join('+') !== offerIds.join('+')) {
-      throw new Error(`Horário ${slot.id}: canais do mesmo formato no mesmo horário dividem a arte — use a mesma oferta neles.`);
-    }
-    byGroup.set(groupOf(slot), offerIds);
+    const value = valueOf(slot.id);
+    if (value === undefined) continue;
+    const key = groupOf(slot);
+    if (byGroup.has(key) && JSON.stringify(byGroup.get(key)) !== JSON.stringify(value)) throw new Error(`Horário ${slot.id}: ${conflict}`);
+    byGroup.set(key, value);
   }
   return new Map(slots.filter((slot) => byGroup.has(groupOf(slot))).map((slot) => [slot.id, byGroup.get(groupOf(slot))]));
 }
 
+function resolveGroupPins(slots, pinOf) {
+  return resolveGroupChoice(slots, (id) => {
+    const offerIds = pinOf(id) || [];
+    return offerIds.length ? offerIds : undefined;
+  }, 'canais do mesmo formato no mesmo horário dividem a arte — use a mesma oferta neles.');
+}
+
 // Applies the cérebro's per-slot choices to a preview plan, validating each
 // pinned slot with the same rules generation uses, so a plan shown in the
-// panel is a plan that will generate.
+// panel is a plan that will generate. The Raio-X split stays the preview's:
+// offers only on sales slots, bank topics only on goal slots.
 export async function applyPlanSlotChoices(projectId, plan, choices, targetDir = process.cwd()) {
   const project = await loadProject(getCentralPaths(targetDir, projectId));
   const byId = new Map((Array.isArray(choices) ? choices : []).map((choice) => [String(choice?.id || ''), choice]));
   const slots = plan.dayPlans.flatMap((day) => day.regular);
-  const known = new Set(slots.map((slot) => slot.id));
-  for (const id of byId.keys()) if (!known.has(id)) throw new Error(`Horário ${id} não existe neste plano.`);
+  const slotById = new Map(slots.map((slot) => [slot.id, slot]));
+  for (const id of byId.keys()) if (!slotById.has(id)) throw new Error(`Horário ${id} não existe neste plano.`);
   const offerIdsOf = (choice) => (Array.isArray(choice?.offerIds) ? choice.offerIds.map(String).filter(Boolean).slice(0, 2) : []);
   const pinsBySlot = resolveGroupPins(slots, (id) => offerIdsOf(byId.get(id)));
+  const timeBySlot = resolveGroupChoice(slots, (id) => {
+    const time = byId.get(id)?.time;
+    if (time === undefined || time === null || time === '') return undefined;
+    if (!isClockTime(time)) throw new Error(`Horário ${id}: hora "${time}" inválida, use HH:MM.`);
+    return String(time);
+  }, 'canais que dividem a arte saem no mesmo horário — use a mesma hora neles.');
+  const topicBySlot = resolveGroupChoice(slots, (id) => String(byId.get(id)?.topicId || '').trim() || undefined,
+    'canais que dividem a arte falam do mesmo assunto — use o mesmo assunto neles.');
+  for (const id of pinsBySlot.keys()) {
+    const slot = slotById.get(id);
+    if (slot.source !== 'offer') {
+      throw new Error(`Horário ${id} é de ${CONTENT_GOAL_LABELS[slot.goalKey] || 'objetivo do Raio-X'} pelo Raio-X; oferta só entra em horário de venda.`);
+    }
+  }
+  for (const id of topicBySlot.keys()) {
+    if (slotById.get(id).source !== 'goal') throw new Error(`Horário ${id} é de venda; assunto do banco só entra em horário de objetivo.`);
+  }
   const dayPlans = [];
   for (const day of plan.dayPlans) {
     const regular = [];
     for (const slot of day.regular) {
       const choice = byId.get(slot.id);
       const offerIds = pinsBySlot.get(slot.id) || [];
-      if (!choice && !offerIds.length) { regular.push(slot); continue; }
-      const reason = cleanApprovedPlanText(choice?.reason, 500) || slot.reason;
+      const time = timeBySlot.get(slot.id);
+      const topicId = topicBySlot.get(slot.id);
+      if (!choice && !offerIds.length && !time && !topicId) { regular.push(slot); continue; }
+      let next = time ? { ...slot, scheduledTime: time } : slot;
+      if (topicId) {
+        const topic = { ...goalTopicForIdea(project, slot.goalKey, topicId), channel: slot.channel };
+        next = { ...next, topic, topicId, label: topic.label };
+      }
+      const reason = cleanApprovedPlanText(choice?.reason, 500) || next.reason;
       if (!offerIds.length) {
-        regular.push({ ...slot, label: cleanApprovedPlanText(choice.label, 220) || slot.label, reason });
+        regular.push({ ...next, label: cleanApprovedPlanText(choice?.label, 220) || next.label, reason });
         continue;
       }
       const topic = await topicForPinnedOffers(project, slot.id, offerIds, slot.date, targetDir);
       const name = topic.products?.length ? topic.products.map((product) => product.name).join(' + ') : topic.offerName;
-      const rest = { ...slot };
+      const rest = { ...next };
       delete rest.topic;
       regular.push({
         ...rest,
@@ -6595,6 +6629,21 @@ function buildGoalContentTopics(goalKey, project) {
     return topic ? [topic] : [];
   }
   return ideas.map((idea, index) => buildGoalContentTopic(goalKey, project, idea, index)).filter(Boolean);
+}
+
+// The bank as the cérebro sees it. ideaId is the topic's own id (the stored
+// bank item's id gets the goal prefixed when normalized), so a pick made from
+// this list is found again by goalTopicForIdea and by generation.
+export function listProjectGoalTopics(project) {
+  return selectedTopicIdeaGoalKeys(project).flatMap((goalKey) => buildGoalContentTopics(goalKey, project)
+    .filter((topic) => topic.ideaId)
+    .map((topic) => ({ goalKey, ideaId: topic.ideaId, title: topic.ideaTitle, detail: topic.items })));
+}
+
+export function goalTopicForIdea(project, goalKey, ideaId) {
+  const topic = buildGoalContentTopics(goalKey, project).find((entry) => entry.ideaId === ideaId);
+  if (!topic) throw new Error(`Assunto ${ideaId} não existe no banco de ${CONTENT_GOAL_LABELS[goalKey] || goalKey}.`);
+  return topic;
 }
 
 function buildGoalContentTopic(goalKey, project, idea = null, index = 0) {
