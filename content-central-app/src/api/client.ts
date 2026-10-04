@@ -340,6 +340,7 @@ export interface ProjectSummary {
   approvalEmail?: string;
   timezone?: string;
   businessHours?: BusinessHours | null;
+  contractedPlan?: ContractedPlan | null;
   instagram?: ProjectInstagram;
   companyProfile?: unknown;
   brandInput?: BrandInput;
@@ -1096,6 +1097,21 @@ export function saveBrandInput(projectId: string, input: BrandInput): Promise<{ 
   return api(`/api/projects/${encodeURIComponent(projectId)}/brand-input`, {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export interface ContractedPlan {
+  storiesPerDay: number;
+  feedsPerWeek: number;
+  storyChannels: string[];
+  feedChannels: string[];
+  flyersPerMonth: number;
+}
+
+export function saveContractedPlan(projectId: string, contractedPlan: ContractedPlan | null): Promise<{ contractedPlan: ContractedPlan | null }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/contracted-plan`, {
+    method: "POST",
+    body: JSON.stringify({ contractedPlan }),
   });
 }
 
