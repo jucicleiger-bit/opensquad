@@ -286,7 +286,7 @@ export function Brain() {
         </Card>
 
         <div className={styles.side}>
-          <Card className={styles.plan}>
+          <Card className={styles.panel}>
             <h3 style={{ margin: 0 }}>Plano</h3>
             {stored ? (
               <>
@@ -327,12 +327,18 @@ export function Brain() {
             )}
           </Card>
 
-          <Card>
+          <Card className={styles.panel}>
             <h3 style={{ margin: 0 }}>Caderno do cliente</h3>
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="muted" style={{ margin: "2px 0 12px", fontSize: 13 }}>
               O que vale sempre para este cliente. O cérebro lê toda conversa e propõe mudanças aqui.
             </p>
-            <textarea aria-label="Caderno do cliente" rows={8} value={notebook} onChange={(event) => setNotebook(event.target.value)} />
+            <textarea
+              aria-label="Caderno do cliente"
+              rows={8}
+              value={notebook}
+              placeholder="Ex.: o dono prefere fotos dos produtos na prateleira; sexta tem promoção de carnes."
+              onChange={(event) => setNotebook(event.target.value)}
+            />
             <div className="button-row" style={{ marginTop: 8 }}>
               <Button type="button" variant="secondary" disabled={busy || notebook === state.notebook} onClick={() => void handleSaveNotebook()}>
                 Salvar caderno
