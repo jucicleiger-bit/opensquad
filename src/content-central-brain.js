@@ -95,18 +95,17 @@ export async function saveNotebook(projectId, text, targetDir) {
 function fitPlanToBusinessHours(plan, hours) {
   if (!hours) return plan;
   const skippedSlotIds = [];
+  const outside = [];
   const dayPlans = plan.dayPlans.map((day) => {
     if (!isOpenDay(hours, day.date)) {
       skippedSlotIds.push(...day.regular.map((slot) => slot.id));
       return { ...day, regular: [], extras: [] };
     }
-    const outside = day.regular.find((slot) => !isOpenAt(hours, day.date, slot.scheduledTime));
-    if (outside) {
-      throw new Error(`Horário ${outside.id} (${outside.scheduledTime}) fica fora do horário de funcionamento de ${day.date}. Escolha uma hora aberta com "time" ou mude o startTime do formato.`);
-    }
+    outside.push(...day.regular.filter((slot) => !isOpenAt(hours, day.date, slot.scheduledTime)).map((slot) => `${slot.id} (${slot.scheduledTime})`));
     const extras = day.extras.map((extra) => (isOpenAt(hours, day.date, extra.scheduledTime) ? extra : { ...extra, scheduledTime: firstOpenTime(hours, day.date) }));
     return { ...day, extras };
   });
+  if (outside.length) throw new Error(`Fora do horário de funcionamento: ${outside.join(', ')}. Mova esses horários com "time" ou mude o startTime do formato.`);
   return {
     ...plan,
     dayPlans,
@@ -132,10 +131,10 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
     topicIdeaGenerator,
   }, targetDir);
   const project = await loadProject(getCentralPaths(targetDir, projectId));
-  const plan = fitPlanToBusinessHours(
-    await applyPlanSlotChoices(projectId, preview, slots || [], targetDir),
-    normalizeBusinessHours(project.businessHours),
-  );
+  // summary and businessHoursWarnings describe the preview before the choices
+  // and the trimming, so they would be stale here; nothing reads them.
+  const { summary, businessHoursWarnings, ...chosen } = await applyPlanSlotChoices(projectId, preview, slots || [], targetDir);
+  const plan = fitPlanToBusinessHours(chosen, normalizeBusinessHours(project.businessHours));
   const stored = { startDate: plan.startDate, days: plan.days, formats: plan.formats, plan, approvedAt: null, updatedAt: new Date().toISOString() };
   await write(brainPaths(targetDir, projectId).planPath, stored);
   return stored;
@@ -277,7 +276,7 @@ function clip(text, max) {
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
-function slotTag(slot) {
+export function slotTag(slot) {
   if (slot.source === 'offer') return 'venda';
   if (slot.source === 'goal') return goalName(slot.goalKey);
   return slot.source || 'assunto';

@@ -2,6 +2,9 @@
 // The only door the cérebro (Claude Code, see src/content-central-brain.js)
 // has into Content Central. It goes through the local HTTP API, so every
 // existing validation and project lock applies.
+// (slotTag is a pure label helper; nothing is read or written through it.)
+import { slotTag } from '../src/content-central-brain.js';
+
 const base = process.env.CONTENT_CENTRAL_URL || `http://127.0.0.1:${process.env.CONTENT_CENTRAL_PORT || 3333}`;
 const [command, projectId, json] = process.argv.slice(2);
 
@@ -31,9 +34,10 @@ try {
   } else if (command === 'plan') {
     const stored = await call('/plan', parse(json));
     for (const day of stored.plan.dayPlans) {
-      for (const slot of day.regular) console.log(`${slot.id} · ${slot.scheduledTime} · ${slot.channelLabel}: ${slot.label}`);
+      for (const slot of day.regular) console.log(`${slot.id} · ${slot.scheduledTime} · ${slot.channelLabel} [${slotTag(slot)}]${slot.topicId ? ` (assunto ${slot.topicId})` : ''}: ${slot.label}`);
       for (const extra of day.extras) console.log(`${day.date} · extra: ${extra.label}`);
     }
+    if (stored.plan.skippedSlotIds?.length) console.log(`Sem post por loja fechada: ${stored.plan.skippedSlotIds.join(', ')}`);
     console.log('Plano salvo; o operador vê e aprova na tela.');
   } else if (command === 'propose') {
     const proposal = await call('/proposals', parse(json));

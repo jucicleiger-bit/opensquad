@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  createCentralProject, getCentralPaths, loadProjectForTest, saveProjectOffer, saveProjectOfferGroup, updateProjectBrandInput,
+  createCentralProject, generateContentSchedulePlan, getCentralPaths, loadProjectForTest, saveProjectOffer, saveProjectOfferGroup, updateProjectBrandInput,
   updateProjectBusinessHours,
 } from '../src/content-central.js';
 import {
@@ -107,6 +107,8 @@ test('saveBrainPlan stores the preview with the chosen offers and the normalized
     const stored = await saveBrainPlan('loja', { startDate: '2026-10-05', days: 1, formats: STORY, slots: [{ id: '2026-10-05-instagram_story-01', offerIds: [offer.id] }] }, dir);
     assert.equal(stored.plan.dayPlans[0].regular[0].offerName, 'Feijão');
     assert.equal(stored.approvedAt, null);
+    assert.equal('businessHoursWarnings' in stored.plan, false);
+    assert.equal('summary' in stored.plan, false);
     const { formats } = (await readBrainState('loja', dir)).plan;
     assert.deepEqual(formats.map((format) => [format.channel, format.startTime, format.label]), [['instagram_story', '09:00', 'Instagram Stories']]);
   });
@@ -164,7 +166,7 @@ test('a post at a closed hour is refused; a chosen open hour is kept and extras 
     await updateProjectBusinessHours('loja', { ...WEEK_HOURS, mon: [{ from: '13:00', to: '20:00' }] }, dir);
     await assert.rejects(
       saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: STORY }, dir),
-      /2026-10-12-instagram_story-01.*fora do horário de funcionamento/,
+      /fora do horário de funcionamento: 2026-10-12-instagram_story-01 \(09:00\)\./i,
     );
     // 2026-10-12 (Monday) is Dia das Crianças, so the plan has extras at the format's 09:00.
     const stored = await saveBrainPlan('loja', {
@@ -173,6 +175,33 @@ test('a post at a closed hour is refused; a chosen open hour is kept and extras 
     assert.equal(stored.plan.dayPlans[0].regular[0].scheduledTime, '14:00');
     assert.ok(stored.plan.dayPlans[0].extras.length > 0);
     assert.ok(stored.plan.dayPlans[0].extras.every((extra) => extra.scheduledTime === '13:00'));
+  });
+});
+
+test('every post at a closed hour is listed in one refusal, across days', async () => {
+  await withProject(async (dir) => {
+    const afternoon = [{ from: '13:00', to: '20:00' }];
+    await updateProjectBusinessHours('loja', { ...WEEK_HOURS, mon: afternoon, tue: afternoon }, dir);
+    await assert.rejects(
+      saveBrainPlan('loja', { startDate: '2026-10-12', days: 2, formats: STORY }, dir),
+      /fora do horário de funcionamento: 2026-10-12-instagram_story-01 \(09:00\), 2026-10-13-instagram_story-01 \(09:00\)\./i,
+    );
+  });
+});
+
+test('an approved plan with a closed Sunday and a chosen time generates exactly that', async () => {
+  await withProject(async (dir) => {
+    await saveProjectOffer('loja', { name: 'Arroz', type: 'offer' }, dir);
+    await saveProjectOffer('loja', { name: 'Feijão', type: 'offer' }, dir);
+    await updateProjectBusinessHours('loja', WEEK_HOURS, dir);
+    // 2026-10-11 is a Sunday, 2026-10-12 a Monday.
+    const stored = await saveBrainPlan('loja', {
+      startDate: '2026-10-11', days: 2, formats: STORY, slots: [{ id: '2026-10-12-instagram_story-01', time: '14:00' }],
+    }, dir);
+    const batch = await generateContentSchedulePlan('loja', {
+      days: stored.days, startDate: stored.startDate, formats: stored.formats, approvedPlan: stored.plan, now: new Date(2026, 9, 3, 9),
+    }, dir);
+    assert.deepEqual(batch.items.map((item) => [item.scheduledDate, item.scheduledTime]), [['2026-10-12', '14:00']]);
   });
 });
 

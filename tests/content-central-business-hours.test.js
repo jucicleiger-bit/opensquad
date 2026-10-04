@@ -77,3 +77,27 @@ test('the Agenda preview warns about posts outside opening hours without droppin
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('a non-object is refused, and an untouched all-closed week reads as not configured', async () => {
+  for (const bad of ['seg', 5, true, [], [{ from: '07:00', to: '11:00' }]]) {
+    assert.throws(() => validateBusinessHours(bad), /^Error: Horário de funcionamento inválido\.$/);
+  }
+  assert.equal(validateBusinessHours({}), null);
+  assert.equal(validateBusinessHours({ mon: [], sun: [] }), null);
+  assert.equal(normalizeBusinessHours({ mon: [] }), null);
+
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-hours-'));
+  try {
+    await createCentralProject({ projectId: 'loja', name: 'Loja' }, dir);
+    await updateProjectBusinessHours('loja', WEEK, dir);
+    await updateProjectBusinessHours('loja', { mon: [], tue: [], wed: [], thu: [], fri: [], sat: [], sun: [] }, dir);
+    assert.equal((await listCentralProjects(dir)).find((project) => project.projectId === 'loja').businessHours, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('closing at midnight points to 23:59', () => {
+  assert.throws(() => validateBusinessHours({ fri: [{ from: '18:00', to: '00:00' }] }), /sexta: para fechar à meia-noite use 23:59\./);
+  assert.equal(validateBusinessHours({ fri: [{ from: '18:00', to: '23:59' }] }).fri[0].to, '23:59');
+});

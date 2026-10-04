@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { startContentCentralServer } from '../src/content-central-server.js';
-import { createCentralProject, saveProjectOffer } from '../src/content-central.js';
+import { createCentralProject, saveProjectOffer, updateProjectBusinessHours } from '../src/content-central.js';
 
 const realFetch = globalThis.fetch;
 
@@ -79,7 +79,13 @@ test('the cerebro CLI saves a plan and a proposal through the server', async () 
     const run = (...args) => promisify(execFile)(process.execPath, ['bin/cerebro.js', ...args], { env: { ...process.env, CONTENT_CENTRAL_URL: server.url } });
     const formats = [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }];
     const planOut = await run('plan', 'loja', JSON.stringify({ startDate: '2026-10-05', days: 1, formats, slots: [{ id: '2026-10-05-instagram_story-01', offerIds: [offer.id] }] }));
-    assert.match(planOut.stdout, /Venda — Arroz/);
+    assert.match(planOut.stdout, /2026-10-05-instagram_story-01 · 09:00 · Instagram Stories \[venda\].*Venda — Arroz/);
+    assert.doesNotMatch(planOut.stdout, /Sem post por loja fechada/);
+    // 2026-10-11 is a Sunday: its slot leaves the plan and the cérebro is told so.
+    const open = [{ from: '07:00', to: '20:00' }];
+    await updateProjectBusinessHours('loja', { mon: open, tue: open, wed: open, thu: open, fri: open, sat: open, sun: [] }, dir);
+    const closedOut = await run('plan', 'loja', JSON.stringify({ startDate: '2026-10-11', days: 2, formats }));
+    assert.match(closedOut.stdout, /Sem post por loja fechada: 2026-10-11-instagram_story-01/);
     const propOut = await run('propose', 'loja', JSON.stringify({ summary: 'Setor', changes: [{ kind: 'offer', offerId: offer.id, field: 'sector', after: 'Mercearia' }] }));
     assert.match(propOut.stdout, /Proposta criada/);
     const state = await call(server, '/api/projects/loja/brain');

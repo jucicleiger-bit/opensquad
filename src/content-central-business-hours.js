@@ -8,9 +8,12 @@ const WEEKDAY_LABELS = { mon: 'segunda', tue: 'terça', wed: 'quarta', thu: 'qui
 
 export const isClockTime = (value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value ?? ''));
 
-// Strict: the operator's form gets the reason it was not saved.
+// Strict: the operator's form gets the reason it was not saved. A week with
+// every day empty is "not configured" (null): an all-closed shop can't be
+// planned for, and it is most likely the untouched card being saved.
 export function validateBusinessHours(input) {
   if (input == null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) throw new Error('Horário de funcionamento inválido.');
   const hours = {};
   for (const day of WEEK_ORDER) {
     const label = WEEKDAY_LABELS[day];
@@ -19,13 +22,14 @@ export function validateBusinessHours(input) {
     const clean = periods.map((period) => ({ from: String(period?.from ?? ''), to: String(period?.to ?? '') }));
     for (const period of clean) {
       if (!isClockTime(period.from) || !isClockTime(period.to)) throw new Error(`${label}: use HH:MM.`);
+      if (period.to === '00:00') throw new Error(`${label}: para fechar à meia-noite use 23:59.`);
       if (period.from >= period.to) throw new Error(`${label}: a abertura precisa ser antes do fechamento.`);
     }
     clean.sort((a, b) => a.from.localeCompare(b.from));
     if (clean.length === 2 && clean[1].from < clean[0].to) throw new Error(`${label}: os períodos se sobrepõem.`);
     hours[day] = clean;
   }
-  return hours;
+  return WEEK_ORDER.some((day) => hours[day].length) ? hours : null;
 }
 
 // Lenient read of what is stored: anything malformed reads as not configured.
