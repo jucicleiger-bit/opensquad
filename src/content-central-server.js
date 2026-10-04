@@ -130,6 +130,7 @@ import {
   updateContentCaption,
   updateProjectBrandInput,
   updateProjectBusinessHours,
+  updateProjectContractedPlan,
   updateProjectCompanyProfile,
   updateProjectSettings,
   updateProjectReference,
@@ -981,6 +982,16 @@ async function handleRequest(req, res, targetDir, context = {}) {
     try {
       const project = await updateProjectBusinessHours(projectId, body.businessHours ?? null, targetDir);
       return sendJson(res, 200, { businessHours: project.businessHours ?? null });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
+  if (parts.length === 4 && parts[3] === 'contracted-plan') {
+    const body = await readBody(req);
+    try {
+      const project = await updateProjectContractedPlan(projectId, body.contractedPlan ?? null, targetDir);
+      return sendJson(res, 200, { contractedPlan: project.contractedPlan ?? null });
     } catch (err) {
       return sendJson(res, 400, { error: err.message });
     }

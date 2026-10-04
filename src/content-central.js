@@ -3,6 +3,7 @@ import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 
 import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
 import { CONTENT_GOAL_LABELS } from './content-central-goals.js';
+import { normalizeContractedPlan, validateContractedPlan } from './content-central-contract.js';
 import { isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
 export { CONTENT_GOAL_LABELS };
 
@@ -1139,6 +1140,19 @@ export async function updateProjectBusinessHours(projectId, hours, targetDir = p
     const businessHours = validateBusinessHours(hours);
     if (businessHours) project.businessHours = businessHours;
     else delete project.businessHours;
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
+    return project;
+  });
+}
+
+export async function updateProjectContractedPlan(projectId, plan, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const contractedPlan = validateContractedPlan(plan);
+    if (contractedPlan) project.contractedPlan = contractedPlan;
+    else delete project.contractedPlan;
     project.updatedAt = now.toISOString();
     await writeJson(paths.projectPath, project);
     return project;
@@ -6184,6 +6198,7 @@ async function toProjectSummary(project) {
     approvalEmail: project.approvalEmail,
     timezone: project.timezone,
     businessHours: normalizeBusinessHours(project.businessHours),
+    contractedPlan: normalizeContractedPlan(project.contractedPlan),
     instagram: project.instagram,
     companyProfile: normalizeCompanyProfile(project.companyProfile),
     brandInput: normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name)),
