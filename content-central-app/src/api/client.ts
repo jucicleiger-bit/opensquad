@@ -19,6 +19,13 @@ export interface ProjectWhatsApp {
   sessionName?: string;
 }
 
+export interface BusinessPeriod {
+  from: string;
+  to: string;
+}
+
+export type BusinessHours = Record<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun", BusinessPeriod[]>;
+
 export interface BrandInput {
   brandName?: string;
   segmentGroup?: string;
@@ -332,6 +339,7 @@ export interface ProjectSummary {
   prospectSource?: ProspectSource | null;
   approvalEmail?: string;
   timezone?: string;
+  businessHours?: BusinessHours | null;
   instagram?: ProjectInstagram;
   companyProfile?: unknown;
   brandInput?: BrandInput;
@@ -1087,6 +1095,13 @@ export function saveBrandInput(projectId: string, input: BrandInput): Promise<{ 
   return api(`/api/projects/${encodeURIComponent(projectId)}/brand-input`, {
     method: "POST",
     body: JSON.stringify(input),
+  });
+}
+
+export function saveBusinessHours(projectId: string, businessHours: BusinessHours | null): Promise<{ businessHours: BusinessHours | null }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/business-hours`, {
+    method: "POST",
+    body: JSON.stringify({ businessHours }),
   });
 }
 

@@ -535,4 +535,24 @@ describe("Company", () => {
     expect(await screen.findByLabelText("Nome da empresa")).toHaveValue("Boss Pizzaria");
     expect(screen.getByText("Pizza Grande — R$ 49,90", { exact: false })).toBeInTheDocument();
   });
+
+  it("saves the opening hours from the Raio-X", async () => {
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { businessHours: null } },
+      { body: projectState() },
+    ]);
+    renderCompany();
+
+    expect(await screen.findByText("Horário de funcionamento")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Abrir segunda" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar horário" }));
+
+    const calls = (fetch as unknown as { mock: { calls: Array<[string, RequestInit?]> } }).mock.calls;
+    const save = calls.find(([url]) => url === "/api/projects/boss-pizzaria/business-hours");
+    expect(save).toBeTruthy();
+    const body = JSON.parse(String(save?.[1]?.body));
+    expect(body.businessHours.mon).toEqual([{ from: "08:00", to: "18:00" }]);
+    expect(body.businessHours.sun).toEqual([]);
+  });
 });

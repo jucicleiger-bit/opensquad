@@ -260,7 +260,7 @@ export function Brain() {
             <h3 style={{ marginTop: 0 }}>Plano</h3>
             {stored ? (
               <>
-                {stored.plan.dayPlans.map((day) => (
+                {stored.plan.dayPlans.filter((day) => day.regular.length).map((day) => (
                   <div key={day.date} className={styles.day}>
                     <b>{dayLabel(day.date)}</b>
                     {day.regular.map((slot) => (
