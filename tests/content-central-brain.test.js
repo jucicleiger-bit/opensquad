@@ -343,6 +343,24 @@ test('feeds already scheduled in the week count, and a plan that starts mid-week
   });
 });
 
+test('a hand-made encarte or a holiday post on the Monday feed does not count as the weekly feed', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBusinessHours('loja', MON_TO_SAT_OPEN, dir);
+    await updateProjectContractedPlan('loja', ESSENCIAL, dir);
+    const { draftsDir } = getCentralPaths(dir, 'loja');
+    for (const source of ['flyer', 'special_date']) {
+      const batchDir = join(draftsDir, `batch-${source}`);
+      await mkdir(batchDir, { recursive: true });
+      await writeFile(join(batchDir, 'day-01.json'), JSON.stringify({
+        contentId: source, scheduledDate: '2026-10-05', scheduledTime: '10:00', channel: 'instagram_feed', status: 'draft_generated', contentTopic: { source },
+      }), 'utf-8');
+    }
+    const formats = [TWO_STORIES_DAILY, FEED_DAILY];
+    const slots = ['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-10', '2026-10-11'].map((date) => ({ id: `${date}-instagram_feed-01`, skip: true }));
+    await assert.rejects(saveBrainPlan('loja', { startDate: '2026-10-07', days: 5, formats, slots }, dir), /semana de 2026-10-05: 0 feed\(s\)/);
+  });
+});
+
 test('a consecutive-day repeat does not blame offers that cannot go out those days', async () => {
   await withProject(async (dir) => {
     const a = (await saveProjectOffer('loja', { name: 'Arroz', type: 'offer', price: '9,90' }, dir)).offer;

@@ -196,10 +196,11 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
   const fitted = fitPlan(chosen, hours);
   const items = await listProjectContent(projectId, targetDir);
   // Content already scheduled outside the plan's own dates (contractProblems
-  // keeps the plan's weeks); a rehearsal (test post) never went to the audience.
+  // keeps the plan's weeks). Not weekly feeds: rehearsals (test posts), the
+  // operator's hand-made encartes and holiday / commemorative posts.
   const planDates = new Set(fitted.dayPlans.map((day) => day.date));
   const existing = items
-    .filter((item) => item.status !== 'test_post_simulated' && !planDates.has(item.scheduledDate))
+    .filter((item) => item.status !== 'test_post_simulated' && !['flyer', 'special_date'].includes(item.contentTopic?.source) && !planDates.has(item.scheduledDate))
     .map((item) => ({ date: item.scheduledDate, channel: item.channel }));
   const problems = contractProblems(fitted, normalizeContractedPlan(project.contractedPlan), hours, existing);
   if (problems.length) {
