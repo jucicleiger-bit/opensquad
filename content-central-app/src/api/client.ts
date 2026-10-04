@@ -759,6 +759,30 @@ export function generateSpecialDateContent(
   });
 }
 
+// The holiday/commercial-date extras a reviewed plan lists are generated on
+// their own, after the plan's regular slots — one call per date, with every
+// channel of that date together so same-shape channels share one creative.
+export async function generatePlanExtras(projectId: string, plan: PlannedContentSchedule): Promise<void> {
+  const byDateAndLabel = new Map<string, { date: string; label: string; channels: Set<string>; postTime?: string }>();
+  for (const day of plan.dayPlans) {
+    for (const extra of day.extras || []) {
+      const label = (extra.label || "").replace(/^Extra —\s*/, "") || extra.specialDateLabel || "Data comemorativa";
+      const key = `${extra.date}__${label}`;
+      const entry = byDateAndLabel.get(key) || { date: extra.date, label, channels: new Set<string>(), postTime: extra.scheduledTime };
+      entry.channels.add(extra.channel);
+      byDateAndLabel.set(key, entry);
+    }
+  }
+  for (const extra of byDateAndLabel.values()) {
+    await generateSpecialDateContent(projectId, {
+      date: extra.date,
+      label: extra.label,
+      channels: Array.from(extra.channels),
+      postTime: extra.postTime,
+    });
+  }
+}
+
 export interface AdCopyVariation {
   angle: "dor" | "desejo" | "urgencia";
   angleLabel: string;
@@ -1702,7 +1726,7 @@ export interface BrainProposal {
   id: string;
   summary: string;
   changes: BrainChange[];
-  status: "pending" | "applied" | "rejected";
+  status: "pending" | "applied" | "rejected" | "failed";
   results?: { index: number; ok: boolean; error?: string }[];
   createdAt: string;
 }
@@ -1712,6 +1736,8 @@ export interface BrainPlan {
   days: number;
   formats: GenerateFormatInput[];
   plan: PlannedContentSchedule;
+  // Set once "Aprovar e gerar" went through; a new plan comes back null.
+  approvedAt: string | null;
   updatedAt: string;
 }
 
@@ -1738,6 +1764,10 @@ export function resolveBrainProposal(
   action: "apply" | "reject",
 ): Promise<{ proposal: BrainProposal }> {
   return api(`${brainPath(projectId)}/proposals/${encodeURIComponent(proposalId)}/${action}`, { method: "POST", body: "{}" });
+}
+
+export function markBrainPlanApproved(projectId: string): Promise<BrainPlan> {
+  return api(`${brainPath(projectId)}/plan/approved`, { method: "POST", body: "{}" });
 }
 
 export function saveBrainNotebook(projectId: string, text: string): Promise<{ notebook: string }> {

@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import {
+  CONTENT_GOAL_LABELS,
   generateContent,
+  generatePlanExtras,
   getBrain,
+  markBrainPlanApproved,
   resolveBrainProposal,
   saveBrainNotebook,
   sendBrainMessage,
@@ -14,6 +17,7 @@ import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
+import { localDateKey } from "./offerUsageDisplay";
 import styles from "./Brain.module.css";
 
 const OFFER_FIELD_LABELS: Record<string, string> = {
@@ -24,18 +28,18 @@ const OFFER_FIELD_LABELS: Record<string, string> = {
   groupId: "grupo",
 };
 
+const goalLabel = (key: string) => (key === "sales" ? "Venda (ofertas)" : CONTENT_GOAL_LABELS[key] || key);
+
 function show(value: unknown): string {
   if (value === "" || value === null || value === undefined) return "(vazio)";
   if (typeof value === "boolean") return value ? "sim" : "não";
-  if (typeof value === "object") return Object.entries(value as Record<string, unknown>).map(([key, n]) => `${key} ${n}%`).join(", ");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>).map(([key, n]) => `${goalLabel(key)} ${n}%`).join(", ");
+  }
   return String(value);
 }
 
-function changeText(change: BrainChange, offerName: (id?: string) => string): string {
-  if (change.kind === "notebook") return "Caderno do cliente (texto novo abaixo)";
-  if (change.kind === "goalWeights") return `Percentuais do Raio-X: ${show(change.before)} → ${show(change.after)}`;
-  return `${offerName(change.offerId)} — ${OFFER_FIELD_LABELS[change.field || ""] || change.field}: ${show(change.before)} → ${show(change.after)}`;
-}
+const dayMonth = (date: string) => date.split("-").reverse().slice(0, 2).join("/");
 
 const dayLabel = (date: string) => {
   const [year, month, day] = date.split("-").map(Number);
@@ -52,18 +56,35 @@ export function Brain() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const messagesRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     const next = await getBrain(projectId);
     setState(next);
     setNotebook(next.notebook);
+    return next;
   }, [projectId]);
 
   useEffect(() => {
     load().catch((err) => setError((err as Error).message));
   }, [load]);
 
-  const offerName = (id?: string) => project.contentStrategy?.offers?.find((offer) => offer.id === id)?.name || id || "Oferta";
+  const messageCount = state?.chat.messages.length ?? 0;
+  useEffect(() => {
+    const box = messagesRef.current;
+    if (box) box.scrollTop = box.scrollHeight;
+  }, [messageCount, thinking]);
+
+  const offers = project.contentStrategy?.offers || [];
+  const groups = project.contentStrategy?.offerGroups || [];
+  const offerName = (id?: string) => offers.find((offer) => offer.id === id)?.name || id || "Oferta";
+
+  function changeText(change: BrainChange): string {
+    if (change.kind === "notebook") return "Caderno do cliente (texto novo abaixo)";
+    if (change.kind === "goalWeights") return `Percentuais do Raio-X: ${show(change.before)} → ${show(change.after)}`;
+    const value = (raw: unknown) => (change.field === "groupId" && raw ? groups.find((group) => group.id === raw)?.name || String(raw) : show(raw));
+    return `${offerName(change.offerId)} — ${OFFER_FIELD_LABELS[change.field || ""] || change.field}: ${value(change.before)} → ${value(change.after)}`;
+  }
 
   async function handleSend() {
     const text = draft.trim();
@@ -71,14 +92,32 @@ export function Brain() {
     setThinking(true);
     setError(null);
     setNotice(null);
+    setDraft("");
+    // Shown right away; the reload after the answer replaces it with what the
+    // server stored.
+    setState((current) => current && {
+      ...current,
+      chat: { ...current.chat, messages: [...current.chat.messages, { role: "user", text, at: new Date().toISOString() }] },
+    });
+    let failure: string | null = null;
     try {
       await sendBrainMessage(projectId, text);
-      setDraft("");
-    } catch {
-      // The failure is stored in the chat as an "error" message; reload shows it.
-    } finally {
-      setThinking(false);
-      await load().catch((err) => setError((err as Error).message));
+    } catch (err) {
+      failure = (err as Error).message;
+    }
+    setThinking(false);
+    try {
+      const next = await load();
+      const last = next.chat.messages.at(-1);
+      // A failed answer is already in the chat as an error message; anything
+      // else (busy, offline) is not, and the text must come back to the box.
+      if (failure && !(last?.role === "error" && last.text === failure)) {
+        setError(failure);
+        if (last?.role !== "user" || last.text !== text) setDraft(text);
+      }
+    } catch (err) {
+      setError(failure || (err as Error).message);
+      setDraft(text);
     }
   }
 
@@ -98,18 +137,28 @@ export function Brain() {
   }
 
   async function handleApprove() {
-    if (!state?.plan) return;
+    const stored = state?.plan;
+    if (!stored) return;
     setBusy(true);
     setError(null);
     try {
       await generateContent(projectId, {
-        days: String(state.plan.days),
-        startDate: state.plan.startDate,
-        formats: state.plan.formats,
+        days: String(stored.days),
+        startDate: stored.startDate,
+        formats: stored.formats,
         contentRules: "",
-        approvedPlan: state.plan.plan,
+        approvedPlan: stored.plan,
       });
-      setNotice("Geração iniciada — acompanhe as artes em Aguardando aprovação.");
+      // Marked before the extras: if one of those fails, the regular posts
+      // already exist and must not be generated again by a second click.
+      await markBrainPlanApproved(projectId);
+      try {
+        if (stored.plan.extraCount) await generatePlanExtras(projectId, stored.plan);
+        setNotice("Geração iniciada — acompanhe as artes em Aguardando aprovação.");
+      } catch (err) {
+        setError(`Os posts do plano foram gerados, mas os extras de datas comemorativas falharam: ${(err as Error).message}`);
+      }
+      await load();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -135,6 +184,8 @@ export function Brain() {
   }
 
   const pending = state.proposals.filter((proposal) => proposal.status === "pending");
+  const stored = state.plan;
+  const planIsPast = Boolean(stored && stored.startDate < localDateKey(new Date()));
 
   return (
     <div>
@@ -148,7 +199,7 @@ export function Brain() {
 
       <div className={styles.layout}>
         <Card className={styles.chat}>
-          <div className={styles.messages}>
+          <div className={styles.messages} ref={messagesRef}>
             {state.chat.messages.length === 0 ? (
               <EmptyState
                 title="Converse com o cérebro deste cliente"
@@ -161,13 +212,14 @@ export function Brain() {
                 </div>
               ))
             )}
+            {thinking ? <div className={`${styles.message} ${styles.assistant} muted`}>Pensando…</div> : null}
             {pending.map((proposal) => (
               <div key={proposal.id} className={styles.proposal}>
                 <b>{proposal.summary || "Proposta"}</b>
                 <ul>
                   {proposal.changes.map((change, index) => (
                     <li key={index}>
-                      {changeText(change, offerName)}
+                      {changeText(change)}
                       {change.kind === "notebook" ? <pre className={styles.notebookAfter}>{String(change.after)}</pre> : null}
                     </li>
                   ))}
@@ -183,11 +235,7 @@ export function Brain() {
               </div>
             ))}
           </div>
-          <label htmlFor="brain-message" className="sr-only">
-            Mensagem para o cérebro
-          </label>
           <textarea
-            id="brain-message"
             aria-label="Mensagem para o cérebro"
             rows={3}
             value={draft}
@@ -210,9 +258,9 @@ export function Brain() {
         <div className={styles.side}>
           <Card>
             <h3 style={{ marginTop: 0 }}>Plano</h3>
-            {state.plan ? (
+            {stored ? (
               <>
-                {state.plan.plan.dayPlans.map((day) => (
+                {stored.plan.dayPlans.map((day) => (
                   <div key={day.date} className={styles.day}>
                     <b>{dayLabel(day.date)}</b>
                     {day.regular.map((slot) => (
@@ -225,12 +273,17 @@ export function Brain() {
                     ))}
                     {day.extras.map((extra) => (
                       <div key={extra.id} className={styles.slot}>
-                        <span className="muted">extra</span> <span>{extra.label}</span>
+                        <span className="muted">extra · {extra.channelLabel}</span> <span>{extra.label}</span>
                       </div>
                     ))}
                   </div>
                 ))}
-                <Button type="button" disabled={busy} onClick={() => void handleApprove()}>
+                {stored.approvedAt ? (
+                  <p className="muted">Aprovado em {dayMonth(stored.approvedAt.slice(0, 10))}. Para outra semana, peça um plano novo ao cérebro.</p>
+                ) : planIsPast ? (
+                  <p className="muted">Este plano começa em {dayMonth(stored.startDate)}, que já passou. Peça ao cérebro para refazer a partir de hoje.</p>
+                ) : null}
+                <Button type="button" disabled={busy || Boolean(stored.approvedAt) || planIsPast} onClick={() => void handleApprove()}>
                   Aprovar e gerar
                 </Button>
               </>
@@ -240,19 +293,11 @@ export function Brain() {
           </Card>
 
           <Card>
-            <label htmlFor="brain-notebook">
-              <h3 style={{ margin: 0 }}>Caderno do cliente</h3>
-            </label>
+            <h3 style={{ margin: 0 }}>Caderno do cliente</h3>
             <p className="muted" style={{ fontSize: 12 }}>
               O que vale sempre para este cliente. O cérebro lê toda conversa e propõe mudanças aqui.
             </p>
-            <textarea
-              id="brain-notebook"
-              aria-label="Caderno do cliente"
-              rows={8}
-              value={notebook}
-              onChange={(event) => setNotebook(event.target.value)}
-            />
+            <textarea aria-label="Caderno do cliente" rows={8} value={notebook} onChange={(event) => setNotebook(event.target.value)} />
             <div className="button-row" style={{ marginTop: 8 }}>
               <Button type="button" variant="secondary" disabled={busy || notebook === state.notebook} onClick={() => void handleSaveNotebook()}>
                 Salvar caderno

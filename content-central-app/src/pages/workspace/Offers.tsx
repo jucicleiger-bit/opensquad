@@ -352,6 +352,10 @@ export function Offers() {
       setError(isCatalog ? "Nome do produto é obrigatório." : "Nome da oferta/assunto é obrigatório.");
       return;
     }
+    if (form.validFrom && form.validUntil && form.validFrom > form.validUntil) {
+      setError('"Vale de" precisa ser antes de "Vale até" — do jeito que está, nunca entraria na rotação.');
+      return;
+    }
     const photoFiles = Array.from(photoInputRef.current?.files || []);
     const hasFlavorPhoto = form.flavors.some((flavor) => flavor.file || flavor.photoReferenceId);
     if (isCatalog && !photoFiles.length && !form.photoReferenceIds.length && !hasFlavorPhoto) {

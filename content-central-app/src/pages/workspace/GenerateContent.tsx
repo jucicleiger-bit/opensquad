@@ -4,6 +4,7 @@ import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import {
   generateCatalogContent,
   generateContent,
+  generatePlanExtras,
   generateSpecialDateContent,
   listCommemorativeDates,
   previewContentPlan,
@@ -340,30 +341,9 @@ function GenerateMarketingContent() {
     };
   }
 
-  async function createCommemorativeExtrasFromPlan(plan: PlannedContentSchedule) {
-    const byDateAndLabel = new Map<string, { date: string; label: string; channels: Set<string>; postTime?: string }>();
-    for (const day of plan.dayPlans) {
-      for (const extra of day.extras || []) {
-        const label = (extra.label || "").replace(/^Extra —\s*/, "") || extra.specialDateLabel || "Data comemorativa";
-        const key = `${extra.date}__${label}`;
-        const entry = byDateAndLabel.get(key) || { date: extra.date, label, channels: new Set<string>(), postTime: extra.scheduledTime };
-        entry.channels.add(extra.channel);
-        byDateAndLabel.set(key, entry);
-      }
-    }
-    for (const extra of byDateAndLabel.values()) {
-      await generateSpecialDateContent(project.projectId, {
-        date: extra.date,
-        label: extra.label,
-        channels: Array.from(extra.channels),
-        postTime: extra.postTime,
-      });
-    }
-  }
-
   async function generateFromPayload(payload: GenerateContentInput, plan?: PlannedContentSchedule | null) {
     await generateContent(project.projectId, payload);
-    if (plan?.extraCount) await createCommemorativeExtrasFromPlan(plan);
+    if (plan?.extraCount) await generatePlanExtras(project.projectId, plan);
     navigate(`/projects/${project.projectId}/calendario`);
   }
 

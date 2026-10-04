@@ -9,11 +9,11 @@ afterEach(() => {
 });
 
 const state = {
-  projects: [{ projectId: "loja", name: "Loja", contentStrategy: { offers: [] } }],
+  projects: [{ projectId: "loja", name: "Loja", contentStrategy: { offers: [{ id: "arroz", name: "Arroz", type: "offer" }] } }],
   globalRules: {},
 };
 
-const STORY = { channel: "instagram_story", label: "Story", postsPerDay: 1, everyDays: 1, startTime: "09:00", intervalMinutes: 0 };
+const STORY = { channel: "instagram_story", label: "Instagram Stories", postsPerDay: 1, everyDays: 1, startTime: "09:00", intervalMinutes: 0 };
 
 function brain(overrides: Record<string, unknown> = {}) {
   return {
@@ -25,33 +25,48 @@ function brain(overrides: Record<string, unknown> = {}) {
   };
 }
 
-const PLAN = {
-  startDate: "2026-10-05",
-  days: 1,
-  formats: [STORY],
-  updatedAt: "2026-10-03T12:00:00Z",
-  plan: {
-    projectId: "loja",
-    startDate: "2026-10-05",
+// Far in the future, so the "start date already passed" guard never trips
+// whatever day the suite runs.
+function plan(overrides: Record<string, unknown> = {}, extras: unknown[] = []) {
+  return {
+    startDate: "2999-10-05",
     days: 1,
-    dayPlans: [
-      {
-        dayNumber: 1,
-        date: "2026-10-05",
-        regular: [{ id: "2026-10-05-instagram_story-01", date: "2026-10-05", scheduledTime: "09:00", channel: "instagram_story", channelLabel: "Story", label: "Venda — Arroz", offerIds: ["arroz"] }],
-        extras: [],
-      },
-    ],
-  },
-};
+    formats: [STORY],
+    approvedAt: null,
+    updatedAt: "2026-10-03T12:00:00Z",
+    plan: {
+      projectId: "loja",
+      startDate: "2999-10-05",
+      days: 1,
+      extraCount: extras.length,
+      dayPlans: [
+        {
+          dayNumber: 1,
+          date: "2999-10-05",
+          regular: [{ id: "2999-10-05-instagram_story-01", date: "2999-10-05", scheduledTime: "09:00", channel: "instagram_story", channelLabel: "Instagram Stories", label: "Venda — Arroz", offerIds: ["arroz"] }],
+          extras,
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
 
-// Routes each request by URL so the order the page fires them doesn't matter.
-function stubApi(handlers: Record<string, (init?: RequestInit) => unknown>) {
+type Handler = (init?: RequestInit) => unknown;
+
+// Routes each request by URL so the order the page fires them doesn't
+// matter. A handler returning { __error } answers as a failed request; one
+// returning a Promise keeps the request pending.
+function stubApi(handlers: Record<string, Handler>) {
   const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
     const key = Object.keys(handlers).find((pattern) => url.includes(pattern));
     const body = key ? handlers[key](init) : state;
     if (body instanceof Promise) return body;
-    return Promise.resolve({ ok: true, text: async () => JSON.stringify(body) });
+    const failed = Boolean(body && typeof body === "object" && "__error" in body);
+    return Promise.resolve({
+      ok: !failed,
+      text: async () => JSON.stringify(failed ? { error: (body as { __error: string }).__error } : body),
+    });
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
@@ -94,46 +109,7 @@ describe("Brain", () => {
     expect(JSON.parse(init.body as string)).toEqual({ text: "monta a semana" });
   });
 
-  it("shows a pending proposal as before → after and applies it", async () => {
-    const proposal = {
-      id: "p1",
-      summary: "Separar por setor",
-      status: "pending",
-      createdAt: "x",
-      changes: [{ kind: "offer", offerId: "arroz", field: "sector", before: "", after: "Mercearia" }],
-    };
-    const fetchMock = stubApi({
-      "/proposals/p1/apply": () => ({ proposal: { ...proposal, status: "applied" } }),
-      "/brain": () => brain({ proposals: [proposal] }),
-    });
-    renderBrain();
-
-    expect(await screen.findByText("Separar por setor")).toBeInTheDocument();
-    expect(screen.getByText(/setor: \(vazio\) → Mercearia/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Aplicar" }));
-
-    await waitFor(() => expect(callsTo(fetchMock, "/proposals/p1/apply")).toHaveLength(1));
-  });
-
-  it("approves the plan by sending it to the existing generation", async () => {
-    const fetchMock = stubApi({
-      "/generate": () => ({ batch: { items: [] } }),
-      "/brain": () => brain({ plan: PLAN }),
-    });
-    renderBrain();
-
-    expect(await screen.findByText("Venda — Arroz")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Aprovar e gerar" }));
-
-    await waitFor(() => expect(callsTo(fetchMock, "/generate")).toHaveLength(1));
-    const [, init] = callsTo(fetchMock, "/generate")[0];
-    const body = JSON.parse(init.body as string);
-    expect(body).toMatchObject({ days: "1", startDate: "2026-10-05", formats: [STORY] });
-    expect(body.approvedPlan.dayPlans[0].regular[0].offerIds).toEqual(["arroz"]);
-    expect(await screen.findByText(/Geração iniciada/)).toBeInTheDocument();
-  });
-
-  it("disables sending while the cérebro is thinking", async () => {
+  it("shows the message right away and disables sending while the cérebro is thinking", async () => {
     stubApi({
       "/brain/messages": () => new Promise(() => {}),
       "/brain": () => brain(),
@@ -145,5 +121,100 @@ describe("Brain", () => {
     await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
 
     expect(await screen.findByRole("button", { name: "Pensando…" })).toBeDisabled();
+    expect(screen.getByText("oi")).toBeInTheDocument();
+    expect(screen.getByLabelText("Mensagem para o cérebro")).toHaveValue("");
+  });
+
+  it("shows why a message was not taken and gives the text back", async () => {
+    stubApi({
+      "/brain/messages": () => ({ __error: "O cérebro ainda está respondendo." }),
+      "/brain": () => brain(),
+    });
+    renderBrain();
+
+    await screen.findByText("Montei a semana.");
+    await userEvent.type(screen.getByLabelText("Mensagem para o cérebro"), "de novo");
+    await userEvent.click(screen.getByRole("button", { name: "Enviar" }));
+
+    expect(await screen.findByText("O cérebro ainda está respondendo.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Mensagem para o cérebro")).toHaveValue("de novo");
+  });
+
+  it("shows a pending proposal as before → after and applies it", async () => {
+    const proposal = {
+      id: "p1",
+      summary: "Separar por setor",
+      status: "pending",
+      createdAt: "x",
+      changes: [
+        { kind: "offer", offerId: "arroz", field: "sector", before: "", after: "Mercearia" },
+        { kind: "goalWeights", before: { sales: 85, authority: 15 }, after: { sales: 70, authority: 30 } },
+      ],
+    };
+    const fetchMock = stubApi({
+      "/proposals/p1/apply": () => ({ proposal: { ...proposal, status: "applied", results: [{ index: 0, ok: true }] } }),
+      "/brain": () => brain({ proposals: [proposal] }),
+    });
+    renderBrain();
+
+    expect(await screen.findByText("Separar por setor")).toBeInTheDocument();
+    expect(screen.getByText("Arroz — setor: (vazio) → Mercearia")).toBeInTheDocument();
+    expect(screen.getByText(/Venda \(ofertas\) 85%, Gerar autoridade 15% → Venda \(ofertas\) 70%, Gerar autoridade 30%/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Aplicar" }));
+
+    await waitFor(() => expect(callsTo(fetchMock, "/proposals/p1/apply")).toHaveLength(1));
+  });
+
+  it("approves the plan by sending it to the existing generation and marks it approved", async () => {
+    let approved = false;
+    const fetchMock = stubApi({
+      "/brain/plan/approved": () => {
+        approved = true;
+        return plan({ approvedAt: "2026-10-04T10:00:00Z" });
+      },
+      "/generate": () => ({ batch: { items: [] } }),
+      "/brain": () => brain({ plan: approved ? plan({ approvedAt: "2026-10-04T10:00:00Z" }) : plan() }),
+    });
+    renderBrain();
+
+    expect(await screen.findByText("Venda — Arroz")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Aprovar e gerar" }));
+
+    expect(await screen.findByText(/Geração iniciada/)).toBeInTheDocument();
+    const [, init] = callsTo(fetchMock, "/generate")[0];
+    const body = JSON.parse(init.body as string);
+    expect(body).toMatchObject({ days: "1", startDate: "2999-10-05", formats: [STORY] });
+    expect(body.approvedPlan.dayPlans[0].regular[0].offerIds).toEqual(["arroz"]);
+    expect(callsTo(fetchMock, "/brain/plan/approved")).toHaveLength(1);
+    expect(await screen.findByText(/Aprovado em 04\/10/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aprovar e gerar" })).toBeDisabled();
+  });
+
+  it("also generates the commemorative-date extras the plan shows", async () => {
+    const extra = { id: "x1", date: "2999-10-05", scheduledTime: "09:00", channel: "instagram_story", channelLabel: "Instagram Stories", label: "Extra — Dia das Crianças", specialDateLabel: "Dia das Crianças" };
+    const fetchMock = stubApi({
+      "/generate-special-date": () => ({ batch: { items: [] } }),
+      "/brain/plan/approved": () => plan({ approvedAt: "2026-10-04T10:00:00Z" }),
+      "/generate": () => ({ batch: { items: [] } }),
+      "/brain": () => brain({ plan: plan({}, [extra]) }),
+    });
+    renderBrain();
+
+    await screen.findByText("Extra — Dia das Crianças");
+    await userEvent.click(screen.getByRole("button", { name: "Aprovar e gerar" }));
+
+    await waitFor(() => expect(callsTo(fetchMock, "/generate-special-date")).toHaveLength(1));
+    const [, init] = callsTo(fetchMock, "/generate-special-date")[0];
+    expect(JSON.parse(init.body as string)).toMatchObject({ date: "2999-10-05", label: "Dia das Crianças", channels: ["instagram_story"] });
+  });
+
+  it("won't approve a plan whose first day already passed", async () => {
+    const past = plan({ startDate: "2000-01-03" });
+    const fetchMock = stubApi({ "/brain": () => brain({ plan: past }) });
+    renderBrain();
+
+    expect(await screen.findByText(/que já passou/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aprovar e gerar" })).toBeDisabled();
+    expect(callsTo(fetchMock, "/generate")).toHaveLength(0);
   });
 });

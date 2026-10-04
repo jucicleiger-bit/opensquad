@@ -249,6 +249,21 @@ describe("Offers", () => {
     expect(await screen.findByText("Vence 20/10")).toBeInTheDocument();
   });
 
+  it("refuses a validity that ends before it starts", async () => {
+    stubFetchSequence([{ body: projectState() }]);
+    renderOffers();
+
+    await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
+    await userEvent.click(screen.getByRole("button", { name: "+ Nova oferta/assunto" }));
+    await userEvent.type(screen.getByLabelText("Nome"), "Sorteio");
+    await userEvent.type(screen.getByLabelText("Vale de"), "2999-10-20");
+    await userEvent.type(screen.getByLabelText("Vale até"), "2999-10-05");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    expect(await screen.findByText(/precisa ser antes de "Vale até"/)).toBeInTheDocument();
+    expect((fetch as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1);
+  });
+
   it("deletes an offer through the real endpoint after confirmation", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     stubFetchSequence([{ body: projectState([RODIZIO_OFFER]) }, { body: { deleted: true } }, { body: projectState() }]);
