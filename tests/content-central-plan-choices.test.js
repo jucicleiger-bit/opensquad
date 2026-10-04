@@ -4,7 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
-  applyPlanSlotChoices, createCentralProject, listProjectGoalTopics, loadProjectForTest, previewContentSchedulePlan,
+  applyPlanSlotChoices, createCentralProject, generateContentSchedulePlan, listProjectContent, listProjectGoalTopics, loadProjectForTest,
+  previewContentSchedulePlan,
   saveProjectOffer, updateProjectBrandInput,
 } from '../src/content-central.js';
 
@@ -24,6 +25,8 @@ const STORY_AND_REELS = [
   { channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 },
   { channel: 'instagram_reels', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 },
 ];
+
+const NOW = new Date(2026, 9, 3, 9);
 
 async function goalProject(dir, projectId) {
   await createCentralProject({ projectId, name: 'Loja' }, dir);
@@ -88,5 +91,53 @@ test('a time choice moves every channel that shares the art', async () => {
       { id: '2026-10-05-instagram_story-01', time: '15:30' },
       { id: '2026-10-05-instagram_reels-01', time: '16:00' },
     ], dir), /mesmo horário/);
+  });
+});
+
+test('generation uses the time and the bank topic the approved plan chose', async () => {
+  await withTempProject(async (dir) => {
+    await goalProject(dir, 'gera');
+    const preview = await previewContentSchedulePlan('gera', { days: 1, startDate: '2026-10-05', formats: TWO_STORIES }, dir);
+    const goal = preview.dayPlans[0].regular[1];
+    const other = listProjectGoalTopics(await loadProjectForTest('gera', dir)).find((topic) => topic.ideaId !== goal.topic.ideaId);
+    const plan = await applyPlanSlotChoices('gera', preview, [{ id: goal.id, topicId: other.ideaId, time: '15:30' }], dir);
+
+    const batch = await generateContentSchedulePlan('gera', { days: 1, startDate: '2026-10-05', formats: TWO_STORIES, approvedPlan: plan, now: NOW }, dir);
+
+    const goalItem = batch.items.find((item) => item.contentId.endsWith('-02'));
+    assert.equal(goalItem.scheduledTime, '15:30');
+    assert.equal(goalItem.contentTopic.ideaId, other.ideaId);
+    const salesItem = batch.items.find((item) => item.contentId.endsWith('-01'));
+    assert.equal(salesItem.scheduledTime, '09:00');
+    assert.equal(salesItem.contentTopic.offerName, 'Arroz');
+  });
+});
+
+test('generation skips the slots the plan dropped and the others keep their offers', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'pula', name: 'Pula' }, dir);
+    for (const name of ['A', 'B', 'C']) await saveProjectOffer('pula', { name, type: 'offer' }, dir);
+    const ONE_STORY = [{ channel: 'instagram_story', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }];
+    const preview = await previewContentSchedulePlan('pula', { days: 3, startDate: '2026-10-05', formats: ONE_STORY }, dir);
+    const approvedPlan = { ...preview, skippedSlotIds: ['2026-10-06-instagram_story-01'] };
+
+    const batch = await generateContentSchedulePlan('pula', { days: 3, startDate: '2026-10-05', formats: ONE_STORY, approvedPlan, now: NOW }, dir);
+
+    assert.deepEqual(batch.items.map((item) => [item.scheduledDate, item.contentTopic.offerName]), [
+      ['2026-10-05', preview.dayPlans[0].regular[0].offerName],
+      ['2026-10-07', preview.dayPlans[2].regular[0].offerName],
+    ]);
+  });
+});
+
+test('a bank topic that no longer exists fails before anything is written', async () => {
+  await withTempProject(async (dir) => {
+    await goalProject(dir, 'sumiu');
+    const approvedPlan = { dayPlans: [{ date: '2026-10-05', regular: [{ id: '2026-10-05-instagram_story-02', topicId: 'authority-nao-existe', goalKey: 'authority' }] }] };
+    await assert.rejects(
+      generateContentSchedulePlan('sumiu', { days: 1, startDate: '2026-10-05', formats: TWO_STORIES, approvedPlan, now: NOW }, dir),
+      /authority-nao-existe/,
+    );
+    assert.deepEqual(await listProjectContent('sumiu', dir), []);
   });
 });

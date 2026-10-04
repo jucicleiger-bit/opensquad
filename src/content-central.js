@@ -3554,8 +3554,11 @@ function buildApprovedPlanOverrideMap(approvedPlan) {
       const offerIds = Array.isArray(slot?.offerIds)
         ? slot.offerIds.map((value) => cleanApprovedPlanText(value, 120)).filter(Boolean).slice(0, 2)
         : [];
-      if (!id || (!label && !reason && !offerIds.length)) continue;
-      map.set(id, { id, label, reason, offerIds });
+      const time = isClockTime(slot?.scheduledTime) ? slot.scheduledTime : '';
+      const topicId = cleanApprovedPlanText(slot?.topicId, 160);
+      const goalKey = cleanApprovedPlanText(slot?.goalKey, 60);
+      if (!id || (!label && !reason && !offerIds.length && !time && !topicId)) continue;
+      map.set(id, { id, label, reason, offerIds, time, topicId, goalKey });
     }
   }
   return map;
@@ -3636,6 +3639,12 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
   const pinsBySlot = resolveGroupPins(scheduleSlotsFor(startDate, days, formats), (id) => approvedPlanOverrides.get(id)?.offerIds);
   for (const [slotId, offerIds] of pinsBySlot) pinnedOffersFor(project, slotId, offerIds, slotId.slice(0, 10));
   await refreshProjectTopicIdeasInPlace(project, paths, { topicIdeaGenerator: options.topicIdeaGenerator }, new Date());
+  // A bank topic the cérebro chose must still exist (the bank refreshes every
+  // 15 days) — checked here, after the refresh and before anything is written.
+  for (const override of approvedPlanOverrides.values()) {
+    if (override.topicId) goalTopicForIdea(project, override.goalKey, override.topicId);
+  }
+  const skippedSlotIds = new Set(Array.isArray(options.approvedPlan?.skippedSlotIds) ? options.approvedPlan.skippedSlotIds.map(String) : []);
   const picker = await createScheduleTopicPicker(project, options, targetDir, existingItems);
   // Same date+days used to reuse the folder and overwrite the earlier plan's
   // files; a stacked plan gets its own.
@@ -3670,17 +3679,21 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
       if (dayIndex % format.everyDays !== 0) continue;
       for (let slotIndex = 0; slotIndex < format.postsPerDay; slotIndex += 1) {
         const slotNumber = slotIndex + 1;
-        const scheduledTime = addMinutesToTime(format.startTime, slotIndex * format.intervalMinutes);
+        const rotationTime = addMinutesToTime(format.startTime, slotIndex * format.intervalMinutes);
+        const planSlotId = `${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
+        const approvedPlanOverride = approvedPlanOverrides.get(planSlotId);
+        // The approved plan's time wins (the cérebro may move a slot); the
+        // rotation keeps asking with the format's time, as the preview did.
+        const scheduledTime = approvedPlanOverride?.time || rotationTime;
         const dimensions = imageDimensionsForChannel(format.channel);
         const aspectRatio = imageAspectRatioForChannel(format.channel);
         const shapeGroup = creativeShapeGroupForChannel(format.channel);
         const creativeGroupKey = shapeGroup ? `${batchId}::${scheduledDate}::${shapeGroup}::slot${slotIndex}` : null;
-        const planSlotId = `${scheduledDate}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
-        const approvedPlanOverride = approvedPlanOverrides.get(planSlotId);
-        const baseContentTopic = applyApprovedPlanOverrideToTopic(
-          { ...(await picker.next(format.channel, creativeGroupKey, weekday, `${scheduledDate} ${scheduledTime}`)), channel: format.channel },
-          approvedPlanOverride
-        );
+        const rotationTopic = await picker.next(format.channel, creativeGroupKey, weekday, `${scheduledDate} ${rotationTime}`);
+        // A closed day's slot (fitPlanToBusinessHours in content-central-brain.js)
+        // still takes its rotation turn, so the slots after it keep the preview's picks.
+        if (skippedSlotIds.has(planSlotId)) continue;
+        const baseContentTopic = applyApprovedPlanOverrideToTopic({ ...rotationTopic, channel: format.channel }, approvedPlanOverride);
         const contentId = nextFreeContentId(`${project.projectId}-${scheduledDate}-${format.channel}`, slotNumber, takenContentIds);
         // A pinned slot (the operator's or the cérebro's choice of offer)
         // replaces the rotation's pick. The picker still ran above so the
@@ -3691,7 +3704,12 @@ export async function generateContentSchedulePlan(projectId, options = {}, targe
             { ...(await topicForPinnedOffers(project, planSlotId, pinnedOfferIds, scheduledDate, targetDir)), channel: format.channel },
             { ...approvedPlanOverride, label: '' },
           )
-          : baseContentTopic;
+          : approvedPlanOverride?.topicId
+            ? applyApprovedPlanOverrideToTopic(
+              { ...goalTopicForIdea(project, approvedPlanOverride.goalKey, approvedPlanOverride.topicId), channel: format.channel },
+              { ...approvedPlanOverride, label: '' },
+            )
+            : baseContentTopic;
         const contentTopic = withProductRotationSeed(slotTopic, contentId);
         const fileName = `day-${String(dayNumber).padStart(2, '0')}-${format.channel}-${String(slotNumber).padStart(2, '0')}`;
         const filePath = join(batchDir, `${fileName}.json`);
