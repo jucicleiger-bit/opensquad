@@ -53,10 +53,18 @@ Example (Mercado Carvalho):
   row per weekday with a "Fechado" toggle and up to two periods.
 - Saved through the existing project update route; validated on the server
   (HH:MM, `from < to`, periods not overlapping, at most 2 per day).
-- `saveBrainPlan` rejects a plan with any slot on a closed day or at a time
-  outside that day's periods, naming the slot, so the cérebro re-plans. When
+- `saveBrainPlan` drops the slots of closed days (a plan's formats repeat
+  every day, so a closed Wednesday can't be avoided by the formats alone) and
+  records their ids in `plan.skippedSlotIds`; generation runs the rotation for
+  them and then skips them, so the remaining slots keep what the preview
+  showed. A slot at a closed hour of an open day is refused, naming the slot,
+  so the cérebro moves it. Commemorative extras at a closed hour move to the
+  day's first opening time; extras of closed days are dropped. When
   `businessHours` is absent the check is skipped and the cérebro is told to
-  ask the operator for the hours.
+  ask the operator to configure it.
+- Not the social-selling `businessHours` (one window for the agency's own
+  outreach, `src/social-selling-safety.js`); separate shape, separate module
+  `src/content-central-business-hours.js`.
 - "Agenda e geração": when hours are configured, slots outside them get a
   warning line in the preview; nothing is blocked.
 
@@ -76,8 +84,9 @@ New context sections built in `buildBrainContext`:
 
 - **Raio-X da marca**: the approved `brandXray` blocks (summary text only),
   trimmed to a fixed size so the prompt stays bounded.
-- **Aprendizados aprovados**: `learnings.approved` and
-  `segmentLearnings.approved`/`avoid`, most recent first, capped.
+- **O que evitar**: `learnings.avoid` and `segmentLearnings.avoid`, capped
+  at 10. (`learnings.approved` is left out: today it only holds automatic
+  "X (canal, data): aprovado." lines, which say nothing to plan with.)
 - **Banco de assuntos**: every item of `topicIdeas.goals.*.items` with its
   id, title and complement, marked "já saiu em DD/MM" when content used it.
 - **Horário de funcionamento**: the configured periods per weekday, or "não
@@ -93,8 +102,14 @@ way the preview's own pick would, so generation is unchanged.
 A slot choice gains `time` ("HH:MM"). The new time is applied to every slot
 sharing that slot's art (same date, shape and slot index — the groups
 `resolveGroupPins` already builds), so Story/Reels/Status siblings move
-together. The time must fall inside opening hours (section 1). Generation
-already takes `scheduledTime` from the approved plan; a test confirms it.
+together. The time must fall inside opening hours (section 1).
+
+Generation today recomputes each slot's time from the format and re-runs the
+rotation for unpinned slots, so it must change too: when the approved plan
+carries a slot's `scheduledTime` or `topicId`, generation uses them (the
+rotation still runs for that slot first, so the other slots don't shift), and
+it skips `skippedSlotIds`. A `topicId` that no longer exists fails before
+anything is written, like a bad offer pin.
 
 ## 5. Performance by posting hour
 
@@ -131,8 +146,9 @@ already takes `scheduledTime` from the approved plan; a test confirms it.
 
 ## Testing
 
-- `businessHours` validation; `saveBrainPlan` rejects closed days and
-  out-of-hours slots, accepts in-hours ones, skips the check when absent.
+- `businessHours` validation; `saveBrainPlan` drops closed-day slots into
+  `skippedSlotIds`, refuses out-of-hours slots, moves extras, skips the check
+  when absent; generation skips `skippedSlotIds`.
 - Offer pin on a goal slot rejected; topic of the wrong goal rejected;
   right topic applied.
 - `time` moves every sibling sharing the art; generation uses it.
