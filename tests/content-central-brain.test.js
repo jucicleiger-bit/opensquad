@@ -282,6 +282,17 @@ test('a closed day keeps its holiday post', async () => {
   });
 });
 
+test('holiday posts go out only on the story channels', async () => {
+  await withProject(async (dir) => {
+    const formats = [STORY[0], { channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '18:00', intervalMinutes: 0 }];
+    // 2026-10-12 is Dia das Crianças.
+    const stored = await saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats }, dir);
+    const channels = new Set(stored.plan.dayPlans[0].extras.map((extra) => extra.channel));
+    assert.deepEqual([...channels], ['instagram_story']);
+    assert.equal(stored.plan.extraCount, stored.plan.dayPlans[0].extras.length);
+  });
+});
+
 test('the plan must follow the contracted plan; a weekly feed is the daily feed with the other days skipped', async () => {
   await withProject(async (dir) => {
     // Mon–Sat 07–20, Sunday closed: a Mon–Sat plan covers every open day, so exactly one feed.

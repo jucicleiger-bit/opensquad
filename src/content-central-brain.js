@@ -15,7 +15,7 @@ import {
 import {
   describeBusinessHours, firstOpenTime, isOpenAt, isOpenDay, normalizeBusinessHours, openHours,
 } from './content-central-business-hours.js';
-import { contractProblems, describeContractedPlan, normalizeContractedPlan } from './content-central-contract.js';
+import { contractProblems, describeContractedPlan, normalizeContractedPlan, STORY_CHANNELS } from './content-central-contract.js';
 import { goalName, slotTag } from './content-central-goals.js';
 import { buildPostingTimeStats, loadProjectMetrics } from './content-central-metrics.js';
 
@@ -98,7 +98,9 @@ export async function saveNotebook(projectId, text, targetDir) {
 function fitPlan(plan, hours) {
   const skippedSlotIds = [];
   const outside = [];
-  const dayPlans = plan.dayPlans.map((day) => {
+  const dayPlans = plan.dayPlans.map((planDay) => {
+    // The operator wants holiday / commemorative posts only on the stories.
+    const day = { ...planDay, extras: planDay.extras.filter((extra) => STORY_CHANNELS.includes(extra.channel)) };
     const closed = !isOpenDay(hours, day.date);
     const regular = day.regular.filter((slot) => {
       if (closed || slot.skip) { skippedSlotIds.push(slot.id); return false; }
