@@ -85,6 +85,26 @@ function callsTo(fetchMock: ReturnType<typeof vi.fn>, fragment: string) {
 }
 
 describe("Brain", () => {
+  it("shows one line per art, naming every channel it goes to", async () => {
+    const slot = (channel: string, scheduledTime: string, label: string) => ({ id: `2999-10-05-${channel}-${scheduledTime}`, date: "2999-10-05", scheduledTime, channel, channelLabel: channel, label });
+    const stored = plan();
+    stored.plan.dayPlans[0].regular = [
+      slot("instagram_story", "17:00", "Post de marca"),
+      slot("instagram_story", "13:00", "Venda — Café"),
+      slot("facebook_story", "13:00", "Venda — Café"),
+      slot("whatsapp_status", "13:00", "Venda — Café"),
+      slot("instagram_feed", "18:00", "Venda — Omo"),
+      slot("facebook_feed", "18:00", "Venda — Omo"),
+    ] as never;
+    stubApi({ "/brain": () => brain({ plan: stored }) });
+    renderBrain();
+
+    expect(await screen.findByText("13:00 · Story · Instagram, Facebook, WhatsApp")).toBeInTheDocument();
+    expect(screen.getByText("17:00 · Story · Instagram")).toBeInTheDocument();
+    expect(screen.getByText("18:00 · Feed · Instagram, Facebook")).toBeInTheDocument();
+    expect(screen.getAllByText("Venda — Café")).toHaveLength(1);
+  });
+
   it("shows the conversation and the notebook, and sends a message", async () => {
     let sent = false;
     const fetchMock = stubApi({

@@ -41,6 +41,24 @@ function show(value: unknown): string {
 
 const dayMonth = (date: string) => date.split("-").reverse().slice(0, 2).join("/");
 
+type PlanLine = { id: string; channel: string; scheduledTime: string; label: string };
+
+const formatOf = (channel: string) => (channel.includes("feed") ? "Feed" : channel.includes("reels") ? "Reels" : "Story");
+const networkOf = (channel: string) => (channel.startsWith("facebook") ? "Facebook" : channel.startsWith("whatsapp") ? "WhatsApp" : "Instagram");
+
+// Channels of one format at the same time with the same subject are one art
+// (Story on Instagram, Facebook and WhatsApp Status), so they read as one line.
+function groupPlanLines<T extends PlanLine>(slots: T[]) {
+  const groups = new Map<string, { first: T; networks: string[] }>();
+  for (const slot of [...slots].sort((a, b) => a.scheduledTime.localeCompare(b.scheduledTime))) {
+    const key = `${slot.scheduledTime}|${formatOf(slot.channel)}|${slot.label}`;
+    const group = groups.get(key) || { first: slot, networks: [] };
+    group.networks.push(networkOf(slot.channel));
+    groups.set(key, group);
+  }
+  return [...groups.values()].map(({ first, networks }) => ({ ...first, where: `${formatOf(first.channel)} · ${networks.join(", ")}` }));
+}
+
 const dayLabel = (date: string) => {
   const [year, month, day] = date.split("-").map(Number);
   return new Date(year, month - 1, day).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "2-digit" });
@@ -263,17 +281,17 @@ export function Brain() {
                 {stored.plan.dayPlans.filter((day) => day.regular.length).map((day) => (
                   <div key={day.date} className={styles.day}>
                     <b>{dayLabel(day.date)}</b>
-                    {day.regular.map((slot) => (
+                    {groupPlanLines(day.regular).map((slot) => (
                       <div key={slot.id} className={styles.slot}>
                         <span className="muted">
-                          {slot.scheduledTime} · {slot.channelLabel}
+                          {slot.scheduledTime} · {slot.where}
                         </span>{" "}
                         <span>{slot.label}</span>
                       </div>
                     ))}
-                    {day.extras.map((extra) => (
+                    {groupPlanLines(day.extras).map((extra) => (
                       <div key={extra.id} className={styles.slot}>
-                        <span className="muted">extra · {extra.channelLabel}</span> <span>{extra.label}</span>
+                        <span className="muted">extra · {extra.where}</span> <span>{extra.label}</span>
                       </div>
                     ))}
                   </div>
