@@ -91,13 +91,15 @@ rotation, flyer, manual, cerebro) ignores them with no change.
   searches each product **sequentially** (avoid being blocked), saves all
   drafts under the project lock, returns the project. A search failure on one
   line does not fail the batch.
-- `DELETE /api/projects/:projectId/offer-drafts/:draftId` — removes one draft.
+- `POST /api/projects/:projectId/offer-drafts-delete` `{ draftId }` — removes one
+  draft (same `-delete` route style as offers and groups; idempotent).
 - The existing asset upload (`saveAsset`) accepts `sourceUrl` as an
   alternative to `dataUrl`: the server downloads it (http/https only, 20s
   timeout, must answer `image/*`, max 10 MB), turns it into a data URL and
   continues through the existing path, so `normalizeUploadedImageAsset`
-  still converts webp/avif to PNG. If the full-size image fails, the client
-  retries with the candidate's `thumbUrl`.
+  still converts webp/avif to PNG. The client also sends the candidate's
+  `thumbUrl` as `fallbackSourceUrl`; the server tries it when the full-size
+  image fails.
 
 ### Client (`content-central-app/src/pages/workspace/Offers.tsx`, `api/client.ts`)
 
