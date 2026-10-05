@@ -4289,7 +4289,8 @@ export function extractBingImageResults(html, limit = 4) {
 }
 
 async function searchProductImages(query) {
-  const url = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&setmkt=pt-BR&cc=BR`;
+  // form=HDRSC2&first=1 is what Bing's own image page sends; without it Bing answers a light page that only matches the first word of the query.
+  const url = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&form=HDRSC2&first=1&setmkt=pt-BR&cc=BR`;
   const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(8000), headers: SITE_FETCH_HEADERS });
   if (!response.ok) throw new Error(`Bing Imagens respondeu com status ${response.status}.`);
   return extractBingImageResults(await response.text());
