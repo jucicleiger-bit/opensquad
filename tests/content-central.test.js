@@ -86,6 +86,9 @@ import {
   runDuePublishSweep,
   retryStuckMediaUploads,
   deleteProjectOffer,
+  deleteProjectOfferDraft,
+  parseOfferDraftLines,
+  saveProjectOfferDrafts,
   deleteProjectOfferGroup,
   deleteProjectPillar,
   saveProjectOffer,
@@ -11439,4 +11442,64 @@ test('last month\'s report is announced from day 3 on, emailed once, and can be 
     await dismissSystemAlert(alert.key, dir);
     assert.deepEqual(await listSystemAlerts(dir, { now: new Date(2026, 9, 12, 9) }), []);
   });
+});
+
+test('parseOfferDraftLines splits name and trailing price, one product per line', () => {
+  assert.deepEqual(parseOfferDraftLines([
+    'Coca-Cola 2L - 9,99',
+    '',
+    'Arroz Tio João 5kg R$ 27.90',
+    'Leite Ninho 400g 19,90',
+    'TV 50 polegadas - R$ 2.499,00',
+    'Sabão em pó Omo 1,6kg',
+    '  Detergente Ypê  ',
+  ].join('\n')), [
+    { name: 'Coca-Cola 2L', price: 'R$ 9,99' },
+    { name: 'Arroz Tio João 5kg', price: 'R$ 27,90' },
+    { name: 'Leite Ninho 400g', price: 'R$ 19,90' },
+    { name: 'TV 50 polegadas', price: 'R$ 2.499,00' },
+    { name: 'Sabão em pó Omo 1,6kg', price: '' },
+    { name: 'Detergente Ypê', price: '' },
+  ]);
+});
+
+test('parseOfferDraftLines refuses more than 40 products at once', () => {
+  const text = Array.from({ length: 41 }, (_, i) => `Produto ${i + 1}`).join('\n');
+  assert.throws(() => parseOfferDraftLines(text), /No máximo 40 produtos por vez/);
+  assert.equal(parseOfferDraftLines(text.split('\n').slice(0, 40).join('\n')).length, 40);
+});
+
+test('offer drafts are stored apart from offers and can be removed', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-offer-drafts-'));
+  try {
+    await createCentralProject({ projectId: 'mercado-teste', name: 'Mercado Teste' }, dir);
+    const { drafts } = await saveProjectOfferDrafts('mercado-teste', [
+      { name: 'Coca-Cola 2L', price: 'R$ 9,99', candidates: [
+        { imageUrl: 'https://img.test/1.jpg', thumbUrl: 'https://img.test/1t.jpg' },
+        { imageUrl: 'https://img.test/2.jpg', thumbUrl: 'https://img.test/2t.jpg' },
+        { imageUrl: 'https://img.test/3.jpg', thumbUrl: 'https://img.test/3t.jpg' },
+        { imageUrl: 'https://img.test/4.jpg', thumbUrl: 'https://img.test/4t.jpg' },
+        { imageUrl: 'https://img.test/5.jpg', thumbUrl: 'https://img.test/5t.jpg' },
+      ] },
+      { name: 'Arroz 5kg', price: '', candidates: [] },
+    ], dir, new Date('2026-10-04T12:00:00.000Z'));
+
+    assert.equal(drafts.length, 2);
+    assert.equal(drafts[0].candidates.length, 4);
+    assert.ok(drafts[0].id && drafts[0].id !== drafts[1].id);
+    assert.equal(drafts[0].createdAt, '2026-10-04T12:00:00.000Z');
+
+    const stored = await loadProjectForTest('mercado-teste', dir);
+    assert.equal(stored.contentStrategy.offers.length, 0);
+    assert.deepEqual(stored.contentStrategy.offerDrafts.map((draft) => draft.name), ['Coca-Cola 2L', 'Arroz 5kg']);
+
+    const removed = await deleteProjectOfferDraft('mercado-teste', drafts[0].id, dir);
+    assert.equal(removed.deleted, true);
+    assert.deepEqual(removed.project.contentStrategy.offerDrafts.map((draft) => draft.name), ['Arroz 5kg']);
+
+    const again = await deleteProjectOfferDraft('mercado-teste', drafts[0].id, dir);
+    assert.equal(again.deleted, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

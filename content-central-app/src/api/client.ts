@@ -169,6 +169,19 @@ export interface OfferGroup {
   updatedAt?: string;
 }
 
+export interface OfferDraftCandidate {
+  imageUrl: string;
+  thumbUrl: string;
+}
+
+export interface OfferDraft {
+  id: string;
+  name: string;
+  price: string;
+  candidates: OfferDraftCandidate[];
+  createdAt: string;
+}
+
 export interface ProjectPillar {
   id: string;
   name: string;
@@ -357,7 +370,7 @@ export interface ProjectSummary {
     catalogStoriesPerDay?: number;
     [key: string]: unknown;
   };
-  contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; topicIdeas?: TopicIdeasBank; [key: string]: unknown };
+  contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; offerDrafts?: OfferDraft[]; topicIdeas?: TopicIdeasBank; [key: string]: unknown };
   offerUsage?: OfferUsage;
   rules?: unknown;
   createdAt?: string;
@@ -1316,6 +1329,20 @@ export function deleteOfferGroup(projectId: string, groupId: string): Promise<{ 
   });
 }
 
+export function createOfferDrafts(projectId: string, text: string): Promise<{ project: ProjectSummary; drafts: OfferDraft[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-drafts`, {
+    method: "POST",
+    body: JSON.stringify({ text }),
+  });
+}
+
+export function deleteOfferDraft(projectId: string, draftId: string): Promise<{ deleted: boolean; project: ProjectSummary }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/offer-drafts-delete`, {
+    method: "POST",
+    body: JSON.stringify({ draftId }),
+  });
+}
+
 export interface SavePillarInput {
   id?: string;
   name: string;
@@ -1369,7 +1396,11 @@ export function suggestPillars(projectId: string, input: { extraContext?: string
 export interface SaveAssetInput {
   kind: "logo" | "reference";
   filename: string;
-  dataUrl: string;
+  dataUrl?: string;
+  // A photo picked from a draft's online candidates — the server downloads
+  // it (falling back to the thumbnail) instead of the browser sending bytes.
+  sourceUrl?: string;
+  fallbackSourceUrl?: string;
   role?: string;
   usageRoles?: string[];
   referenceCategory?: string;

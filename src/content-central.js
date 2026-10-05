@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
@@ -1408,6 +1409,69 @@ export async function deleteProjectOffer(projectId, offerId, targetDir = process
   await writeJson(paths.projectPath, project);
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
   return { deleted: true, offerId: id, project };
+  });
+}
+
+// "Adiantar fotos (lista)": the operator pastes one product per line and each
+// line becomes a draft with photo candidates found online. Drafts live apart
+// from `offers`, so generation, rotation and the flyer never see them until
+// the operator reviews one in the normal form and saves it as a product.
+const MAX_OFFER_DRAFT_LINES = 40;
+const MAX_OFFER_DRAFT_CANDIDATES = 4;
+const OFFER_DRAFT_PRICE_PATTERN = /(?:\s+-\s+|\s+)(?:R\$\s*)?(\d{1,3}(?:\.\d{3})+,\d{2}|\d+[.,]\d{2})\s*$/i;
+
+export function parseOfferDraftLines(text) {
+  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length > MAX_OFFER_DRAFT_LINES) {
+    throw new Error(`No máximo ${MAX_OFFER_DRAFT_LINES} produtos por vez — essa lista tem ${lines.length}.`);
+  }
+  return lines.map((line) => {
+    const match = OFFER_DRAFT_PRICE_PATTERN.exec(line);
+    const name = match ? line.slice(0, match.index).trim() : '';
+    if (!match || !name) return { name: line, price: '' };
+    const raw = match[1];
+    return { name, price: `R$ ${raw.includes(',') ? raw : raw.replace('.', ',')}` };
+  });
+}
+
+export async function saveProjectOfferDrafts(projectId, drafts, targetDir = process.cwd(), now = new Date()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const created = (drafts || []).map((draft) => ({
+      id: randomUUID(),
+      name: String(draft?.name || '').trim(),
+      price: String(draft?.price || '').trim(),
+      candidates: (draft?.candidates || []).slice(0, MAX_OFFER_DRAFT_CANDIDATES).map((candidate) => ({
+        imageUrl: String(candidate.imageUrl),
+        thumbUrl: String(candidate.thumbUrl || candidate.imageUrl),
+      })),
+      createdAt: now.toISOString(),
+    }));
+    project.contentStrategy = {
+      ...(project.contentStrategy || {}),
+      offerDrafts: [...(project.contentStrategy?.offerDrafts || []), ...created],
+    };
+    project.updatedAt = now.toISOString();
+    await writeJson(paths.projectPath, project);
+    return { project, drafts: created };
+  });
+}
+
+// Idempotent: the client removes the draft right after saving its product,
+// and a double click must not turn a successful save into an error.
+export async function deleteProjectOfferDraft(projectId, draftId, targetDir = process.cwd()) {
+  const id = String(draftId || '').trim();
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const drafts = project.contentStrategy?.offerDrafts || [];
+    const nextDrafts = drafts.filter((draft) => draft.id !== id);
+    if (nextDrafts.length === drafts.length) return { deleted: false, project };
+    project.contentStrategy = { ...(project.contentStrategy || {}), offerDrafts: nextDrafts };
+    project.updatedAt = new Date().toISOString();
+    await writeJson(paths.projectPath, project);
+    return { deleted: true, project };
   });
 }
 

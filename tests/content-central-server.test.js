@@ -45,6 +45,7 @@ import {
   uploadGeneratedVideoPublicly,
   xaiAspectRatioForChannel,
   syncTokenSecretsToGitHub,
+  extractBingImageResults,
 } from '../src/content-central-server.js';
 import * as serverModule from '../src/content-central-server.js';
 import {
@@ -5520,5 +5521,124 @@ test('the panel state tells, per project, how each offer has been used and the o
     const usage = state.body.projects.find((project) => project.projectId === 'uso-ofertas').offerUsage;
     assert.deepEqual(usage.queue, [first.body.offer.id, second.body.offer.id]);
     assert.deepEqual(usage.offers[first.body.offer.id], { publishedCount: 0, lastPublishedAt: null, nextScheduledDate: null });
+  });
+});
+
+test('extractBingImageResults reads full and thumb URLs from Bing Images markup', () => {
+  const entry = (murl, turl) => `<a class="iusc" style="x" m="{&quot;murl&quot;:&quot;${murl}&quot;,&quot;turl&quot;:&quot;${turl}&quot;}" href="#">`;
+  const html = [
+    entry('https://cdn.test/coca.jpg?v=1&amp;w=2', 'https://ts1.mm.bing.net/th?id=A&amp;pid=15.1'),
+    '<a class="iusc" m="{broken json">',
+    entry('ftp://nope.test/x.jpg', 'https://ts1.mm.bing.net/th?id=B'),
+    entry('https://cdn.test/2.jpg', 'https://ts1.mm.bing.net/th?id=C'),
+    entry('https://cdn.test/3.jpg', 'https://ts1.mm.bing.net/th?id=D'),
+    entry('https://cdn.test/4.jpg', 'https://ts1.mm.bing.net/th?id=E'),
+    entry('https://cdn.test/5.jpg', 'https://ts1.mm.bing.net/th?id=F'),
+  ].join('\n');
+  const results = extractBingImageResults(html);
+  assert.equal(results.length, 4);
+  assert.deepEqual(results[0], { imageUrl: 'https://cdn.test/coca.jpg?v=1&w=2', thumbUrl: 'https://ts1.mm.bing.net/th?id=A&pid=15.1' });
+  assert.equal(results[3].imageUrl, 'https://cdn.test/4.jpg');
+  assert.deepEqual(extractBingImageResults('<html>no results</html>'), []);
+});
+
+test('offer-drafts route searches photos per line and keeps going when one search fails', async () => {
+  const searched = [];
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'mercado-drafts', name: 'Mercado Drafts', projectType: 'catalog' }, dir);
+    const created = await request(server, '/api/projects/mercado-drafts/offer-drafts', {
+      method: 'POST',
+      body: JSON.stringify({ text: 'Coca-Cola 2L - 9,99\nArroz 5kg' }),
+    });
+    assert.equal(created.response.status, 201);
+    assert.deepEqual(searched, ['Coca-Cola 2L', 'Arroz 5kg']);
+    assert.equal(created.body.drafts.length, 2);
+    assert.equal(created.body.drafts[0].price, 'R$ 9,99');
+    assert.equal(created.body.drafts[0].candidates[0].imageUrl, 'https://img.test/coca.jpg');
+    assert.deepEqual(created.body.drafts[1].candidates, []);
+    assert.equal(created.body.project.contentStrategy.offers.length, 0);
+
+    const removed = await request(server, '/api/projects/mercado-drafts/offer-drafts-delete', {
+      method: 'POST',
+      body: JSON.stringify({ draftId: created.body.drafts[0].id }),
+    });
+    assert.equal(removed.response.status, 200);
+    assert.deepEqual(removed.body.project.contentStrategy.offerDrafts.map((draft) => draft.name), ['Arroz 5kg']);
+
+    const tooMany = await request(server, '/api/projects/mercado-drafts/offer-drafts', {
+      method: 'POST',
+      body: JSON.stringify({ text: Array.from({ length: 41 }, (_, i) => `P${i}`).join('\n') }),
+    });
+    assert.equal(tooMany.response.status, 500);
+    assert.match(tooMany.body.error, /No máximo 40 produtos/);
+  }, {
+    productImageSearcher: async (query) => {
+      searched.push(query);
+      if (query.startsWith('Coca')) return [{ imageUrl: 'https://img.test/coca.jpg', thumbUrl: 'https://img.test/coca-t.jpg' }];
+      throw new Error('bloqueado');
+    },
+  });
+});
+
+test('assets route downloads a sourceUrl, falling back to fallbackSourceUrl', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'mercado-fotos', name: 'Mercado Fotos', projectType: 'catalog' }, dir);
+    await withMockedFetch(async (url) => {
+      if (String(url) === 'https://img.test/ok.png') return new Response(png, { headers: { 'content-type': 'image/png' } });
+      if (String(url) === 'https://img.test/page') return new Response('<html></html>', { headers: { 'content-type': 'text/html' } });
+      return new Response('nope', { status: 404 });
+    }, async () => {
+      const saved = await request(server, '/api/projects/mercado-fotos/assets', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'reference',
+          filename: 'Coca-Cola 2L',
+          sourceUrl: 'https://img.test/broken.jpg',
+          fallbackSourceUrl: 'https://img.test/ok.png',
+          role: 'product_photo',
+          usageRoles: ['product_photo'],
+          scope: 'offer',
+        }),
+      });
+      assert.equal(saved.response.status, 201);
+      assert.ok(saved.body.asset.metadata.id);
+      assert.match(saved.body.asset.relativePath, /\.png$/);
+
+      const notImage = await request(server, '/api/projects/mercado-fotos/assets', {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'reference', filename: 'x', sourceUrl: 'https://img.test/page', scope: 'offer' }),
+      });
+      assert.equal(notImage.response.status, 500);
+      assert.match(notImage.body.error, /Não consegui baixar essa foto/);
+
+      const badProtocol = await request(server, '/api/projects/mercado-fotos/assets', {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'reference', filename: 'x', sourceUrl: 'file:///etc/passwd', scope: 'offer' }),
+      });
+      assert.equal(badProtocol.response.status, 500);
+    });
+  });
+});
+
+test('assets route gives each downloaded photo its own file even when product names differ only by a decimal size', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'mercado-unico', name: 'Mercado Unico', projectType: 'catalog' }, dir);
+    await withMockedFetch(async () => new Response(png, { headers: { 'content-type': 'image/png' } }), async () => {
+      const save = (filename) => request(server, '/api/projects/mercado-unico/assets', {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'reference', filename, sourceUrl: 'https://img.test/ok.png', role: 'product_photo', scope: 'offer' }),
+      });
+      const first = await save('X 1.5L');
+      const second = await save('X 1.25L');
+      const again = await save('X 1.5L');
+      assert.equal(first.response.status, 201);
+      assert.equal(second.response.status, 201);
+      const ids = [first, second, again].map((saved) => saved.body.asset.metadata.id);
+      const paths = [first, second, again].map((saved) => saved.body.asset.relativePath);
+      assert.equal(new Set(ids).size, 3);
+      assert.equal(new Set(paths).size, 3);
+    });
   });
 });

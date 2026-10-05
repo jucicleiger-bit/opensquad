@@ -9,7 +9,9 @@ import {
   WEEKDAY_LABELS,
   WEEKDAY_ORDER,
   analyzeSite,
+  createOfferDrafts,
   deleteOffer,
+  deleteOfferDraft,
   deleteOfferGroup,
   fileToDataUrl,
   saveAsset,
@@ -17,6 +19,7 @@ import {
   saveOffer,
   saveOfferGroup,
   suggestOfferDirection,
+  type OfferDraft,
   type OfferFlavor,
   type OfferGroup,
   type ProjectOffer,
@@ -145,6 +148,19 @@ export function Offers() {
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
+  // "Adiantar fotos (lista)" (every project type): one product per line becomes a
+  // draft with photos found online. Drafts wait in "Para revisar" until the
+  // operator opens one in the normal form, completes it and saves.
+  const offerDrafts = project.contentStrategy?.offerDrafts || [];
+  const [draftListOpen, setDraftListOpen] = useState(false);
+  const [draftText, setDraftText] = useState("");
+  const [creatingDrafts, setCreatingDrafts] = useState(false);
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [discardingDraftId, setDiscardingDraftId] = useState<string | null>(null);
+  // The draft open in the form; `selected` is the candidate index that will be
+  // downloaded on save (-1 = none, use only photos attached from disk).
+  const [reviewingDraft, setReviewingDraft] = useState<{ draft: OfferDraft; selected: number } | null>(null);
+
   // Offer groups (e.g. "Geral", "Black Friday") — organize offers so a
   // specific schedule generation can be scoped to just one group later
   // (see GenerateContent.tsx), without touching each offer's `active` flag.
@@ -173,6 +189,49 @@ export function Offers() {
   const [candidates, setCandidates] = useState<SiteOfferCandidate[] | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<number>>(new Set());
   const [addingCandidates, setAddingCandidates] = useState(false);
+
+  async function handleCreateDrafts() {
+    if (!draftText.trim()) {
+      setDraftError("Escreva pelo menos um produto, um por linha.");
+      return;
+    }
+    setCreatingDrafts(true);
+    setDraftError(null);
+    try {
+      await createOfferDrafts(project.projectId, draftText);
+      setDraftText("");
+      setDraftListOpen(false);
+      await refreshProject();
+    } catch (err) {
+      setDraftError((err as Error).message);
+    } finally {
+      setCreatingDrafts(false);
+    }
+  }
+
+  function handleReviewDraft(draft: OfferDraft) {
+    setEditingId(null);
+    setForm({ ...EMPTY_FORM, groupId: defaultGroupId, name: draft.name, price: draft.price });
+    setReviewingDraft({ draft, selected: draft.candidates.length ? 0 : -1 });
+    setError(null);
+    if (photoInputRef.current) photoInputRef.current.value = "";
+    setFormOpen(true);
+    formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  async function handleDiscardDraft(draftId: string) {
+    setDiscardingDraftId(draftId);
+    setDraftError(null);
+    try {
+      await deleteOfferDraft(project.projectId, draftId);
+      if (reviewingDraft?.draft.id === draftId) setReviewingDraft(null);
+      await refreshProject();
+    } catch (err) {
+      setDraftError((err as Error).message);
+    } finally {
+      setDiscardingDraftId(null);
+    }
+  }
 
   async function handleAnalyzeText() {
     if (!importText.trim()) {
@@ -358,7 +417,10 @@ export function Offers() {
     }
     const photoFiles = Array.from(photoInputRef.current?.files || []);
     const hasFlavorPhoto = form.flavors.some((flavor) => flavor.file || flavor.photoReferenceId);
-    if (isCatalog && !photoFiles.length && !form.photoReferenceIds.length && !hasFlavorPhoto) {
+    const draftCandidate = reviewingDraft && reviewingDraft.selected >= 0
+      ? reviewingDraft.draft.candidates[reviewingDraft.selected]
+      : null;
+    if (isCatalog && !photoFiles.length && !form.photoReferenceIds.length && !hasFlavorPhoto && !draftCandidate) {
       setError("Cadastre pelo menos uma foto real do produto.");
       return;
     }
@@ -371,6 +433,23 @@ export function Offers() {
           kind: "reference",
           filename: photoFile.name,
           dataUrl: await fileToDataUrl(photoFile),
+          role: "product_photo",
+          usageRoles: ["product_photo"],
+          referenceCategory: "real_product",
+          useInNextGeneration: true,
+          scope: "offer",
+          instruction: `Foto real do produto: ${form.name}`,
+        });
+        if (uploaded.asset.metadata?.id) uploadedIds.push(uploaded.asset.metadata.id);
+      }
+      // The online candidate goes after the operator's own files, so a photo they
+      // attach themselves stays the main one even if candidate 1 is still selected.
+      if (draftCandidate) {
+        const uploaded = await saveAsset(project.projectId, {
+          kind: "reference",
+          filename: form.name.trim() || "produto",
+          sourceUrl: draftCandidate.imageUrl,
+          fallbackSourceUrl: draftCandidate.thumbUrl,
           role: "product_photo",
           usageRoles: ["product_photo"],
           referenceCategory: "real_product",
@@ -403,6 +482,16 @@ export function Offers() {
       }
       const payload = { ...form, photoReferenceIds: [...form.photoReferenceIds, ...uploadedIds], flavors };
       await saveOffer(project.projectId, editingId ? { ...payload, id: editingId } : payload);
+      if (reviewingDraft) {
+        // The product is already saved here, so a failed draft delete must not
+        // abort the reset/refresh (a second save would create a duplicate).
+        try {
+          await deleteOfferDraft(project.projectId, reviewingDraft.draft.id);
+        } catch (err) {
+          setDraftError(`Produto salvo, mas não consegui tirar o rascunho de "Para revisar" (${(err as Error).message}). Descarte-o à mão.`);
+        }
+        setReviewingDraft(null);
+      }
       setForm({ ...EMPTY_FORM, groupId: defaultGroupId });
       if (photoInputRef.current) photoInputRef.current.value = "";
       setEditingId(null);
@@ -415,6 +504,7 @@ export function Offers() {
   }
 
   function handleEdit(offer: ProjectOffer) {
+    setReviewingDraft(null);
     setEditingId(offer.id);
     setForm({
       name: offer.name,
@@ -455,6 +545,7 @@ export function Offers() {
   }
 
   function handleCancelEdit() {
+    setReviewingDraft(null);
     setEditingId(null);
     setForm(EMPTY_FORM);
     if (photoInputRef.current) photoInputRef.current.value = "";
@@ -521,10 +612,77 @@ export function Offers() {
             {importOpen ? "Fechar" : "Colar lista de produtos"}
           </Button>
         ) : null}
+        <Button type="button" variant="secondary" onClick={() => setDraftListOpen((current) => !current)}>
+          {draftListOpen ? "Fechar" : "Adiantar fotos (lista)"}
+        </Button>
         <Button type="button" variant="secondary" onClick={() => setGroupsOpen((current) => !current)}>
           {groupsOpen ? "Fechar" : "Grupos de ofertas"}
         </Button>
       </div>
+
+      {draftListOpen ? (
+        <Card style={{ padding: 20, marginBottom: 20 }}>
+          <b>Adiantar fotos a partir de uma lista</b>
+          <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
+            Cada linha vira um rascunho com fotos achadas na internet. Nada entra na geração até você revisar e salvar cada um.
+            Até 40 produtos por vez — leva uns 2 segundos por produto.
+          </p>
+          <label htmlFor="offer-draft-list">Um produto por linha (nome e preço, se tiver)</label>
+          <textarea
+            id="offer-draft-list"
+            placeholder={"Ex:\nCoca-Cola 2L - 9,99\nArroz Tio João 5kg - 27,90\nDetergente Ypê 500ml"}
+            value={draftText}
+            onChange={(e) => setDraftText(e.target.value)}
+            rows={8}
+          />
+          <div className="button-row" style={{ marginTop: 10 }}>
+            <Button type="button" disabled={creatingDrafts} onClick={handleCreateDrafts}>
+              {creatingDrafts ? "Buscando fotos..." : "Buscar fotos"}
+            </Button>
+          </div>
+          {draftError ? <div className="pill bad" style={{ marginTop: 12 }}>{draftError}</div> : null}
+        </Card>
+      ) : null}
+
+      {offerDrafts.length ? (
+        <Card style={{ padding: 20, marginBottom: 20 }}>
+          <b>Para revisar ({offerDrafts.length})</b>
+          <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
+            Rascunhos da lista — não entram na geração. Abra cada um, complete o cadastro e salve.
+          </p>
+          {offerDrafts.map((draft) => (
+            <div key={draft.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderTop: "1px solid var(--line)" }}>
+              <div style={thumbStyle}>
+                {draft.candidates[0] ? (
+                  <img src={draft.candidates[0].thumbUrl} alt="" style={thumbImgStyle} loading="lazy" referrerPolicy="no-referrer" />
+                ) : (
+                  <span>sem foto</span>
+                )}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div>{draft.name}</div>
+                {draft.price ? <div className="muted" style={{ fontSize: 13 }}>{draft.price}</div> : null}
+                {!draft.candidates.length ? (
+                  <div className="muted" style={{ fontSize: 12 }}>sem foto encontrada — anexe na revisão</div>
+                ) : null}
+              </div>
+              <Button type="button" aria-label={`Revisar ${draft.name}`} onClick={() => handleReviewDraft(draft)}>
+                Revisar
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                aria-label={`Descartar ${draft.name}`}
+                disabled={discardingDraftId === draft.id}
+                onClick={() => handleDiscardDraft(draft.id)}
+              >
+                Descartar
+              </Button>
+            </div>
+          ))}
+          {draftError && !draftListOpen ? <div className="pill bad" style={{ marginTop: 12 }}>{draftError}</div> : null}
+        </Card>
+      ) : null}
 
       {groupsOpen ? (
         <Card style={{ padding: 20, marginBottom: 20 }}>
@@ -630,6 +788,47 @@ export function Offers() {
                 ? "Pode escolher mais de uma foto (ângulos diferentes) — a composição usa a primeira como principal."
                 : "Anexe a foto real deste produto/modelo específico pra IA usar ele de verdade na arte, em vez de inventar um genérico. Ajuda muito quando há vários modelos parecidos (ex: vários celulares)."}
             </p>
+            {reviewingDraft ? (
+              <div style={{ marginTop: 8 }}>
+                {reviewingDraft.draft.candidates.length ? (
+                  <>
+                    <p className="muted" style={{ margin: "0 0 6px", fontSize: 12 }}>
+                      Fotos achadas na internet — a marcada é a que vai ser salva. Clique em outra pra trocar, ou na marcada pra não usar nenhuma.
+                    </p>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      {reviewingDraft.draft.candidates.map((candidate, index) => {
+                        const selected = reviewingDraft.selected === index;
+                        return (
+                          <button
+                            key={candidate.imageUrl}
+                            type="button"
+                            aria-label={`Usar foto ${index + 1}`}
+                            aria-pressed={selected}
+                            onClick={() => setReviewingDraft({ ...reviewingDraft, selected: selected ? -1 : index })}
+                            style={{
+                              width: 88,
+                              height: 88,
+                              padding: 0,
+                              borderRadius: 8,
+                              overflow: "hidden",
+                              cursor: "pointer",
+                              background: "var(--bg-soft)",
+                              border: selected ? "3px solid var(--accent)" : "1px solid var(--line)",
+                            }}
+                          >
+                            <img src={candidate.thumbUrl} alt="" style={thumbImgStyle} loading="lazy" referrerPolicy="no-referrer" />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                ) : (
+                  <p className="muted" style={{ margin: 0, fontSize: 12 }}>
+                    Nenhuma foto achada na internet pra esse nome — anexe uma do computador.
+                  </p>
+                )}
+              </div>
+            ) : null}
             {form.photoReferenceIds.length > 0 ? (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
                 {form.photoReferenceIds.map((id) =>
