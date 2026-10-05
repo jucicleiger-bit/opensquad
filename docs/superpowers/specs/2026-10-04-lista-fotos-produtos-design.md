@@ -8,7 +8,7 @@ the operator has tried it on a real list and says so.
 
 ## Problem
 
-In a catalog project (supermarket), every product needs a real photo, and the
+In any project (e.g. a supermarket catalog), every product needs a real photo, and the
 operator registers products one at a time: type the name, go find a photo on
 the internet, download it, attach it. Most products are common internet
 products, so the photo hunt is the slow, repetitive part.
@@ -22,7 +22,7 @@ The goal is only to get the photo work done ahead of time.
 
 ## What it does
 
-1. On the Produtos page of a catalog project, a new toolbar button
+1. On the Produtos/Ofertas page of any project, a new toolbar button
    **"Adiantar fotos (lista)"** opens a textarea: one product per line, e.g.
    `Coca-Cola 2L - 9,99`. The price is optional.
 2. **"Buscar fotos"** turns each line into a **draft** (rascunho) holding the
@@ -103,7 +103,7 @@ rotation, flyer, manual, cerebro) ignores them with no change.
 
 ### Client (`content-central-app/src/pages/workspace/Offers.tsx`, `api/client.ts`)
 
-- Toolbar button + textarea card, shown only when `isCatalog`.
+- Toolbar button + textarea card, shown for every project type.
 - "Para revisar (N)" section listing `project.contentStrategy.offerDrafts`.
 - Opening a draft: `setForm({ ...EMPTY_FORM, groupId: defaultGroupId, name, price })`,
   remember `reviewingDraft` (id + candidates + selected index), open the form.

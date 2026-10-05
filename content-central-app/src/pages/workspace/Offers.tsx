@@ -148,7 +148,7 @@ export function Offers() {
   const [formOpen, setFormOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
-  // "Adiantar fotos (lista)" (catalog only): one product per line becomes a
+  // "Adiantar fotos (lista)" (every project type): one product per line becomes a
   // draft with photos found online. Drafts wait in "Para revisar" until the
   // operator opens one in the normal form, completes it and saves.
   const offerDrafts = project.contentStrategy?.offerDrafts || [];
@@ -612,17 +612,15 @@ export function Offers() {
             {importOpen ? "Fechar" : "Colar lista de produtos"}
           </Button>
         ) : null}
-        {isCatalog ? (
-          <Button type="button" variant="secondary" onClick={() => setDraftListOpen((current) => !current)}>
-            {draftListOpen ? "Fechar" : "Adiantar fotos (lista)"}
-          </Button>
-        ) : null}
+        <Button type="button" variant="secondary" onClick={() => setDraftListOpen((current) => !current)}>
+          {draftListOpen ? "Fechar" : "Adiantar fotos (lista)"}
+        </Button>
         <Button type="button" variant="secondary" onClick={() => setGroupsOpen((current) => !current)}>
           {groupsOpen ? "Fechar" : "Grupos de ofertas"}
         </Button>
       </div>
 
-      {isCatalog && draftListOpen ? (
+      {draftListOpen ? (
         <Card style={{ padding: 20, marginBottom: 20 }}>
           <b>Adiantar fotos a partir de uma lista</b>
           <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>
@@ -646,7 +644,7 @@ export function Offers() {
         </Card>
       ) : null}
 
-      {isCatalog && offerDrafts.length ? (
+      {offerDrafts.length ? (
         <Card style={{ padding: 20, marginBottom: 20 }}>
           <b>Para revisar ({offerDrafts.length})</b>
           <p className="muted" style={{ margin: "4px 0 10px", fontSize: 13 }}>

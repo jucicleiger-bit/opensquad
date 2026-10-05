@@ -826,11 +826,42 @@ describe("Offers", () => {
     expect(JSON.parse(calls[1][1].body as string)).toEqual({ text: "Coca-Cola 2L - 9,99" });
   });
 
-  it("hides the list box outside catalog projects", async () => {
+  it("shows the list box button in non-catalog (marketing) projects too", async () => {
     stubFetchSequence([{ body: projectState() }]);
     renderOffers();
     await screen.findByText("Nenhuma oferta/assunto cadastrado ainda");
-    expect(screen.queryByRole("button", { name: "Adiantar fotos (lista)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Adiantar fotos (lista)" })).toBeInTheDocument();
+  });
+
+  it("reviews a draft in a marketing project: form pre-filled, photo uploaded by URL, offer saved, draft removed", async () => {
+    const savedOffer = { id: "coca", name: "Coca-Cola 2L", type: "offer", price: "R$ 9,99", photoReferenceIds: ["foto-coca"] };
+    const marketingState = (offers: unknown[], offerDrafts: unknown[]) => ({
+      projects: [{ projectId: "boss-pizzaria", name: "Boss Pizzaria", projectType: "marketing", contentStrategy: { offers, offerDrafts } }],
+      globalRules: {},
+    });
+    stubFetchSequence([
+      { body: marketingState([], [CATALOG_DRAFT]) },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-coca" } } } },
+      { body: { project: {}, offer: savedOffer } },
+      { body: { deleted: true, project: {} } },
+      { body: marketingState([savedOffer], []) },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Revisar Coca-Cola 2L" }));
+    expect(screen.getByLabelText("Nome")).toHaveValue("Coca-Cola 2L");
+    expect(screen.getByRole("button", { name: "Usar foto 1" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Salvar oferta/assunto" }));
+
+    await screen.findByRole("button", { name: /Sem grupo/ });
+    expect(screen.queryByText(/Para revisar/)).not.toBeInTheDocument();
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(calls[1][0]).toBe("/api/projects/boss-pizzaria/assets");
+    expect(JSON.parse(calls[1][1].body as string).sourceUrl).toBe("https://img.test/coca-1.jpg");
+    expect(calls[2][0]).toBe("/api/projects/boss-pizzaria/offers");
+    expect(JSON.parse(calls[2][1].body as string).photoReferenceIds).toEqual(["foto-coca"]);
+    expect(calls[3][0]).toBe("/api/projects/boss-pizzaria/offer-drafts-delete");
+    expect(JSON.parse(calls[3][1].body as string)).toEqual({ draftId: "draft-coca" });
   });
 
   it("reviews a draft: form pre-filled, chosen online photo uploaded by URL, draft removed after saving", async () => {
