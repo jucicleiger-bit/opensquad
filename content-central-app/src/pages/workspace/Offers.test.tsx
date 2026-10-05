@@ -865,6 +865,30 @@ describe("Offers", () => {
     expect(JSON.parse(calls[3][1].body as string)).toEqual({ draftId: "draft-coca" });
   });
 
+  it("puts the operator's own photo before the chosen online candidate", async () => {
+    const savedProduct = { id: "coca", name: "Coca-Cola 2L", type: "offer", price: "R$ 9,99", photoReferenceIds: ["foto-disco", "foto-coca"] };
+    stubFetchSequence([
+      { body: catalogState([], [CATALOG_DRAFT]) },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-disco" } } } },
+      { body: { asset: { kind: "reference", metadata: { id: "foto-coca" } } } },
+      { body: { project: {}, offer: savedProduct } },
+      { body: { deleted: true, project: {} } },
+      { body: catalogState([savedProduct], []) },
+    ]);
+    renderOffers();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Revisar Coca-Cola 2L" }));
+    await userEvent.upload(screen.getByLabelText("Foto(s) real(is) do produto"), new File(["bytes"], "minha.png", { type: "image/png" }));
+    await userEvent.click(screen.getByRole("button", { name: "Salvar produto" }));
+
+    await screen.findByRole("button", { name: /Sem grupo/ });
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    expect(JSON.parse(calls[1][1].body as string).filename).toBe("minha.png");
+    expect(JSON.parse(calls[2][1].body as string).sourceUrl).toBe("https://img.test/coca-1.jpg");
+    expect(calls[3][0]).toBe("/api/projects/boss-pizzaria/offers");
+    expect(JSON.parse(calls[3][1].body as string).photoReferenceIds).toEqual(["foto-disco", "foto-coca"]);
+  });
+
   it("discards a draft without downloading anything", async () => {
     stubFetchSequence([
       { body: catalogState([], [CATALOG_DRAFT]) },

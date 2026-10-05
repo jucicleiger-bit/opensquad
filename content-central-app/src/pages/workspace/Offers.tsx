@@ -428,12 +428,11 @@ export function Offers() {
     setError(null);
     try {
       const uploadedIds: string[] = [];
-      if (draftCandidate) {
+      for (const photoFile of photoFiles) {
         const uploaded = await saveAsset(project.projectId, {
           kind: "reference",
-          filename: form.name.trim() || "produto",
-          sourceUrl: draftCandidate.imageUrl,
-          fallbackSourceUrl: draftCandidate.thumbUrl,
+          filename: photoFile.name,
+          dataUrl: await fileToDataUrl(photoFile),
           role: "product_photo",
           usageRoles: ["product_photo"],
           referenceCategory: "real_product",
@@ -443,11 +442,14 @@ export function Offers() {
         });
         if (uploaded.asset.metadata?.id) uploadedIds.push(uploaded.asset.metadata.id);
       }
-      for (const photoFile of photoFiles) {
+      // The online candidate goes after the operator's own files, so a photo they
+      // attach themselves stays the main one even if candidate 1 is still selected.
+      if (draftCandidate) {
         const uploaded = await saveAsset(project.projectId, {
           kind: "reference",
-          filename: photoFile.name,
-          dataUrl: await fileToDataUrl(photoFile),
+          filename: form.name.trim() || "produto",
+          sourceUrl: draftCandidate.imageUrl,
+          fallbackSourceUrl: draftCandidate.thumbUrl,
           role: "product_photo",
           usageRoles: ["product_photo"],
           referenceCategory: "real_product",
