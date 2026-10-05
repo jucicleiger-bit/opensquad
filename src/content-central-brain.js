@@ -193,6 +193,7 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
   const project = await loadProject(getCentralPaths(targetDir, projectId));
   // summary and businessHoursWarnings describe the preview before the choices
   // and the trimming, so they would be stale here; nothing reads them.
+  // eslint-disable-next-line no-unused-vars
   const { summary, businessHoursWarnings, ...chosen } = await applyPlanSlotChoices(projectId, preview, slots || [], targetDir);
   const hours = normalizeBusinessHours(project.businessHours);
   const fitted = fitPlan(chosen, hours);
