@@ -378,7 +378,7 @@ export interface ProjectSummary {
 }
 
 export interface SystemAlert {
-  type: "token_expired" | "token_expiring" | "publish_failed" | "media_upload_failed" | "topic_ideas_fallback" | "whatsapp_disconnected" | "report_ready";
+  type: "token_expired" | "token_expiring" | "publish_failed" | "publish_overdue" | "media_upload_failed" | "topic_ideas_fallback" | "whatsapp_disconnected" | "report_ready";
   key: string;
   projectId: string;
   projectName: string;

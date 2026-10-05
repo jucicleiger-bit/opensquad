@@ -114,7 +114,7 @@ import {
   regenerateContentGroup,
   researchOnlineVisualTrends,
   refreshProjectTopicIdeas,
-  retryStuckMediaUploads,
+  syncApprovedContentToGaveta,
   runDuePublishSweep,
   saveLearningEntry,
   saveOfferTypeBaseInstruction,
@@ -144,7 +144,7 @@ import {
   productPhotoLimitFor,
   productPhotoLabelFor,
 } from './content-central.js';
-import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from './gaveta-sync.js';
+import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem, syncQueue } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
 import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
 import { qualifySocialSellingLead } from './social-selling-ai.js';
@@ -465,7 +465,7 @@ export async function startContentCentralServer({
   const cloudArtGenerationSchedulerTimer = startCloudArtGenerationScheduler(targetDir, context);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
   const instagramMetricsSchedulerTimer = startInstagramMetricsScheduler(targetDir);
-  const stuckMediaRetrySchedulerTimer = startStuckMediaRetryScheduler(targetDir);
+  const gavetaSyncSchedulerTimer = startGavetaSyncScheduler(targetDir);
   const socialSellingRadarSchedulerTimer = startSocialSellingRadarScheduler(targetDir);
   const socialSellingEngagementSchedulerTimer = startSocialSellingEngagementScheduler(targetDir);
 
@@ -479,7 +479,7 @@ export async function startContentCentralServer({
       if (cloudArtGenerationSchedulerTimer) clearInterval(cloudArtGenerationSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
       if (instagramMetricsSchedulerTimer) clearInterval(instagramMetricsSchedulerTimer);
-      if (stuckMediaRetrySchedulerTimer) clearInterval(stuckMediaRetrySchedulerTimer);
+      if (gavetaSyncSchedulerTimer) clearInterval(gavetaSyncSchedulerTimer);
       if (socialSellingRadarSchedulerTimer) clearInterval(socialSellingRadarSchedulerTimer);
       if (socialSellingEngagementSchedulerTimer) clearInterval(socialSellingEngagementSchedulerTimer);
       closeSocialSellingBrowser().catch(() => {});
@@ -5002,9 +5002,25 @@ async function isDirectImageUrl(url) {
   }
 }
 
+// imgBB rate-limits the key after a burst of approvals and keeps refusing
+// for over half an hour (2026-10-05: 8 approvals, every upload failed), so it
+// falls back to Catbox. Not uguu.se: it deletes files after 3 hours, and an
+// approved post can be days away from publishing.
+async function uploadToImgBBOrCatbox(localPath, apiKey) {
+  try {
+    return await uploadToImgBB(localPath, apiKey);
+  } catch (imgbbErr) {
+    try {
+      return await uploadToCatbox(localPath);
+    } catch (catboxErr) {
+      throw new Error(`imgBB e Catbox falharam ao hospedar a imagem (imgBB: ${imgbbErr.message}; Catbox: ${catboxErr.message}).`, { cause: catboxErr });
+    }
+  }
+}
+
 export async function uploadGeneratedImagePublicly(localPath) {
   const apiKey = process.env.IMGBB_API_KEY;
-  const url = apiKey ? await uploadToImgBB(localPath, apiKey) : await uploadToFreeHost(localPath);
+  const url = apiKey ? await uploadToImgBBOrCatbox(localPath, apiKey) : await uploadToFreeHost(localPath);
   if (!(await isDirectImageUrl(url))) {
     throw new Error(`Imagem hospedada em ${url} não respondeu como imagem — não é seguro publicar na Meta.`);
   }
@@ -5442,7 +5458,7 @@ export function startCloudWhatsAppPublishScheduler(targetDir) {
   } catch {
     // No SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY configured — this operator
     // hasn't set up the cloud panel; stay silent, same reasoning as
-    // startStuckMediaRetryScheduler's OPENSQUAD_GAVETA_DIR gate for an
+    // startGavetaSyncScheduler's OPENSQUAD_GAVETA_DIR gate for an
     // optional subsystem not every local install uses.
     return null;
   }
@@ -5596,23 +5612,37 @@ export function startCloudArtGenerationScheduler(targetDir, context) {
   return timer;
 }
 
-// Closes the gap runDuePublishSweep leaves open for an approve-time upload
-// that ran out of retries: mediaUploadError items only get a fresh attempt
-// when their scheduled slot finally comes due, which can be days out, so
-// the media_upload_failed alert just sits there until then or until the
-// operator manually retries from the Calendário. Runs on its own (slower)
-// cadence — this isn't publishing anything, just re-hosting the file — so
-// the alert self-heals well before the deadline instead of on it. Only
-// meaningful when OPENSQUAD_GAVETA_DIR is set: that's the only mode where
-// approveContent's mediaUploader hook runs at all, so it's the only mode
-// where mediaUploadError ever gets set in the first place.
-export function startStuckMediaRetryScheduler(targetDir) {
+// Runs syncApprovedContentToGaveta every 5 minutes, because a post approved
+// minutes before its slot (09:00 story approved at 08:50 on 2026-10-05) is
+// otherwise late by the whole interval. Pulls first, so it compares against
+// what GitHub Actions last published, and pushes what a failed push left.
+export function startGavetaSyncScheduler(targetDir) {
   if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
-  if (!process.env.OPENSQUAD_GAVETA_DIR) return null;
-  const intervalMs = Number(process.env.OPENSQUAD_MEDIA_RETRY_INTERVAL_MS || 1800000);
-  const sweep = () => retryStuckMediaUploads(targetDir, {
-    mediaUploader: ({ content, project }) => uploadContentMediaFresh(content, project.projectId, targetDir),
-  }).catch((err) => console.error('[content-central] stuck media retry sweep failed:', err.message));
+  const gaveteDir = process.env.OPENSQUAD_GAVETA_DIR;
+  if (!gaveteDir) return null;
+  const intervalMs = Number(process.env.OPENSQUAD_MEDIA_RETRY_INTERVAL_MS || 300000);
+  const { queueSync } = resolveGaveteSync(targetDir);
+  // Uploads have no timeout, so a hanging host can outlast the interval — a
+  // second sweep would upload and push the same items again.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    syncQueue(gaveteDir)
+      .then(() => syncApprovedContentToGaveta(targetDir, {
+        mediaUploader: ({ content, project }) => uploadContentMediaFresh(content, project.projectId, targetDir),
+        queueSync,
+        readQueueItem: (projectId, contentId) => readQueueItem(gaveteDir, projectId, contentId),
+        // Same rule as resolveGaveteSync's upsert guard: WhatsApp Status
+        // publishes from this PC, carousels by hand.
+        isGavetaItem: (item) => !WHATSAPP_CHANNELS.has(item.channel) && item.format !== 'carousel',
+      }))
+      .then(({ failed }) => {
+        if (failed.length) console.error('[content-central] gaveta sync failed for:', failed.map((f) => `${f.contentId} (${f.error})`).join('; '));
+      })
+      .catch((err) => console.error('[content-central] gaveta sync failed:', err.message))
+      .finally(() => { running = false; });
+  };
   const timer = setInterval(sweep, intervalMs);
   sweep();
   return timer;

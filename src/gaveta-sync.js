@@ -32,6 +32,16 @@ async function git(gaveteDir, args) {
   return execFileAsync('git', args, { cwd: gaveteDir });
 }
 
+// One queue operation at a time: two approvals clicked together, or one
+// landing during the 5-minute sync, otherwise run git in the same clone at
+// once and one of them dies on .git/index.lock.
+let queueTail = Promise.resolve();
+function oneAtATime(fn) {
+  const run = queueTail.then(fn, fn);
+  queueTail = run.catch(() => {});
+  return run;
+}
+
 // Commits whatever is currently staged, then pulls (rebasing local commits
 // on top) and pushes. `git commit` exits non-zero when there's nothing
 // staged (e.g. upsert writing byte-identical content twice) — that's not a
@@ -46,19 +56,33 @@ async function commitAndPush(gaveteDir, message) {
   } catch (err) {
     if (!/nothing to commit/.test(err.stdout || err.message || '')) throw err;
   }
-  try {
-    await git(gaveteDir, ['pull', '--rebase']);
-  } catch (err) {
-    // A same-file conflict here would otherwise leave the clone stuck
-    // mid-rebase forever — every subsequent commit/pull throws until a
-    // human runs `git rebase --abort` by hand. Abort automatically so a
-    // conflict degrades to "this push failed, try again" (the same
-    // recoverable failure mode this function had before pull-rebase was
-    // added) instead of "every gaveta operation is now broken."
-    await git(gaveteDir, ['rebase', '--abort']).catch(() => {});
-    throw err;
+  await pullAndPush(gaveteDir);
+}
+
+// GitHub Actions pushes its publish results to the same branch at any moment;
+// one landing between our pull and our push gets the push refused (2026-10-05,
+// mid bulk-approve: the operator saw "1 com erro"). Pull and push again.
+async function pullAndPush(gaveteDir) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await git(gaveteDir, ['pull', '--rebase']);
+    } catch (err) {
+      // A same-file conflict here would otherwise leave the clone stuck
+      // mid-rebase forever — every subsequent commit/pull throws until a
+      // human runs `git rebase --abort` by hand. Abort automatically so a
+      // conflict degrades to "this push failed, try again" (the same
+      // recoverable failure mode this function had before pull-rebase was
+      // added) instead of "every gaveta operation is now broken."
+      await git(gaveteDir, ['rebase', '--abort']).catch(() => {});
+      throw err;
+    }
+    try {
+      await git(gaveteDir, ['push']);
+      return;
+    } catch (err) {
+      if (attempt === 3) throw err;
+    }
   }
-  await git(gaveteDir, ['push']);
 }
 
 // Once GitHub Actions has really published an item, its queue record is the
@@ -69,7 +93,11 @@ async function commitAndPush(gaveteDir, message) {
 // happened 4 times in Aug/Sep 2026. So a published record is never
 // downgraded or deleted from here; re-posting on purpose means resetting
 // the queue file by hand.
-export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
+export function upsertQueueItem(gaveteDir, projectId, contentId, data) {
+  return oneAtATime(() => upsertQueueItemNow(gaveteDir, projectId, contentId, data));
+}
+
+async function upsertQueueItemNow(gaveteDir, projectId, contentId, data) {
   await assertValidGaveteDir(gaveteDir);
   const path = queueItemPath(gaveteDir, projectId, contentId);
   const existing = await readQueueItem(gaveteDir, projectId, contentId);
@@ -91,7 +119,11 @@ export async function upsertQueueItem(gaveteDir, projectId, contentId, data) {
   await commitAndPush(gaveteDir, `queue: ${projectId}/${contentId}`);
 }
 
-export async function removeQueueItem(gaveteDir, projectId, contentId) {
+export function removeQueueItem(gaveteDir, projectId, contentId) {
+  return oneAtATime(() => removeQueueItemNow(gaveteDir, projectId, contentId));
+}
+
+async function removeQueueItemNow(gaveteDir, projectId, contentId) {
   await assertValidGaveteDir(gaveteDir);
   const path = queueItemPath(gaveteDir, projectId, contentId);
   const existing = await readQueueItem(gaveteDir, projectId, contentId);
@@ -103,9 +135,20 @@ export async function removeQueueItem(gaveteDir, projectId, contentId) {
   await commitAndPush(gaveteDir, `queue: remove ${projectId}/${contentId}`);
 }
 
-export async function pullQueue(gaveteDir) {
-  await assertValidGaveteDir(gaveteDir);
-  await git(gaveteDir, ['pull']);
+// The 5-minute sync compares the app with this clone, so a commit whose push
+// failed would look in step there and never reach GitHub: push it here.
+export function syncQueue(gaveteDir) {
+  return oneAtATime(async () => {
+    await assertValidGaveteDir(gaveteDir);
+    await pullAndPush(gaveteDir);
+  });
+}
+
+export function pullQueue(gaveteDir) {
+  return oneAtATime(async () => {
+    await assertValidGaveteDir(gaveteDir);
+    await git(gaveteDir, ['pull']);
+  });
 }
 
 // Reads back a single queue item — used by publishWithGaveteSync to check

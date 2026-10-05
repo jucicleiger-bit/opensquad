@@ -84,7 +84,7 @@ import {
   refreshProjectTopicIdeas,
   researchOnlineVisualTrends,
   runDuePublishSweep,
-  retryStuckMediaUploads,
+  syncApprovedContentToGaveta,
   deleteProjectOffer,
   deleteProjectOfferDraft,
   parseOfferDraftLines,
@@ -7321,6 +7321,23 @@ test('runDuePublishSweep does not publish approved content scheduled in the futu
   });
 });
 
+// 2026-10-05: three WhatsApp statuses from 10-03 were still being retried
+// two days later and would have gone out the moment the session came back.
+test('runDuePublishSweep never publishes a slot more than a day past, like the gaveta publishers', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'publish-stale', name: 'Publish Stale', handle: '@publishstale', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('publish-stale', { days: 1, startDate: '2026-07-20', postTime: '09:00', channel: 'whatsapp_status' }, dir);
+    await approveContent('publish-stale', batch.items[0].contentId, dir, batch.batchId);
+
+    const result = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-22T12:00:00'),
+      metaPublisher: async () => { throw new Error('must not publish a two-day-old status'); },
+    });
+
+    assert.deepEqual(result, { published: [], failed: [] });
+  });
+});
+
 test('runDuePublishSweep skips a due item already migrated to Supabase — the cloud sweep owns it now, publishing it locally too would double-post', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
@@ -7443,8 +7460,10 @@ test('runDuePublishSweep only publishes the earliest overdue (date, time) slot p
     await approveContent('publish-backlog', batch.items[1].contentId, dir, batch.batchId);
 
     const publisherCalls = [];
+    // Day 1's slot is exactly a day old here: the oldest a slot can be and
+    // still publish (see runDuePublishSweep's one-day window).
     const firstSweep = await runDuePublishSweep(dir, {
-      now: new Date('2026-07-25T12:00:00.000Z'),
+      now: new Date('2026-07-21T09:00:00'),
       metaPublisher: async (payload) => { publisherCalls.push(payload.content.contentId); return { mediaId: `media-${publisherCalls.length}` }; },
     });
 
@@ -7458,7 +7477,7 @@ test('runDuePublishSweep only publishes the earliest overdue (date, time) slot p
     // Next sweep cycle picks up the next backlogged slot — still one at a
     // time, never dumping the whole remaining backlog in a single call.
     const secondSweep = await runDuePublishSweep(dir, {
-      now: new Date('2026-07-25T12:03:00.000Z'),
+      now: new Date('2026-07-21T09:03:00'),
       metaPublisher: async (payload) => { publisherCalls.push(payload.content.contentId); return { mediaId: `media-${publisherCalls.length}` }; },
     });
     assert.deepEqual(secondSweep.published, [batch.items[1].contentId]);
@@ -7489,7 +7508,7 @@ test('runDuePublishSweep with a channels filter only sees content on those chann
 
     const publisherCalls = [];
     const result = await runDuePublishSweep(dir, {
-      now: new Date('2026-07-25T12:00:00.000Z'),
+      now: new Date('2026-07-20T12:00:00'),
       channels: new Set(['whatsapp_status']),
       metaPublisher: async (payload) => {
         if (payload.content.channel !== 'whatsapp_status') throw new Error('should never be called for a non-whatsapp channel');
@@ -7620,59 +7639,177 @@ test('approveContent still approves the item when mediaUploader throws, recordin
   });
 });
 
-test('retryStuckMediaUploads re-uploads a mediaUploadError item and clears the error on success', async () => {
+// What the gaveta queue holds and what the sync pushed to it — a stand-in for
+// the git-backed queue so these tests only exercise the decisions.
+function fakeGaveta(items = {}) {
+  const queue = new Map(Object.entries(items));
+  const pushes = [];
+  return {
+    pushes,
+    readQueueItem: async (projectId, contentId) => queue.get(contentId) || null,
+    queueSync: async (action, payload) => {
+      pushes.push(payload);
+      queue.set(payload.contentId, { ...payload.data, publish: { realPublished: false, error: null } });
+    },
+  };
+}
+
+function queuedAs(item, overrides = {}) {
+  return { channel: item.channel, caption: item.caption.text, mediaUrl: item.publish?.mediaUrl || null, scheduledDate: item.scheduledDate, scheduledTime: item.scheduledTime, publish: { realPublished: false, error: null }, ...overrides };
+}
+
+async function approvedItem(dir, projectId, { startDate = '2099-01-01', mediaUploader = async () => { throw new Error('imgBB is down'); } } = {}) {
+  await createCentralProject({ projectId, name: projectId, handle: `@${projectId}`, approvalEmail: 'a@example.com' }, dir);
+  const batch = await generateContentBatch(projectId, { days: 1, startDate, postTime: '18:00' }, dir);
+  await approveContent(projectId, batch.items[0].contentId, dir, batch.batchId, { mediaUploader });
+  return (await listProjectContent(projectId, dir))[0];
+}
+
+test('syncApprovedContentToGaveta re-hosts the media a failed approve left out and pushes it to the gaveta', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'retry-stuck-ok', name: 'Retry Stuck Ok', handle: '@retrystuckok', approvalEmail: 'a@example.com' }, dir);
-    const batch = await generateContentBatch('retry-stuck-ok', { days: 1, startDate: '2099-01-01', postTime: '18:00' }, dir);
-    await approveContent('retry-stuck-ok', batch.items[0].contentId, dir, batch.batchId, {
-      mediaUploader: async () => { throw new Error('imgBB is down'); },
-    });
+    const item = await approvedItem(dir, 'sync-rehost');
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item) });
 
-    const result = await retryStuckMediaUploads(dir, {
-      mediaUploader: async () => 'https://i.ibb.co/fresh.png',
-    });
+    const result = await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => 'https://files.catbox.moe/fresh.png' });
 
-    assert.deepEqual(result, { retried: [batch.items[0].contentId], failed: [] });
-    const content = await listProjectContent('retry-stuck-ok', dir);
-    assert.equal(content[0].publish.mediaUrl, 'https://i.ibb.co/fresh.png');
-    assert.equal(content[0].publish.mediaUploadError, null);
+    assert.deepEqual(result, { pushed: [item.contentId], failed: [] });
+    assert.equal(gaveta.pushes[0].data.mediaUrl, 'https://files.catbox.moe/fresh.png');
+    assert.equal(gaveta.pushes[0].data.scheduledDate, '2099-01-01');
+    const [saved] = await listProjectContent('sync-rehost', dir);
+    assert.equal(saved.publish.mediaUrl, 'https://files.catbox.moe/fresh.png');
+    assert.equal(saved.publish.mediaUploadError, null);
   });
 });
 
-test('retryStuckMediaUploads keeps the item stuck and records the new error when the retry itself fails', async () => {
+test('syncApprovedContentToGaveta records the new error and pushes nothing when hosting fails again', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'retry-stuck-fail', name: 'Retry Stuck Fail', handle: '@retrystuckfail', approvalEmail: 'a@example.com' }, dir);
-    const batch = await generateContentBatch('retry-stuck-fail', { days: 1, startDate: '2099-01-01', postTime: '18:00' }, dir);
-    await approveContent('retry-stuck-fail', batch.items[0].contentId, dir, batch.batchId, {
-      mediaUploader: async () => { throw new Error('imgBB is down'); },
-    });
+    const item = await approvedItem(dir, 'sync-still-down');
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item) });
 
-    const result = await retryStuckMediaUploads(dir, {
-      mediaUploader: async () => { throw new Error('still down'); },
-    });
+    const result = await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => { throw new Error('still down'); } });
 
-    assert.equal(result.retried.length, 0);
     assert.equal(result.failed.length, 1);
-    const content = await listProjectContent('retry-stuck-fail', dir);
-    assert.equal(content[0].publish.mediaUrl, null);
-    assert.equal(content[0].publish.mediaUploadError, 'still down');
+    assert.equal(gaveta.pushes.length, 0);
+    const [saved] = await listProjectContent('sync-still-down', dir);
+    assert.equal(saved.publish.mediaUrl, null);
+    assert.equal(saved.publish.mediaUploadError, 'still down');
   });
 });
 
-test('retryStuckMediaUploads leaves a healthy approved item untouched, and is a no-op with no mediaUploader', async () => {
+test('syncApprovedContentToGaveta records an error when there is no media file to host', async () => {
   await withTempProject(async (dir) => {
-    await createCentralProject({ projectId: 'retry-stuck-healthy', name: 'Retry Stuck Healthy', handle: '@retrystuckhealthy', approvalEmail: 'a@example.com' }, dir);
-    const batch = await generateContentBatch('retry-stuck-healthy', { days: 1, startDate: '2099-01-01', postTime: '18:00' }, dir);
-    await approveContent('retry-stuck-healthy', batch.items[0].contentId, dir, batch.batchId, {
-      mediaUploader: async () => 'https://i.ibb.co/already-fine.png',
-    });
+    const item = await approvedItem(dir, 'sync-no-media');
 
-    assert.deepEqual(await retryStuckMediaUploads(dir), { retried: [], failed: [] });
+    const result = await syncApprovedContentToGaveta(dir, { ...fakeGaveta({ [item.contentId]: queuedAs(item) }), mediaUploader: async () => null });
 
-    const called = [];
-    const result = await retryStuckMediaUploads(dir, { mediaUploader: async () => called.push(1) });
-    assert.deepEqual(result, { retried: [], failed: [] });
-    assert.equal(called.length, 0);
+    assert.equal(result.failed.length, 1);
+    const [saved] = await listProjectContent('sync-no-media', dir);
+    assert.match(saved.publish.mediaUploadError, /mídia/i);
+  });
+});
+
+test('syncApprovedContentToGaveta pushes an approved post the gaveta never received (the approve push failed)', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-missing', { mediaUploader: async () => 'https://i.ibb.co/ok.png' });
+    const gaveta = fakeGaveta();
+    const uploads = [];
+
+    const result = await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => { uploads.push(1); return 'https://x'; } });
+
+    assert.deepEqual(result.pushed, [item.contentId]);
+    assert.equal(gaveta.pushes[0].data.mediaUrl, 'https://i.ibb.co/ok.png');
+    assert.equal(uploads.length, 0);
+  });
+});
+
+test('syncApprovedContentToGaveta pushes the new time of a post moved after it was queued', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-moved', { mediaUploader: async () => 'https://i.ibb.co/ok.png' });
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item, { scheduledTime: '10:00' }) });
+
+    await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => 'https://x' });
+
+    assert.equal(gaveta.pushes.length, 1);
+    assert.equal(gaveta.pushes[0].data.scheduledTime, '18:00');
+  });
+});
+
+test('syncApprovedContentToGaveta leaves a post already in step alone, and does nothing without the gaveta', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-in-step', { mediaUploader: async () => 'https://i.ibb.co/ok.png' });
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item) });
+
+    assert.deepEqual(await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => 'https://x' }), { pushed: [], failed: [] });
+    assert.equal(gaveta.pushes.length, 0);
+    assert.deepEqual(await syncApprovedContentToGaveta(dir, { mediaUploader: async () => 'https://x' }), { pushed: [], failed: [] });
+  });
+});
+
+test('syncApprovedContentToGaveta keeps the hosted url when the push fails and pushes it on the next sweep', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-push-fails');
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item) });
+    const uploader = async () => 'https://files.catbox.moe/fresh.png';
+
+    const first = await syncApprovedContentToGaveta(dir, { ...gaveta, queueSync: async () => { throw new Error('push rejected'); }, mediaUploader: uploader });
+    assert.equal(first.failed.length, 1);
+    const [saved] = await listProjectContent('sync-push-fails', dir);
+    assert.equal(saved.publish.mediaUrl, 'https://files.catbox.moe/fresh.png');
+
+    const second = await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => { throw new Error('must not re-upload'); } });
+    assert.deepEqual(second.pushed, [item.contentId]);
+    assert.equal(gaveta.pushes[0].data.mediaUrl, 'https://files.catbox.moe/fresh.png');
+  });
+});
+
+test('syncApprovedContentToGaveta brings a failed gaveta publish back to the panel as an alert', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-failed-there', { mediaUploader: async () => 'https://i.ibb.co/ok.png' });
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item, { publish: { realPublished: false, error: 'Nenhum secret META_TOKEN_X configurado.' } }) });
+
+    await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => 'https://x' });
+
+    const [saved] = await listProjectContent('sync-failed-there', dir);
+    assert.equal(saved.publish.error, 'Nenhum secret META_TOKEN_X configurado.');
+    assert.ok((await listSystemAlerts(dir)).some((alert) => alert.type === 'publish_failed' && alert.contentId === item.contentId));
+  });
+});
+
+test('syncApprovedContentToGaveta marks a post published when the gaveta already published it', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-published-there', { mediaUploader: async () => 'https://i.ibb.co/ok.png' });
+    const publish = { realPublished: true, publishedAt: '2099-01-01T22:00:05.000Z', metaMediaId: 'media-9', permalink: null, error: null };
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item, { publish }) });
+
+    await syncApprovedContentToGaveta(dir, { ...gaveta, mediaUploader: async () => 'https://x' });
+
+    assert.equal(gaveta.pushes.length, 0);
+    const [saved] = await listProjectContent('sync-published-there', dir);
+    assert.equal(saved.publish.realPublished, true);
+    assert.equal(saved.publish.metaMediaId, 'media-9');
+  });
+});
+
+test('syncApprovedContentToGaveta skips a slot more than a day past, which no publisher posts anymore', async () => {
+  await withTempProject(async (dir) => {
+    const item = await approvedItem(dir, 'sync-stale', { startDate: '2026-08-10' });
+    const gaveta = fakeGaveta({ [item.contentId]: queuedAs(item) });
+
+    const result = await syncApprovedContentToGaveta(dir, { ...gaveta, now: new Date('2026-08-12T23:00:00'), mediaUploader: async () => 'https://late' });
+
+    assert.deepEqual(result, { pushed: [], failed: [] });
+    assert.equal(gaveta.pushes.length, 0);
+  });
+});
+
+test('syncApprovedContentToGaveta leaves items the gaveta does not publish to their own path', async () => {
+  await withTempProject(async (dir) => {
+    await approvedItem(dir, 'sync-not-gaveta');
+    const gaveta = fakeGaveta();
+
+    const result = await syncApprovedContentToGaveta(dir, { ...gaveta, isGavetaItem: () => false, mediaUploader: async () => 'https://x' });
+
+    assert.deepEqual(result, { pushed: [], failed: [] });
   });
 });
 
@@ -8013,6 +8150,27 @@ test('listSystemAlerts flags an approved item stuck with no mediaUrl after a fai
     const alert = alerts.find((a) => a.type === 'media_upload_failed' && a.projectId === 'falha-upload');
     assert.ok(alert);
     assert.match(alert.message, /não respondeu como imagem/);
+  });
+});
+
+test('listSystemAlerts flags an approved post still unpublished 30 minutes after its time, whatever broke', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'post-atrasado', name: 'Post Atrasado', handle: '@postatrasado', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('post-atrasado', { days: 1, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    await approveContent('post-atrasado', batch.items[0].contentId, dir, batch.batchId);
+    const overdue = async (now) => (await listSystemAlerts(dir, { now: new Date(now) }))
+      .filter((alert) => alert.type === 'publish_overdue' && alert.contentId === batch.items[0].contentId);
+
+    assert.equal((await overdue('2026-07-20T09:20:00')).length, 0);
+    const [alert] = await overdue('2026-07-20T09:45:00');
+    assert.match(alert.message, /09:00 de 20\/07/);
+    assert.equal((await overdue('2026-07-22T10:00:00')).length, 1);
+    assert.equal((await overdue('2026-07-23T10:00:00')).length, 0);
+
+    const raw = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    raw.publish = { ...raw.publish, realPublished: true };
+    await writeFile(batch.items[0].filePath, JSON.stringify(raw));
+    assert.equal((await overdue('2026-07-20T09:45:00')).length, 0);
   });
 });
 

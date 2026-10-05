@@ -38,7 +38,7 @@ import {
   startContentCentralServer,
   startPublishScheduler,
   startWhatsAppPublishScheduler,
-  startStuckMediaRetryScheduler,
+  startGavetaSyncScheduler,
   startSocialSellingRadarScheduler,
   startSocialSellingEngagementScheduler,
   uploadGeneratedImagePublicly,
@@ -3765,6 +3765,44 @@ test('uploadGeneratedImagePublicly keeps using ImgBB when IMGBB_API_KEY is set',
   });
 });
 
+test('uploadGeneratedImagePublicly falls back to Catbox when imgBB refuses the upload', async () => {
+  await withMockedImageUpload(async ({ imagePath }) => {
+    process.env.IMGBB_API_KEY = 'fake-key';
+    globalThis.fetch = async (url) => {
+      if (String(url).startsWith('https://api.imgbb.com/1/upload')) {
+        return new Response(JSON.stringify({ status_code: 400, error: { message: 'Rate limit reached.', code: 100 } }), { status: 400 });
+      }
+      if (String(url) === 'https://catbox.moe/user/api.php') {
+        return new Response('https://files.catbox.moe/abc123.jpg', { status: 200 });
+      }
+      if (String(url) === 'https://files.catbox.moe/abc123.jpg') {
+        return new Response('', { status: 200, headers: { 'content-type': 'image/jpeg' } });
+      }
+      throw new Error(`unexpected fetch call: ${url}`);
+    };
+
+    assert.equal(await uploadGeneratedImagePublicly(imagePath), 'https://files.catbox.moe/abc123.jpg');
+  });
+});
+
+test('uploadGeneratedImagePublicly does not fall back to uguu.se after imgBB, since uguu.se deletes files after 3 hours', async () => {
+  await withMockedImageUpload(async ({ imagePath }) => {
+    process.env.IMGBB_API_KEY = 'fake-key';
+    const calledUrls = [];
+    globalThis.fetch = async (url) => {
+      calledUrls.push(String(url));
+      if (String(url).startsWith('https://api.imgbb.com/1/upload')) {
+        return new Response('{"error":{"message":"Rate limit reached."}}', { status: 400 });
+      }
+      if (String(url) === 'https://catbox.moe/user/api.php') throw new Error('fetch failed');
+      return new Response(JSON.stringify({ success: true, files: [{ url: 'https://d.uguu.se/generated.jpg' }] }), { status: 200 });
+    };
+
+    await assert.rejects(() => uploadGeneratedImagePublicly(imagePath), /imgBB.*Catbox/is);
+    assert.ok(!calledUrls.includes('https://uguu.se/upload'));
+  });
+});
+
 test('uploadGeneratedImagePublicly rejects a hosted URL that does not serve an image', async () => {
   await withMockedImageUpload(async ({ imagePath }) => {
     delete process.env.IMGBB_API_KEY;
@@ -5069,12 +5107,15 @@ test('startWhatsAppPublishScheduler does not double-publish a due item when a sw
     const batchDir = join(paths.draftsDir, 'batch-1');
     await mkdir(batchDir, { recursive: true });
     const contentFilePath = join(batchDir, 'content-1.json');
+    // Due 10 minutes ago: a slot more than a day past is never published.
+    const dueAt = new Date(Date.now() - 10 * 60 * 1000);
+    const pad = (n) => String(n).padStart(2, '0');
     await writeFile(contentFilePath, JSON.stringify({
       contentId: 'content-1',
       channel: 'whatsapp_status',
       status: 'aprovado',
-      scheduledDate: '2020-01-01',
-      scheduledTime: '00:00',
+      scheduledDate: `${dueAt.getFullYear()}-${pad(dueAt.getMonth() + 1)}-${pad(dueAt.getDate())}`,
+      scheduledTime: `${pad(dueAt.getHours())}:${pad(dueAt.getMinutes())}`,
       caption: { text: 'oi' },
       publish: { mediaUrl: 'https://cdn.example.com/x.png' },
       filePath: contentFilePath,
@@ -5111,29 +5152,29 @@ test('startWhatsAppPublishScheduler does not double-publish a due item when a sw
   }
 });
 
-test('startStuckMediaRetryScheduler does not start when OPENSQUAD_ENABLE_REAL_PUBLISHING is not true, even with OPENSQUAD_GAVETA_DIR set', async () => {
+test('startGavetaSyncScheduler does not start when OPENSQUAD_ENABLE_REAL_PUBLISHING is not true, even with OPENSQUAD_GAVETA_DIR set', async () => {
   delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
   process.env.OPENSQUAD_GAVETA_DIR = '/tmp/some-gaveta';
   try {
-    const timer = startStuckMediaRetryScheduler(process.cwd());
+    const timer = startGavetaSyncScheduler(process.cwd());
     assert.equal(timer, null);
   } finally {
     delete process.env.OPENSQUAD_GAVETA_DIR;
   }
 });
 
-test('startStuckMediaRetryScheduler does not start when OPENSQUAD_GAVETA_DIR is unset, even with real publishing enabled', async () => {
+test('startGavetaSyncScheduler does not start when OPENSQUAD_GAVETA_DIR is unset, even with real publishing enabled', async () => {
   process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
   delete process.env.OPENSQUAD_GAVETA_DIR;
   try {
-    const timer = startStuckMediaRetryScheduler(process.cwd());
+    const timer = startGavetaSyncScheduler(process.cwd());
     assert.equal(timer, null);
   } finally {
     delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
   }
 });
 
-test('startStuckMediaRetryScheduler starts when both real publishing and OPENSQUAD_GAVETA_DIR are set', async () => {
+test('startGavetaSyncScheduler starts when both real publishing and OPENSQUAD_GAVETA_DIR are set', async () => {
   process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
   process.env.OPENSQUAD_GAVETA_DIR = '/tmp/some-gaveta';
   // Same safety rule as the other scheduler tests: an isolated temp dir, not
@@ -5141,7 +5182,7 @@ test('startStuckMediaRetryScheduler starts when both real publishing and OPENSQU
   // main OPENSQUAD checkout's live client projects otherwise.
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
   try {
-    const timer = startStuckMediaRetryScheduler(dir);
+    const timer = startGavetaSyncScheduler(dir);
     assert.notEqual(timer, null);
     clearInterval(timer);
   } finally {

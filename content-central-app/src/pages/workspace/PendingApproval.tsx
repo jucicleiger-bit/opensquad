@@ -175,7 +175,7 @@ export function PendingApproval() {
     if (errors.length) {
       setPageFeedback({
         tone: "error",
-        message: `${approvedItems.length} aprovado(s), ${errors.length} com erro. Os que falharam continuam na lista para tentar de novo.`,
+        message: `${approvedItems.length} aprovado(s), ${errors.length} com erro: ${errors.join(" · ")}. Os que falharam continuam na lista para tentar de novo.`,
       });
     } else {
       setPageFeedback({ tone: "ok", message: `${approvedItems.length} post(s) aprovado(s). Eles foram para o Calendário e os de Instagram/Facebook para a gaveta.` });

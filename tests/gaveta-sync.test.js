@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem } from '../src/gaveta-sync.js';
+import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem, syncQueue } from '../src/gaveta-sync.js';
 import { withGaveta } from './helpers/with-gaveta.js';
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +23,55 @@ test('upsertQueueItem writes the item and pushes it to the remote', async () => 
     const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'boss-pizzaria', 'content-1.json'), 'utf-8'));
     assert.equal(raw.caption, 'Promo de hoje');
     assert.equal(raw.publish.realPublished, false);
+  });
+});
+
+// Two approvals clicked together, or one landing during the 5-minute sync,
+// run git in the same clone at once: one hits .git/index.lock and fails.
+test('upsertQueueItem calls made at the same time all reach the remote', async () => {
+  await withGaveta(async ({ workDir, bareDir, checkDir }) => {
+    const ids = ['a', 'b', 'c'];
+    await Promise.all(ids.map((id) => upsertQueueItem(workDir, 'boss-pizzaria', `content-${id}`, {
+      channel: 'instagram_story', caption: id, mediaUrl: null, scheduledDate: '2026-08-10', scheduledTime: '18:00',
+    })));
+
+    await execFileAsync('git', ['clone', bareDir, checkDir]);
+    for (const id of ids) {
+      const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'boss-pizzaria', `content-${id}.json`), 'utf-8'));
+      assert.equal(raw.caption, id);
+    }
+  });
+});
+
+// 2026-10-05, mid bulk-approve: GitHub Actions pushed a publish result
+// between the approve's pull and push, the push was refused and the operator
+// saw "1 com erro". A hook refusing the first push stands in for that race.
+test('upsertQueueItem pulls and pushes again when its push is refused', async () => {
+  await withGaveta(async ({ workDir, bareDir, checkDir }) => {
+    await writeFile(join(bareDir, 'hooks', 'pre-receive'), '#!/bin/sh\nif [ ! -f refused-once ]; then touch refused-once; exit 1; fi\n');
+
+    await upsertQueueItem(workDir, 'boss-pizzaria', 'content-race', { channel: 'instagram_story', caption: 'race', mediaUrl: null, scheduledDate: '2026-08-10', scheduledTime: '18:00' });
+
+    await execFileAsync('git', ['clone', bareDir, checkDir]);
+    const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'boss-pizzaria', 'content-race.json'), 'utf-8'));
+    assert.equal(raw.caption, 'race');
+  });
+});
+
+// The 5-minute sync compares the app with this clone, so a commit whose
+// push failed for good would look in step and never reach GitHub.
+test('syncQueue pushes a commit that an earlier failed push left behind', async () => {
+  await withGaveta(async ({ workDir, bareDir, checkDir }) => {
+    await mkdir(join(workDir, 'queue', 'boss-pizzaria'), { recursive: true });
+    await writeFile(join(workDir, 'queue', 'boss-pizzaria', 'content-left.json'), '{"caption":"left"}');
+    await execFileAsync('git', ['add', '.'], { cwd: workDir });
+    await execFileAsync('git', ['commit', '-m', 'unpushed'], { cwd: workDir });
+
+    await syncQueue(workDir);
+
+    await execFileAsync('git', ['clone', bareDir, checkDir]);
+    const raw = JSON.parse(await readFile(join(checkDir, 'queue', 'boss-pizzaria', 'content-left.json'), 'utf-8'));
+    assert.equal(raw.caption, 'left');
   });
 });
 

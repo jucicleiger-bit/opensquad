@@ -4818,24 +4818,27 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   await writeFile(paths.manualPath, buildManual(project), 'utf-8');
 
   if (typeof options.queueSync === 'function') {
-    await options.queueSync('upsert', {
-      projectId,
-      contentId: content.contentId,
-      data: {
-        channel: content.channel,
-        // Carried so the gaveta sync can skip carousel items — that queue
-        // only knows single-image Meta publishing (see resolveGaveteSync).
-        format: content.format || null,
-        caption: content.caption.text,
-        mediaUrl: content.publish?.mediaUrl || null,
-        scheduledDate: content.scheduledDate,
-        scheduledTime: content.scheduledTime,
-      },
-    });
+    await options.queueSync('upsert', { projectId, contentId: content.contentId, data: gavetaQueueData(content) });
   }
 
   return content;
   });
+}
+
+// What the queue file stores (format only steers the sync, see gavetaQueueData).
+const QUEUE_FIELDS = ['channel', 'caption', 'mediaUrl', 'scheduledDate', 'scheduledTime'];
+
+function gavetaQueueData(content) {
+  return {
+    channel: content.channel,
+    // Carried so the gaveta sync can skip carousel items — that queue
+    // only knows single-image Meta publishing (see resolveGaveteSync).
+    format: content.format || null,
+    caption: content.caption.text,
+    mediaUrl: content.publish?.mediaUrl || null,
+    scheduledDate: content.scheduledDate,
+    scheduledTime: content.scheduledTime,
+  };
 }
 
 function summarizeApprovedLearning(content) {
@@ -4927,6 +4930,7 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
         && !item.migratedToCloud
         && !item.publish?.attemptStartedAt
         && isPublishDue(item, now)
+        && !isPastPublishWindow(item, now)
       )
       .sort((a, b) => {
         const slotOrder = (a.scheduledDate + a.scheduledTime).localeCompare(b.scheduledDate + b.scheduledTime);
@@ -5033,47 +5037,72 @@ export async function applyExternalPublishResult(projectId, contentId, targetDir
   return item;
 }
 
-// Closes the gap runDuePublishSweep leaves open: a mediaUploadError item
-// only gets a fresh upload attempt when its scheduled slot actually comes
-// due, which can be days away, so the operator alert (media_upload_failed)
-// just sits there until either that deadline arrives or someone manually
-// retries from the Calendário. This sweep re-attempts the upload itself on
-// its own (slower) interval, so the alert clears — or the file's genuine
-// brokenness surfaces — well before the deadline instead of on it.
-export async function retryStuckMediaUploads(targetDir = process.cwd(), options = {}) {
-  if (typeof options.mediaUploader !== 'function') return { retried: [], failed: [] };
+// Keeps the gaveta queue in step with what was approved here. The queue is
+// what actually publishes, and each step that fills it can fail on its own:
+// hosting the media at approve time (imgBB rate limit, 2026-10-05) or the git
+// push. Such a post sat out of the queue, or in it with mediaUrl: null, and
+// silently never went out (that day, and King/Boss posts in August). Each
+// sweep re-hosts missing media, re-pushes what is missing or out of date in
+// the queue, and brings the queue's outcome back: a post published there is
+// marked here, and a publish that failed there raises the panel's alert.
+export async function syncApprovedContentToGaveta(targetDir = process.cwd(), options = {}) {
+  const { mediaUploader, queueSync, readQueueItem } = options;
+  if (![mediaUploader, queueSync, readQueueItem].every((fn) => typeof fn === 'function')) return { pushed: [], failed: [] };
+  const isGavetaItem = options.isGavetaItem || (() => true);
   const now = options.now || new Date();
-  const retried = [];
+  const pushed = [];
   const failed = [];
 
-  const projects = await listCentralProjects(targetDir);
-  for (const projectSummary of projects) {
-    const content = await listProjectContent(projectSummary.projectId, targetDir);
-    const stuck = content.filter((item) =>
-      item.status === 'aprovado' && !item.publish?.realPublished && !item.publish?.mediaUrl && item.publish?.mediaUploadError
-    );
-    for (const item of stuck) {
+  for (const project of await listCentralProjects(targetDir)) {
+    for (const item of await listProjectContent(project.projectId, targetDir)) {
+      if (item.status !== 'aprovado' || item.publish?.realPublished || !isGavetaItem(item) || isPastPublishWindow(item, now)) continue;
       try {
-        const mediaUrl = await options.mediaUploader({ content: item, project: projectSummary });
-        item.publish = { ...item.publish, mediaUrl, mediaUploadError: null };
-        item.updatedAt = now.toISOString();
-        await writeJson(item.filePath, item);
-        retried.push(item.contentId);
+        const queued = await readQueueItem(project.projectId, item.contentId);
+        if (queued?.publish?.realPublished) {
+          await applyExternalPublishResult(project.projectId, item.contentId, targetDir, item.batchId, queued.publish);
+          continue;
+        }
+        const before = JSON.stringify(item.publish);
+        if (!item.publish?.mediaUrl) {
+          try {
+            const mediaUrl = await mediaUploader({ content: item, project });
+            if (!mediaUrl) throw new Error('Mídia do post não encontrada para hospedar.');
+            item.publish = { ...item.publish, mediaUrl, mediaUploadError: null };
+          } catch (err) {
+            item.publish = { ...item.publish, mediaUploadError: err.message };
+          }
+        }
+        if (queued?.publish?.error) item.publish = { ...item.publish, error: queued.publish.error };
+        // Saved before the push: a hosted URL whose push fails is pushed by
+        // the next sweep instead of being uploaded again.
+        if (JSON.stringify(item.publish) !== before) {
+          item.updatedAt = now.toISOString();
+          await writeJson(item.filePath, item);
+        }
+        if (!item.publish.mediaUrl) throw new Error(item.publish.mediaUploadError);
+        const data = gavetaQueueData(item);
+        if (!queued || QUEUE_FIELDS.some((key) => queued[key] !== data[key])) {
+          await queueSync('upsert', { projectId: project.projectId, contentId: item.contentId, data });
+          pushed.push(item.contentId);
+        }
       } catch (err) {
-        item.publish = { ...item.publish, mediaUploadError: err.message };
-        item.updatedAt = now.toISOString();
-        await writeJson(item.filePath, item);
         failed.push({ contentId: item.contentId, error: err.message });
       }
     }
   }
-  return { retried, failed };
+  return { pushed, failed };
 }
 
 function isPublishDue(item, now) {
   if (!item.scheduledDate) return false;
   const dueAt = new Date(`${item.scheduledDate}T${item.scheduledTime || '00:00'}:00`);
   return !Number.isNaN(dueAt.getTime()) && dueAt <= now;
+}
+
+// The gaveta publishers (publish-due.js, gaveta-dispatch) never post a slot
+// more than a day past — a two-day-old offer going out is worse than none.
+function isPastPublishWindow(item, now) {
+  return now - new Date(`${item.scheduledDate}T${item.scheduledTime || '00:00'}:00`) > DAY_MS;
 }
 
 // Read-only listing that never creates the projects/secrets/approvals tree
@@ -5224,6 +5253,24 @@ export async function listSystemAlerts(targetDir = process.cwd(), options = {}) 
           message: `Falha ao hospedar a imagem de "${subject}" (${channel}) após aprovar: ${item.publish.mediaUploadError}`,
         });
       }
+
+      // Last line of defence, whatever broke (the dispatcher, GitHub Actions,
+      // a post the gaveta never got): the operator hears of a missed post
+      // before the client does. Failures with a reason have their alerts above.
+      // 30 min covers the dispatch, the Actions run and Meta's retries; 3 days
+      // keeps a miss visible over a weekend without old ones piling up.
+      const late = now - new Date(`${item.scheduledDate}T${item.scheduledTime || '00:00'}:00`);
+      if (item.status === 'aprovado' && !item.publish?.realPublished && !item.publish?.error && !item.publish?.mediaUploadError
+        && !item.migratedToCloud && late > 30 * 60 * 1000 && late <= 3 * DAY_MS) {
+        alerts.push({
+          type: 'publish_overdue',
+          projectId: project.projectId,
+          projectName: project.name,
+          contentId: item.contentId,
+          batchId: item.batchId,
+          message: `"${subject}" (${channel}) estava marcado para ${item.scheduledTime || '00:00'} de ${item.scheduledDate.slice(8, 10)}/${item.scheduledDate.slice(5, 7)} e não foi publicado.`,
+        });
+      }
     }
   }
 
@@ -5270,6 +5317,7 @@ function alertEmailSubject(alert) {
     : alert.type === 'report_ready' ? '📊'
     : '⚠️';
   const topic = alert.type === 'publish_failed' ? 'falha ao publicar'
+    : alert.type === 'publish_overdue' ? 'post não publicado'
     : alert.type === 'media_upload_failed' ? 'falha ao hospedar imagem'
     : alert.type === 'whatsapp_disconnected' ? 'WhatsApp desconectado'
     : alert.type === 'report_ready' ? `relatório de ${monthNamePt(alert.month)} pronto`

@@ -367,7 +367,7 @@ export function Dashboard() {
                     to={`/projects/${alert.projectId}/${
                       alert.type === "report_ready"
                         ? "relatorios"
-                        : alert.type === "publish_failed" || alert.type === "media_upload_failed"
+                        : alert.type === "publish_failed" || alert.type === "publish_overdue" || alert.type === "media_upload_failed"
                           ? "calendario"
                           : "conta"
                     }`}
