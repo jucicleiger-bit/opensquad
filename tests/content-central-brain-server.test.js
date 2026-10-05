@@ -58,8 +58,11 @@ test('a second message while the first runs gets 409', async () => {
     while (!release) await new Promise((resolve) => setTimeout(resolve, 10));
     const second = await call(server, '/api/projects/loja/brain/messages', { text: 'dois' });
     assert.equal(second.status, 409);
+    // A page that opens mid-turn learns the turn is still running.
+    assert.equal((await call(server, '/api/projects/loja/brain')).body.thinking, true);
     release();
     assert.equal((await first).status, 200);
+    assert.equal((await call(server, '/api/projects/loja/brain')).body.thinking, false);
   }, { brainRunner });
 });
 

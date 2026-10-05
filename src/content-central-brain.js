@@ -519,6 +519,10 @@ export function runClaudeTurn({ prompt, sessionId, systemPrompt, cwd, serverUrl 
 
 const busyProjects = new Set();
 
+// The turn keeps running on the server when the operator leaves the tab, so a
+// page that opens mid-turn asks this to keep showing "Pensando…".
+export const isBrainBusy = (projectId) => busyProjects.has(projectId);
+
 export async function sendBrainMessage(projectId, text, targetDir, runner = runClaudeTurn, { serverUrl } = {}) {
   const message = String(text || '').trim();
   if (!message) throw Object.assign(new Error('Mensagem vazia.'), { status: 400 });

@@ -23,7 +23,7 @@ import {
 import { collectAllProjectsMetrics, INSIGHTS_PERMISSION, loadProjectMetrics } from './content-central-metrics.js';
 import { buildMonthlyReport, listReportMonths, renderReportPage } from './content-central-report.js';
 import {
-  buildBrainContext, createProposal, markBrainPlanApproved, readBrainState, requireBrainProject, resolveProposal, runClaudeTurn,
+  buildBrainContext, createProposal, isBrainBusy, markBrainPlanApproved, readBrainState, requireBrainProject, resolveProposal, runClaudeTurn,
   saveBrainPlan, saveNotebook, sendBrainMessage,
 } from './content-central-brain.js';
 import {
@@ -870,7 +870,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
   if (parts[3] === 'brain') {
     try {
       await requireBrainProject(projectId, targetDir);
-      if (method === 'GET' && parts.length === 4) return sendJson(res, 200, await readBrainState(projectId, targetDir));
+      if (method === 'GET' && parts.length === 4) return sendJson(res, 200, { ...await readBrainState(projectId, targetDir), thinking: isBrainBusy(projectId) });
       if (method === 'GET' && parts.length === 5 && parts[4] === 'context') return sendJson(res, 200, { text: await buildBrainContext(projectId, targetDir) });
       if (method === 'POST') {
         const body = await readBody(req);

@@ -87,6 +87,7 @@ export function Brain() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const messagesRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
 
   const load = useCallback(async () => {
     const next = await getBrain(projectId);
@@ -96,8 +97,20 @@ export function Brain() {
   }, [projectId]);
 
   useEffect(() => {
-    load().catch((err) => setError((err as Error).message));
+    // A turn started before the operator left this tab is still running on
+    // the server: show it as thinking and pick the answer up when it lands.
+    load()
+      .then((next) => setThinking(Boolean(next.thinking)))
+      .catch((err) => setError((err as Error).message));
   }, [load]);
+
+  useEffect(() => {
+    if (!thinking || sendingRef.current) return;
+    const timer = setInterval(() => {
+      load().then((next) => setThinking(Boolean(next.thinking))).catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [thinking, load]);
 
   const messageCount = state?.chat.messages.length ?? 0;
   useEffect(() => {
@@ -119,6 +132,7 @@ export function Brain() {
   async function handleSend() {
     const text = draft.trim();
     if (!text || thinking) return;
+    sendingRef.current = true;
     setThinking(true);
     setError(null);
     setNotice(null);
@@ -135,6 +149,7 @@ export function Brain() {
     } catch (err) {
       failure = (err as Error).message;
     }
+    sendingRef.current = false;
     setThinking(false);
     try {
       const next = await load();

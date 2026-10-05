@@ -169,6 +169,22 @@ describe("Brain", () => {
     expect(screen.getByLabelText("Mensagem para o cérebro")).toHaveValue("");
   });
 
+  it("keeps thinking when opened mid-turn and shows the answer when it lands", async () => {
+    let loads = 0;
+    stubApi({
+      "/brain": () => {
+        loads += 1;
+        if (loads < 2) return brain({ thinking: true });
+        return brain({ chat: { sessionId: "s1", messages: [{ role: "assistant", text: "Resposta que chegou depois.", at: "2026-10-03T12:00:00Z" }] } });
+      },
+    });
+    renderBrain();
+
+    expect(await screen.findByRole("button", { name: "Pensando…" })).toBeDisabled();
+    expect(await screen.findByText("Resposta que chegou depois.", {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Enviar" })).toBeInTheDocument();
+  }, 10000);
+
   it("shows why a message was not taken and gives the text back", async () => {
     stubApi({
       "/brain/messages": () => ({ __error: "O cérebro ainda está respondendo." }),

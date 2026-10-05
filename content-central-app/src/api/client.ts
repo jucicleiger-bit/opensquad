@@ -1811,6 +1811,8 @@ export interface BrainState {
   plan: BrainPlan | null;
   proposals: BrainProposal[];
   notebook: string;
+  /** A turn is still running on the server (it outlives the page). */
+  thinking?: boolean;
 }
 
 const brainPath = (projectId: string) => `/api/projects/${encodeURIComponent(projectId)}/brain`;
