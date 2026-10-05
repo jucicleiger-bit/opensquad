@@ -5620,3 +5620,25 @@ test('assets route downloads a sourceUrl, falling back to fallbackSourceUrl', as
     });
   });
 });
+
+test('assets route gives each downloaded photo its own file even when product names differ only by a decimal size', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await withServer(async (dir, server) => {
+    await createCentralProject({ projectId: 'mercado-unico', name: 'Mercado Unico', projectType: 'catalog' }, dir);
+    await withMockedFetch(async () => new Response(png, { headers: { 'content-type': 'image/png' } }), async () => {
+      const save = (filename) => request(server, '/api/projects/mercado-unico/assets', {
+        method: 'POST',
+        body: JSON.stringify({ kind: 'reference', filename, sourceUrl: 'https://img.test/ok.png', role: 'product_photo', scope: 'offer' }),
+      });
+      const first = await save('X 1.5L');
+      const second = await save('X 1.25L');
+      const again = await save('X 1.5L');
+      assert.equal(first.response.status, 201);
+      assert.equal(second.response.status, 201);
+      const ids = [first, second, again].map((saved) => saved.body.asset.metadata.id);
+      const paths = [first, second, again].map((saved) => saved.body.asset.relativePath);
+      assert.equal(new Set(ids).size, 3);
+      assert.equal(new Set(paths).size, 3);
+    });
+  });
+});

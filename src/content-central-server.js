@@ -1,5 +1,6 @@
 import { exec, execFile, spawn } from 'node:child_process';
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { homedir, platform, tmpdir } from 'node:os';
 import { basename, extname, join, normalize, resolve, sep } from 'node:path';
@@ -4289,7 +4290,7 @@ export function extractBingImageResults(html, limit = 4) {
 
 async function searchProductImages(query) {
   const url = `https://www.bing.com/images/search?q=${encodeURIComponent(query)}&setmkt=pt-BR&cc=BR`;
-  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: SITE_FETCH_HEADERS });
+  const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(8000), headers: SITE_FETCH_HEADERS });
   if (!response.ok) throw new Error(`Bing Imagens respondeu com status ${response.status}.`);
   return extractBingImageResults(await response.text());
 }
@@ -4302,8 +4303,9 @@ async function downloadImageAsDataUrl(rawUrl) {
   const response = await fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(20000), headers: SITE_FETCH_HEADERS });
   const mimeType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   if (!response.ok || !mimeType.startsWith('image/')) throw new Error('Esse endereço não devolveu uma imagem.');
-  // ponytail: reads the whole body before checking the size; stream with a
-  // byte counter if huge images ever become a real problem.
+  if (Number(response.headers.get('content-length')) > MAX_SOURCE_IMAGE_BYTES) throw new Error('Foto grande demais (mais de 10 MB).');
+  // ponytail: when content-length is absent or lies, the whole body is read
+  // before the size check; stream with a byte counter if that ever matters.
   const buffer = Buffer.from(await response.arrayBuffer());
   if (buffer.length > MAX_SOURCE_IMAGE_BYTES) throw new Error('Foto grande demais (mais de 10 MB).');
   return { dataUrl: `data:${mimeType};base64,${buffer.toString('base64')}`, mimeType };
@@ -4319,8 +4321,9 @@ async function resolveAssetSourceUrl(body) {
     try {
       const { dataUrl, mimeType } = await downloadImageAsDataUrl(url);
       const extension = mimeType.split('/')[1].split('+')[0].replace('jpeg', 'jpg');
-      const baseName = String(rest.filename || 'produto').replace(/\.[^./\\]+$/, '');
-      return { ...rest, filename: `${baseName}.${extension}`, dataUrl };
+      // The client sends a bare name; the suffix keeps "X 1.5L"/"X 1.25L" (or the
+      // same name twice) from landing on one path, which is also the asset id.
+      return { ...rest, filename: `${rest.filename || 'produto'}-${randomUUID().slice(0, 8)}.${extension}`, dataUrl };
     } catch {
       // Try the next URL (the thumbnail) before giving up.
     }
