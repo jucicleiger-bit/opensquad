@@ -1,4 +1,4 @@
-# Carrossel avulso: tema puxado de oferta/assunto em alta, visual clean, agendar
+# Carrossel avulso: tema de oferta/assunto em alta, visual clean, planejar por mensagem, agendar
 
 Builds on `[[2026-08-26-carrossel-avulso-design]]` and
 `[[2026-08-27-carrossel-automatico-calendar-design]]`.
@@ -23,13 +23,16 @@ Reasons visible in the code:
 
 ## Goal
 
-Three additions to the existing Carrossel tab. Nothing else on the tab changes.
+Four additions to the existing Carrossel tab. Nothing else on the tab changes.
 
 1. Fill the theme from a registered offer/assunto, or from a list of trending
    subjects for the project's segment.
 2. Clean visual as the carousel default.
 3. Schedule a finished carousel for a date and time. It enters the calendar
    already approved and publishes on its own.
+4. Plan before generating. The operator's message returns a slide-by-slide
+   plan, which they adjust by message. Images are generated only once they
+   ask for it (section 4).
 
 ## 1. Theme sources
 
@@ -146,6 +149,88 @@ goes out if the PC is on at the scheduled time. This also applies to
 automatic carousels. Teaching gaveta to publish `CAROUSEL_ALBUM` is the next
 separate step.
 
+## 4. Plan → adjust by message → generate images
+
+Today `POST /carousels` runs the roteiro and every image in one go. The
+operator only sees the roteiro once the images are already paid for, and a
+failed roteiro means delete and start over. The standalone flow becomes three
+steps. The automatic calendar path keeps calling `runCarouselGeneration` in
+one go, unchanged.
+
+**Statuses.** Two new values join `'generating' | 'ready'`:
+`'planning'` (roteiro call running) and `'plan_ready'` (plan shown, no
+images). Existing carousels on disk already hold `generating`/`ready` and
+render exactly as today.
+
+**Plan.** `POST /api/projects/:id/carousels` with `{ briefing, slideCount,
+offerId }` calls `generateCarousel`, which now creates the carousel with
+`status: 'planning'`. The route then fires `enqueueCarouselPlanning` in the
+background instead of `enqueueCarouselGeneration`.
+
+- `enqueueCarouselPlanning` runs the roteiro half of `runCarouselGeneration`,
+  extracted as `applyCarouselOutline`: it calls `outlineGenerator`, then fills
+  `slideText`/`role`/`contentTopic` and sets `format`.
+- It sets `status: 'plan_ready'` and every slide's `image.generating: false`.
+  No image is generated.
+- The panel polls `listCarousels` while the status is `planning`, the same
+  polling that already runs during `generating`.
+
+**Adjust.** `POST /api/projects/:id/carousels-replan/:carouselId` with
+`{ message }`. This is allowed only when the status is `plan_ready`;
+otherwise it returns 409 "O plano só pode ser ajustado antes de gerar as
+imagens."
+
+- Appends `{ text, at }` to a new `planMessages` array and sets
+  `status: 'planning'`.
+- Calls the outline generator in the background with two new optional
+  inputs: `currentPlan` (format plus `[{ role, slideText }]`) and `request`
+  (the message).
+- `buildCarouselOutlinePrompt` gets an "AJUSTE PEDIDO PELO OPERADOR" block
+  when they are present: keep everything the request doesn't touch, change
+  only what was asked, never invent price or data.
+- The slide count may change only if the request asks for it. The new count
+  is the returned length, clamped to `CAROUSEL_SLIDE_COUNT_MIN..MAX`, and
+  slides are rebuilt with `buildCarouselSlideSkeleton`.
+- `writeCarouselOutlineWithHermes` stops requiring `slides.length ===
+  slideCount` on a replan, and accepts any length inside the clamp. A first
+  plan still requires the exact count.
+
+**Replan failure keeps the previous plan.** The previous slides are kept
+untouched, `planError` is set to "Não consegui ajustar o plano, tente de
+novo.", and the status goes back to `plan_ready`. `planError` is cleared on
+the next successful plan or replan.
+
+A failed **first** plan (no previous plan) also lands in `plan_ready`, with
+`planError` set and empty slides. The panel then shows a "Tentar de novo"
+button, which re-runs planning with the same briefing. Delete-and-recreate is
+never required.
+
+**Generate images.** `POST /api/projects/:id/carousels-generate/:carouselId`.
+Allowed only when the status is `plan_ready`, every slide has `slideText`, and
+there is no `planError`; otherwise 409.
+
+- Sets `status: 'generating'` and every slide's `image.generating: true`.
+- Fires the image half of `runCarouselGeneration`, extracted as
+  `generateCarouselSlideImages`: slide 1 first, then the rest with slide 1
+  as the style reference, then `status: 'ready'`.
+
+`runCarouselGeneration` becomes `applyCarouselOutline` followed by
+`generateCarouselSlideImages`, so the batch path behaves exactly as before.
+
+**Panel (`Carousels.tsx`).**
+
+- The form's textarea is labeled "O que você quer neste carrossel?". The
+  offer select and the trending button fill it, as in section 1. The button
+  reads **Planejar**.
+- A `plan_ready` card shows:
+  - the operator's messages, in order
+  - one card per slide (role label plus `slideText`)
+  - the `planError`, when present
+  - a "O que mudar?" textarea with an **Ajustar** button
+  - a **Gerar imagens** button
+- A `planning` card shows "Planejando…" over the previous plan when there is one.
+- `generating`/`ready` cards render as today, plus Agendar (section 3).
+
 ## Testing
 
 Tests go in `tests/content-central.test.js` and
@@ -166,14 +251,27 @@ test.
   path. This reuses the existing carousel publish test setup.
 - Topic-ideas route: returns the ideas list; an AI failure gives a readable
   error, not a 500.
+- Plan: creating a carousel runs the outline only. The status ends at
+  `plan_ready`, slides have text, and the image generator is never called.
+- Replan: the prompt contains the current plan and the request, and
+  `planMessages` grows by one. A requested count change (3 → 6) rebuilds
+  6 slides. A failed replan keeps the previous slides and sets `planError`.
+  Replanning while `generating`/`ready` returns 409.
+- Generate: allowed only from a clean `plan_ready`; images follow the plan's
+  `slideText` and the status ends at `ready`. The batch carousel path still
+  produces the same item as before (the existing tests stay green).
 - Panel: the offer select fills the textarea and sends `offerId`; clicking an
-  idea fills the textarea; Agendar is hidden until the carousel is ready, and
-  then shows the scheduled label.
+  idea fills the textarea; Planejar shows the plan; Ajustar sends the message;
+  Gerar imagens is disabled while `planError` is set; Agendar is hidden until
+  the carousel is ready, and then shows the scheduled label.
 
 ## Out of scope
 
 - gaveta publishing carousels (next step, see Known limit)
 - multi-offer carousel (one product per slide)
 - a Clean/Rico style picker
-- reordering slides, adding/removing slides, or editing slide text
+- reordering slides, or editing slide text directly on the card (adjusting
+  by message covers it)
+- a full chat with the Cérebro about the carousel (the operator chose the
+  quick in-tab adjust)
 - changing the automatic calendar carousel's look or config
