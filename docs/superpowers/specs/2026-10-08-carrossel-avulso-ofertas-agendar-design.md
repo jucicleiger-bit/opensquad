@@ -40,9 +40,9 @@ The form keeps the free-text `briefing` textarea and gains two ways to fill it.
 
 **Puxar de Ofertas e assuntos.** A select lists the project's active entries
 from `normalizeProjectOffers(project.contentStrategy.offers)`, offers and
-assuntos alike. Picking one fills the textarea with
-`carouselBriefingFromContentTopic` applied to that entry (name, objective,
-items). The operator can still edit the text. The request sends `offerId`
+assuntos alike. Picking one fills the textarea with the entry's name and
+items (`name — items`). The price is not put into the text, because it
+reaches the roteiro through `offerId`. The operator can still edit the text. The request sends `offerId`
 along with `briefing` and `slideCount`.
 
 - `generateCarousel` stores `offerId` on the carousel (`schemaVersion` stays 1;
@@ -50,11 +50,16 @@ along with `briefing` and `slideCount`.
 - The offer entry is reread from the project when the slides are built, not
   copied when the carousel is created, so a price edited in Ofertas before
   generation is honored.
-- When `offerId` resolves, `buildCarouselSlideContentTopic` copies these offer
-  fields onto every slide's topic: `offerId`, `offerName`, `price` (via
-  `offerPriceLabel`), `photoReferenceIds`, `productTreatment`.
-  `buildPrimaryAiImageReferences` then attaches those exact product photos,
-  since it treats an explicit `photoReferenceIds` pick as deliberate.
+- When `offerId` resolves, `buildCarouselSlideContentTopic` copies only
+  `offerId`, `photoReferenceIds` and `productTreatment` onto every slide's
+  topic. `buildPrimaryAiImageReferences` then attaches those exact product
+  photos, since it treats an explicit `photoReferenceIds` pick as deliberate.
+- `offerName` and `price` are deliberately not copied.
+  `buildChatGptFinalCardPrompt` turns `offerName` into the "Título exato" and
+  `price` into the exact price of the piece, which would stamp the same title
+  and price on every slide. The name and price reach the slides through the
+  roteiro instead: the outline prompt gets them, and they land in the
+  `slideText` of the slides where they belong (cover/CTA).
 - The slide topic keeps `type: 'institutional'` and `source: 'carousel'`.
   Copying the offer's `type` would turn the slide into an `offer` post type,
   which (a) requires a registered offer template, failing generation for
@@ -298,8 +303,11 @@ button, which re-runs planning with the same briefing. Delete-and-recreate is
 never required.
 
 **Generate images.** `POST /api/projects/:id/carousels-generate/:carouselId`.
-Allowed only when the status is `plan_ready`, every slide has `slideText`, and
-there is no `planError`; otherwise 409.
+Allowed only when the status is `plan_ready` and every slide has `slideText`;
+otherwise 409.
+
+A `planError` left by a failed adjust does not block generation, because the
+previous plan is intact. The `planError` is cleared when generation starts.
 
 - Sets `status: 'generating'` and every slide's `image.generating: true`.
 - Fires the image half of `runCarouselGeneration`, extracted as
@@ -353,12 +361,13 @@ test.
   `planMessages` grows by one. A requested count change (3 → 6) rebuilds
   6 slides. A failed replan keeps the previous slides and sets `planError`.
   Replanning while `generating`/`ready` returns 409.
-- Generate: allowed only from a clean `plan_ready`; images follow the plan's
+- Generate: allowed only from `plan_ready` with a full plan; images follow the plan's
   `slideText` and the status ends at `ready`. The batch carousel path still
   produces the same item as before (the existing tests stay green).
 - Panel: the offer select fills the textarea and sends `offerId`; clicking an
   idea fills the textarea; Planejar shows the plan; Ajustar sends the message;
-  Gerar imagens is disabled while `planError` is set; Agendar is hidden until
+  Gerar imagens appears only when there is a full plan, and "Tentar de novo"
+  appears when there is none; Agendar is hidden until
   the carousel is ready, and then shows the scheduled label.
 
 ## Out of scope
