@@ -51,11 +51,16 @@ along with `briefing` and `slideCount`.
   copied when the carousel is created, so a price edited in Ofertas before
   generation is honored.
 - When `offerId` resolves, `buildCarouselSlideContentTopic` copies these offer
-  fields onto every slide's topic: `offerName`, `price`, `originalPrice`,
-  `priceUnit`, `photoReferenceIds`, `productTreatment`, and `type`
-  (`'offer'` for an offer). This lets `buildImageReferencePayload`/
-  `buildPrimaryAiImageReferences` attach the real product photos, the way
-  they already do for a single offer post.
+  fields onto every slide's topic: `offerId`, `offerName`, `price` (via
+  `offerPriceLabel`), `photoReferenceIds`, `productTreatment`.
+  `buildPrimaryAiImageReferences` then attaches those exact product photos,
+  since it treats an explicit `photoReferenceIds` pick as deliberate.
+- The slide topic keeps `type: 'institutional'` and `source: 'carousel'`.
+  Copying the offer's `type` would turn the slide into an `offer` post type,
+  which (a) requires a registered offer template, failing generation for
+  projects without one (`CREATIVE_TEMPLATE_REQUIRED_POST_TYPES`), and
+  (b) attaches the single-product "Oferta direta" structure, which conflicts
+  with a clean carousel slide.
 - The roteiro prompt (`buildCarouselOutlinePrompt`) also gets the offer's price
   and unit. Price/promise text may only come from what is registered, the
   rule `formatContentTopicLines` already enforces for posts.
@@ -81,12 +86,14 @@ textarea.
 
 ## 2. Clean visual (carousel default)
 
-Every standalone carousel slide topic gets `backgroundStyle: 'simple_brand'`
-and `titleStyle: 'clean'`. These are the same two per-offer switches the
-prompt builder already honors (`buildChatGptFinalCardPrompt`: background lock,
-`LETRA DO TÍTULO`, `vary()` dropping "tipografia"). An offer pulled in by
-`offerId` does not override them, because the carousel's look is a carousel
-decision.
+Every standalone carousel slide topic carries `carouselStyle: 'clean'`.
+`buildCreativeSpec` maps `source === 'carousel' && carouselStyle === 'clean'`
+to `background.style: 'simple_brand'` and `title.style: 'clean'`. Those are
+the same two switches the prompt builder already honors for offers
+(`buildChatGptFinalCardPrompt`: background lock, `LETRA DO TÍTULO`, `vary()`
+dropping "tipografia"). Today `buildCreativeSpec` forces `'elaborate'` and
+`'lettering'` for every non-offer source. An offer pulled in by `offerId`
+does not override this, because the carousel's look is a carousel decision.
 
 A carousel-only `ESTILO CARROSSEL CLEAN` block is added to the prompt when
 `topic.source === 'carousel'`:
@@ -131,17 +138,35 @@ Shared code this touches, and how each stays unchanged for everything else:
   - The existing batch-carousel tests must pass unmodified.
 - **Topic research:** `collectOnlineTopicResearchEvidence` is only called by
   the new route, not changed.
-- **Calendar and publishing:** the only new thing they see is the item
-  `scheduleCarousel` writes, which has the same shape as an automatic carousel
-  item. The publish sweep and gaveta code are not edited.
+- **Calendar and publishing:**
+  - The only new item they see is the one `scheduleCarousel` writes, which has
+    the same shape as an automatic carousel item.
+  - `runDuePublishSweep` gains an optional `itemFilter`. Existing callers
+    pass none and behave exactly as before.
+  - The new `startCarouselPublishScheduler` passes
+    `itemFilter: (item) => item.format === 'carousel'`, so it never sees
+    anything else (see section 3).
+  - gaveta code is not edited.
 
 ## Test environment
 
-All work happens in a git worktree (`.claude/worktrees/carrossel-v2`). It is
-exercised against a bench server on a separate port (3397), never 3333,
-using a copy of a real project with `whatsapp`, `token` and `instagram`
-stripped and `content/` emptied, so nothing can publish. The same bench
-pattern was used for flavors and the Cérebro.
+All work happens in a git worktree (`.claude/worktrees/carrossel-v2`, branch
+`worktree-carrossel-v2`). It is served from the worktree on port 3397
+(`node bin/opensquad.js content serve 3397`), never 3333. This is the same
+bench pattern used for flavors (3399) and the Cérebro (3398).
+
+The worktree's own `_opensquad/content-central/` holds:
+
+- copies of the projects' `project.json`, `assets/` and `memory/`
+- the central `assets/` and the segment learnings/templates
+
+It deliberately leaves out `secrets/`, `approvals/` and each project's
+`content/`, and strips `whatsapp`, `token` and `instagram` from the copied
+`project.json`.
+
+The worktree's `.env` holds only `OPENSQUAD_IMAGE_PROVIDER` and `TZ`. With no
+`OPENSQUAD_ENABLE_REAL_PUBLISHING`, no gaveta dir, no Supabase and no WAHA,
+no publish, sync or cloud sweep can start.
 
 The bench uses two copies:
 
@@ -171,29 +196,49 @@ carouselId, { date, time, caption })`, under `withProjectLock`, which:
 - creates a one-off batch dir `drafts/<date>-carrossel-<token>/`, using the
   same token pattern as `generateFlyerContent` (`Date.now()` plus a counter),
   so two carousels on the same day never collide
-- copies every slide image file into that batch's `images/` directory and
-  points each slide's image path there, so deleting the standalone carousel
-  later never breaks the scheduled post
 - writes one item in the same shape as an automatic carousel item:
   `format: 'carousel'`, `channel: 'instagram_feed'`, `slides`, `carouselFormat`,
   `scheduledDate`, `scheduledTime`, `caption`, and `status: 'aprovado'` with
-  approval stamped as approved by the operator
-- records `scheduled: { contentId, batchId, date, time }` on the standalone
-  carousel, so its card shows "Agendado para dd/mm hh:mm". Scheduling again
-  creates a second post, which is allowed: the same carousel on two dates.
+  `approval.approvedAt` set and `approvalSource: 'carousel_scheduled'`
+- deep-copies the slides with `structuredClone`. Slide images already live in
+  the project's generated-assets folder, and `deleteCarousel` removes only the
+  carousel's JSON, so deleting the standalone carousel later never breaks the
+  scheduled post. No file is copied.
+- appends `{ contentId, batchId, date, time }` to a `schedules` array on the
+  standalone carousel, so its card shows "Agendado para dd/mm hh:mm".
+  Scheduling again creates another post, which is allowed: the same carousel
+  on two dates.
 
-Publishing needs no new code. `runDuePublishSweep` already picks up approved,
-due items, and `publishContentToInstagram` already branches to
-`publishCarouselToInstagram` for `format === 'carousel'`.
+**Publishing (new carousel-only sweep).** Production runs with
+`OPENSQUAD_AUTO_PUBLISH_SCHEDULER=false`, so the PC's general Instagram sweep
+is off and gaveta publishes everything. gaveta skips carousels on purpose
+(`isGavetaItem`, `content-central-server.js:5638`: "carousels by hand"), so
+today an approved carousel only goes out through "Publicar agora".
+
+A new `startCarouselPublishScheduler(targetDir)` runs `runDuePublishSweep`
+with `itemFilter: (item) => item.format === 'carousel'` and the existing
+`publishContentToInstagram`, which already branches to
+`publishCarouselToInstagram`. It shares `OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS`
+(default 3 min) and the same overlap guard (`running`) as the other sweeps.
+
+It starts only when both hold:
+
+- `OPENSQUAD_ENABLE_REAL_PUBLISHING === 'true'`
+- `OPENSQUAD_AUTO_PUBLISH_SCHEDULER === 'false'`
+
+The second condition means the general sweep is off, so a carousel can never
+be picked up by two sweeps and posted twice.
+
+This covers automatic calendar carousels once approved, too. None exist
+today. The PC must be on at the scheduled time.
 
 Validation: `date` must match `YYYY-MM-DD` and `time` must match `HH:MM`. The
 carousel must be ready with no failed slide; otherwise the error is
 "Gere todos os slides antes de agendar."
 
-**Known limit (accepted 2026-10-08):** the gaveta cloud publisher skips
-carousel items (`content-central-server.js:180`), so a scheduled carousel only
-goes out if the PC is on at the scheduled time. This also applies to
-automatic carousels. Teaching gaveta to publish `CAROUSEL_ALBUM` is the next
+**Known limit (accepted 2026-10-08):** carousels publish from the PC sweep
+above, not from gaveta, so a scheduled carousel only goes out if the PC is on
+at the scheduled time. Teaching gaveta to publish `CAROUSEL_ALBUM` is the next
 separate step.
 
 ## 4. Plan → adjust by message → generate images
@@ -294,8 +339,12 @@ test.
   generator is never called). It refuses a carousel with a failed or missing
   slide. Two schedules of the same carousel on the same day produce two
   distinct items.
-- `runDuePublishSweep` publishes the scheduled item through the carousel
-  path. This reuses the existing carousel publish test setup.
+- `runDuePublishSweep` with
+  `itemFilter: (item) => item.format === 'carousel'` publishes the scheduled
+  carousel and leaves a due single-image item in the same project alone.
+  Without `itemFilter` it behaves exactly as before.
+- `startCarouselPublishScheduler` returns `null` unless real publishing is on
+  and the general scheduler is off.
 - Topic-ideas route: returns the ideas list; an AI failure gives a readable
   error, not a 500.
 - Plan: creating a carousel runs the outline only. The status ends at
