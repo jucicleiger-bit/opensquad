@@ -98,12 +98,59 @@ A carousel-only `ESTILO CARROSSEL CLEAN` block is added to the prompt when
 - when a product photo is attached, it is the visual focus, clean cutout, no
   collage
 
-The roteiro prompt asks for short slide text: a title of about 8 words or
-fewer and at most one support line. This also fixes the dense slides from
+The roteiro prompt asks for short slide text when `carouselStyle === 'clean'`:
+a title of about 8 words or fewer and at most one support line. This also fixes the dense slides from
 the 27/08 feedback.
 
 Scope: only the standalone tab gets this. The automatic calendar carousel
 keeps its current look until it is decided separately.
+
+`buildCarouselSlideContentTopic`, `buildCarouselOutlinePrompt` and
+`buildChatGptFinalCardPrompt`'s `source === 'carousel'` branch are shared with
+the automatic calendar carousel. Every change in this section is therefore
+gated on an explicit `carouselStyle: 'clean'` value:
+
+- only the standalone path (`generateCarousel`) passes `carouselStyle: 'clean'`
+- the batch path passes nothing, so its prompts stay byte-for-byte what they
+  are today
+
+A test asserts that the batch carousel prompt is unchanged.
+
+## Isolation (other features untouched)
+
+Shared code this touches, and how each stays unchanged for everything else:
+
+- **Single-image posts, flyer, ad creatives, stories, WhatsApp:** no code path
+  changes. The prompt additions sit inside the existing
+  `topic.source === 'carousel'` branch, behind `carouselStyle`.
+- **Automatic calendar carousel:**
+  - `runCarouselGeneration` is split into `applyCarouselOutline` and
+    `generateCarouselSlideImages` with identical behavior.
+  - The outline prompt's new blocks (short text, replan) appear only when
+    `carouselStyle`/`currentPlan` are passed.
+  - The existing batch-carousel tests must pass unmodified.
+- **Topic research:** `collectOnlineTopicResearchEvidence` is only called by
+  the new route, not changed.
+- **Calendar and publishing:** the only new thing they see is the item
+  `scheduleCarousel` writes, which has the same shape as an automatic carousel
+  item. The publish sweep and gaveta code are not edited.
+
+## Test environment
+
+All work happens in a git worktree (`.claude/worktrees/carrossel-v2`). It is
+exercised against a bench server on a separate port (3397), never 3333,
+using a copy of a real project with `whatsapp`, `token` and `instagram`
+stripped and `content/` emptied, so nothing can publish. The same bench
+pattern was used for flavors and the Cérebro.
+
+The bench uses two copies:
+
+- **mercado-carvalho:** offers with product photos
+- **king-assessoria-mkt:** a service broken into one big subject
+
+Production (3333) and master are touched only after the operator approves the
+result on the bench and says to merge. After a merge, the app is rebuilt and
+3333 restarted together.
 
 ## 3. Schedule (Agendar)
 
