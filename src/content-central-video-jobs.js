@@ -3,7 +3,7 @@
 // renders the MP4 (stage 3). One job at a time: Claude, Whisper and the
 // renderer all compete for the same CPU.
 import { spawn } from 'node:child_process';
-import { copyFile, writeFile, rm, cp } from 'node:fs/promises';
+import { copyFile, writeFile, rm, cp, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,7 +13,9 @@ import {
 } from './content-central-video.js';
 
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
+const MOTOR_PROMPT = MOTOR_DIR.replaceAll('\\', '/').replace(/\/+$/, ''); // Git Bash loses backslashes
 const CLAUDE_TIMEOUT_MS = 45 * 60 * 1000;
+const CLOCK_SLACK_MS = 2000; // coarse filesystem timestamps
 
 export const DIRECOES = {
   criador: 'Leia em português do Brasil, como um criador de conteúdo de Instagram: animado, sorrindo, ritmo rápido, com energia e variação de entonação, dando ênfase nas palavras importantes. Leia exatamente o texto abaixo, sem acrescentar nada:',
@@ -24,19 +26,28 @@ export function isUsageLimit(text) {
   return /usage limit|hit your limit|limit reached|limite de uso/i.test(String(text || ''));
 }
 
+// Killing only claude.exe would leave its Bash children (Chromium, python,
+// ffmpeg) running, so on Windows the whole tree goes.
+function killTree(child) {
+  if (process.platform === 'win32' && child.pid) {
+    spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => {});
+  } else child.kill();
+}
+
 // Same shape as runClaudeTurn (content-central-brain.js): prompt on stdin
 // (Windows command-line limit), project settings only (no personal plugins
 // or hooks restyling the work), JSON result. Here Claude edits files and
 // runs the motor, so it gets file tools and Bash.
-export function runClaudeCode({ prompt, cwd, addDirs = [], timeoutMs = CLAUDE_TIMEOUT_MS }) {
-  const args = ['-p', '--output-format', 'json', '--setting-sources', 'project', '--model', 'opus',
+// `bin`/`args` exist only so tests can run a stand-in process.
+export function runClaudeCode({ prompt, cwd, addDirs = [], timeoutMs = CLAUDE_TIMEOUT_MS, bin = process.env.CLAUDE_BIN || 'claude', args: argsOverride }) {
+  const args = argsOverride || ['-p', '--output-format', 'json', '--setting-sources', 'project', '--model', 'opus',
     '--permission-mode', 'bypassPermissions', '--tools', 'Read,Write,Edit,Bash,Glob,Grep',
     ...addDirs.flatMap((d) => ['--add-dir', d])];
   return new Promise((resolve, reject) => {
-    const child = spawn(process.env.CLAUDE_BIN || 'claude', args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(bin, args, { cwd, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => { child.kill(); reject(new Error('O Claude Code passou de 45 minutos e foi interrompido.')); }, timeoutMs);
+    const timer = setTimeout(() => { killTree(child); reject(new Error('O Claude Code passou de 45 minutos e foi interrompido.')); }, timeoutMs);
     child.stdout.on('data', (c) => { stdout += c; });
     child.stderr.on('data', (c) => { stderr += c; });
     child.on('error', (err) => { clearTimeout(timer); reject(new Error(`Não consegui abrir o Claude Code: ${err.message}`)); });
@@ -60,6 +71,9 @@ const defaultRenderer = async (opts) => (await import('./video-motor/render.mjs'
 async function prepareFolder(project, video, dir, targetDir) {
   const settings = normalizeVideoAnimado(project.videoAnimado);
   const marca = buildMarca(project, settings);
+  const logo = project.brand?.logoPath ? join(getCentralPaths(targetDir, project.projectId).projectDir, project.brand.logoPath) : null;
+  const temLogo = Boolean(logo && existsSync(logo));
+  if (!temLogo) marca.logo = '';
   await writeJson(join(dir, 'briefing.json'), video.briefing);
   await writeJson(join(dir, 'marca.json'), {
     marca,
@@ -67,11 +81,10 @@ async function prepareFolder(project, video, dir, targetDir) {
     empresa: project.companyProfile || {},
   });
   await writeJson(join(dir, 'material.json'), await buildMaterialInventory(settings.projetosDeMaterial, targetDir));
-  const logo = project.brand?.logoPath ? join(getCentralPaths(targetDir, project.projectId).projectDir, project.brand.logoPath) : null;
-  if (logo && existsSync(logo)) await copyFile(logo, join(dir, 'fotos', 'logo.png'));
+  if (temLogo) await copyFile(logo, join(dir, 'fotos', 'logo.png'));
   await copyFile(join(MOTOR_DIR, 'REGRAS.md'), join(dir, 'REGRAS.md'));
   await cp(join(MOTOR_DIR, 'exemplos'), join(dir, 'exemplos'), { recursive: true });
-  return { marca, settings };
+  return { marca, settings, temLogo };
 }
 
 async function writeAjuste(dir, ajuste) {
@@ -80,48 +93,77 @@ async function writeAjuste(dir, ajuste) {
   else await rm(path, { force: true });
 }
 
-function stagePrompt(nome, video) {
+const LEGENDA_TEXTO = {
+  sem: 'Legendas na tela: nenhuma (o roteiro fica com "legendas": false).',
+  'do-video': 'Legendas na tela: as falas do próprio vídeo.',
+};
+
+function stagePrompt(nome, video, temLogo) {
   const b = video.briefing;
   return [
-    `Leia e siga ${join(MOTOR_DIR, nome)}. Onde ele diz <MOTOR>, use: ${MOTOR_DIR}`,
+    `Leia e siga ${MOTOR_PROMPT}/${nome}. Onde ele diz <MOTOR>, use: ${MOTOR_PROMPT}`,
     `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${b.duracao}s.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
+    LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
+    temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
   ].join('\n');
 }
+
+// Brand, voice and caption come from the briefing, never from the model.
+function forcarRoteiro(roteiro, briefing, marca) {
+  roteiro.marca = marca;
+  roteiro.voz = 'gemini:Puck';
+  roteiro.velocidade = '+6%';
+  roteiro.direcao = DIRECOES[briefing.tom];
+  roteiro.objetivo = briefing.objetivo;
+  delete roteiro.legenda;
+  delete roteiro.legendas;
+  if (briefing.legenda === 'sem') roteiro.legendas = false;
+  else if (briefing.legenda !== 'do-video') roteiro.legenda = briefing.legenda;
+  return roteiro;
+}
+
+// Stale files from a previous run must not pass as this run's output.
+async function escritoDepois(path, inicio) {
+  try { return (await stat(path)).mtimeMs >= inicio - CLOCK_SLACK_MS; } catch { return false; }
+}
+
+const falas = (roteiro) => JSON.stringify((roteiro?.cenas || []).map((c) => [c.tipo, c.fala]));
 
 export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer }) {
   const queue = [];
   const busy = new Set();
   let running = null;
 
-  async function etapaRoteiro(projectId, video, dir, { ajuste }) {
+  async function etapaRoteiro(projectId, video, dir, { ajuste, inicio }) {
     const project = await requireVideoProject(projectId, targetDir);
-    const { marca, settings } = await prepareFolder(project, video, dir, targetDir);
+    const { marca, settings, temLogo } = await prepareFolder(project, video, dir, targetDir);
     await writeAjuste(dir, ajuste);
     const addDirs = [MOTOR_DIR, ...settings.projetosDeMaterial.map((id) => getCentralPaths(targetDir, id).assetsDir)];
-    await runner({ prompt: `# Etapa 1\n${stagePrompt('PEDIDO-roteiro.md', video)}`, cwd: dir, addDirs });
+    await runner({ prompt: `# Etapa 1
+${stagePrompt('PEDIDO-roteiro.md', video, temLogo)}`, cwd: dir, addDirs });
+    if (!await escritoDepois(join(dir, 'roteiro.json'), inicio)) throw new Error('O Claude não escreveu o roteiro.json.');
     const roteiro = await readJson(join(dir, 'roteiro.json'), null);
     if (!roteiro) throw new Error('O Claude não escreveu o roteiro.json.');
-    // Brand, voice and caption come from the briefing, never from the model.
-    roteiro.marca = marca;
-    roteiro.voz = 'gemini:Puck';
-    roteiro.velocidade = '+6%';
-    roteiro.direcao = DIRECOES[video.briefing.tom];
-    roteiro.objetivo = video.briefing.objetivo;
-    delete roteiro.legenda;
-    delete roteiro.legendas;
-    if (video.briefing.legenda === 'sem') roteiro.legendas = false;
-    else if (video.briefing.legenda !== 'do-video') roteiro.legenda = video.briefing.legenda;
+    forcarRoteiro(roteiro, video.briefing, marca);
     const { erros } = validateRoteiro(roteiro, video.briefing);
     if (erros.length) throw new Error(erros.join(' '));
     await writeJson(join(dir, 'roteiro.json'), roteiro);
     return STATUS.ROTEIRO_PRONTO;
   }
 
-  async function etapaProducao(projectId, video, dir, { ajuste }) {
+  async function etapaProducao(projectId, video, dir, { ajuste, inicio }) {
+    const aprovado = await readJson(join(dir, 'roteiro.json'), null);
+    if (!aprovado) throw new Error('Não há roteiro aprovado para produzir.');
     await writeAjuste(dir, ajuste);
-    await runner({ prompt: `# Etapa 2\n${stagePrompt('PEDIDO-producao.md', video)}`, cwd: dir, addDirs: [MOTOR_DIR] });
-    for (const f of ['cenas.js', 'voz/tempos.json']) if (!existsSync(join(dir, f))) throw new Error(`A produção não gerou ${f}.`);
-    // Mechanical check: the scenes draw at every scene start without errors.
+    const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
+    await runner({ prompt: `# Etapa 2
+${stagePrompt('PEDIDO-producao.md', video, temLogo)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+    for (const f of ['cenas.js', 'voz/tempos.json']) if (!await escritoDepois(join(dir, f), inicio)) throw new Error(`A produção não gerou ${f}.`);
+    // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
+    const atual = await readJson(join(dir, 'roteiro.json'), null);
+    if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');
+    await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca));
+    // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
     const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
     const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
     await renderer({ videoDir: dir, stills: marcas });
@@ -141,10 +183,11 @@ export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = 
     if (!job) return;
     running = job;
     const { projectId, videoId, etapa, opts } = job;
+    const inicio = Date.now();
     try {
       const video = await readVideo(projectId, videoId, targetDir);
       const dir = videoDir(targetDir, projectId, videoId);
-      const status = await ETAPAS[etapa](projectId, video, dir, opts);
+      const status = await ETAPAS[etapa](projectId, video, dir, { ...opts, inicio });
       await updateVideo(projectId, videoId, { status }, targetDir);
     } catch (err) {
       await updateVideo(projectId, videoId, { status: err.limite ? STATUS.AGUARDANDO_LIMITE : STATUS.ERRO, erro: String(err.message || err).slice(0, 800), etapaComErro: etapa }, targetDir).catch(() => {});

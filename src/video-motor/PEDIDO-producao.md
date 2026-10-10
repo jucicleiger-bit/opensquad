@@ -8,4 +8,6 @@ O `roteiro.json` desta pasta foi aprovado pelo operador. Não mude as falas nem 
 4. Confira: `node <MOTOR>/render.mjs . --stills 0.05,<vários instantes>` e olhe as imagens em `stills/`. Compare com as regras de qualidade 1 a 10 e corrija o `cenas.js` até todas valerem.
 5. Escreva `legenda-post.txt` (legenda do post para o Instagram, com 3 a 6 hashtags) e atualize `NOTAS.md` (conceito, o que você conferiu, qualquer limitação).
 
+Só escreva nesta pasta; não altere nada em `<MOTOR>` (player, render, regras, exemplos). Se aprender uma lição nova, anote no `NOTAS.md` deste vídeo. Não edite `roteiro.json` (as falas, a ordem e a voz são fixas).
+
 Não rode o render completo. Se houver `ajuste.txt`, ele traz o pedido de ajuste do operador sobre a prévia atual: aplique-o.
