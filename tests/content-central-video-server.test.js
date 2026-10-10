@@ -1,0 +1,116 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { startContentCentralServer } from '../src/content-central-server.js';
+import { createCentralProject, getCentralPaths } from '../src/content-central.js';
+import { STATUS, updateVideo, videoDir } from '../src/content-central-video.js';
+
+const realFetch = globalThis.fetch;
+const briefing = { assunto: 'Bio', objetivo: 'alcance', duracao: 15, tom: 'criador', legenda: 'pop' };
+
+async function withServer(fn, { ativo = true, busy = false } = {}) {
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-video-server-'));
+  await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+  const path = getCentralPaths(dir, 'king').projectPath;
+  const project = JSON.parse(await readFile(path, 'utf8'));
+  project.videoAnimado = { ativo, projetosDeMaterial: [] };
+  await writeFile(path, JSON.stringify(project));
+  const enqueued = [];
+  const videoJobs = { enqueue: async (...args) => { enqueued.push(args); }, isBusy: () => busy, idle: async () => {} };
+  const server = await startContentCentralServer({ targetDir: dir, port: 0, openBrowser: false, videoJobs });
+  try { return await fn(dir, server, enqueued); } finally {
+    await server.close();
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  }
+}
+
+async function call(server, path, body) {
+  const res = await realFetch(`${server.url}${path}`, body === undefined ? {} : { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const text = await res.text();
+  return { status: res.status, body: text.startsWith('{') ? JSON.parse(text) : text, headers: res.headers };
+}
+
+test('video routes are 404 when the project does not have the feature', async () => {
+  await withServer(async (_dir, server) => {
+    assert.equal((await call(server, '/api/projects/king/videos')).status, 404);
+    assert.equal((await call(server, '/api/projects/king/videos', briefing)).status, 404);
+  }, { ativo: false });
+});
+
+test('creating a video queues stage 1 and the list shows it; the summary carries videoAnimado', async () => {
+  await withServer(async (_dir, server, enqueued) => {
+    const created = await call(server, '/api/projects/king/videos', briefing);
+    assert.equal(created.status, 201);
+    assert.deepEqual(enqueued, [['king', created.body.video.id, 'roteiro', {}]]);
+    const list = await call(server, '/api/projects/king/videos');
+    assert.equal(list.body.videos.length, 1);
+    const state = await call(server, '/api/state');
+    assert.equal(state.body.projects.find((p) => p.projectId === 'king').videoAnimado.ativo, true);
+    assert.equal((await call(server, '/api/projects/king/videos', { ...briefing, duracao: 7 })).status, 400);
+  });
+});
+
+test('approve, adjust and resume move the status and queue the right stage', async () => {
+  await withServer(async (dir, server, enqueued) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    assert.equal((await call(server, `/api/projects/king/videos/${id}/aprovar-roteiro`, {})).status, 409);
+    await updateVideo('king', id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    await writeFile(join(videoDir(dir, 'king', id), 'roteiro.json'), JSON.stringify({ cenas: [{ tipo: 'a', fala: 'Oi?', descricao: 'x' }] }));
+    const saved = await call(server, `/api/projects/king/videos/${id}/roteiro`, { cenas: [{ tipo: 'a', fala: 'Olá, tudo bem?', descricao: 'x' }] });
+    assert.equal(saved.body.roteiro.cenas[0].fala, 'Olá, tudo bem?');
+    const adj = await call(server, `/api/projects/king/videos/${id}/ajuste`, { etapa: 'roteiro', pedido: 'mais curto' });
+    assert.equal(adj.body.video.status, STATUS.ROTEIRO_GERANDO);
+    assert.deepEqual(enqueued.at(-1), ['king', id, 'roteiro', { ajuste: 'mais curto' }]);
+    await updateVideo('king', id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const ap = await call(server, `/api/projects/king/videos/${id}/aprovar-roteiro`, {});
+    assert.equal(ap.body.video.status, STATUS.PRODUCAO_GERANDO);
+    assert.deepEqual(enqueued.at(-1), ['king', id, 'producao', {}]);
+    await updateVideo('king', id, { status: STATUS.PREVIA_PRONTA }, dir);
+    const ok = await call(server, `/api/projects/king/videos/${id}/aprovar-previa`, {});
+    assert.equal(ok.body.video.status, STATUS.RENDER_GERANDO);
+    await updateVideo('king', id, { status: STATUS.ERRO, etapaComErro: 'render' }, dir);
+    const again = await call(server, `/api/projects/king/videos/${id}/retomar`, {});
+    assert.equal(again.body.video.status, STATUS.RENDER_GERANDO);
+    assert.deepEqual(enqueued.at(-1), ['king', id, 'render', {}]);
+  });
+});
+
+test('a video that is already queued or running is refused with 409 and not re-queued', async () => {
+  await withServer(async (dir, server, enqueued) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    const before = enqueued.length;
+    await updateVideo('king', id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const ap = await call(server, `/api/projects/king/videos/${id}/aprovar-roteiro`, {});
+    assert.equal(ap.status, 409);
+    assert.equal(ap.body.error, 'O vídeo já está sendo gerado.');
+    await updateVideo('king', id, { status: STATUS.ERRO, etapaComErro: 'producao' }, dir);
+    assert.equal((await call(server, `/api/projects/king/videos/${id}/retomar`, {})).status, 409);
+    assert.equal(enqueued.length, before);
+    assert.equal((await readVideoStatus(dir, id)), STATUS.ERRO);
+  }, { busy: true });
+});
+
+async function readVideoStatus(dir, id) {
+  return JSON.parse(await readFile(join(videoDir(dir, 'king', id), 'video.json'), 'utf8')).status;
+}
+
+test('files are served from a whitelist, the MP4 honours Range', async () => {
+  await withServer(async (dir, server) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const vdir = videoDir(dir, 'king', body.video.id);
+    await writeFile(join(vdir, 'video.mp4'), Buffer.from('0123456789'));
+    await mkdir(join(vdir, 'stills'), { recursive: true });
+    await writeFile(join(vdir, 'stills', 't0.05.jpg'), 'jpg');
+    const base = `${server.url}/api/projects/king/videos/${body.video.id}/arquivo`;
+    const ranged = await realFetch(`${base}/video.mp4`, { headers: { range: 'bytes=2-5' } });
+    assert.equal(ranged.status, 206);
+    assert.equal(await ranged.text(), '2345');
+    assert.equal((await realFetch(`${base}/stills/t0.05.jpg`)).status, 200);
+    assert.equal((await realFetch(`${base}/video.json`)).status, 404);
+    assert.equal((await realFetch(`${base}/..%2F..%2Fproject.json`)).status, 404);
+  });
+});
