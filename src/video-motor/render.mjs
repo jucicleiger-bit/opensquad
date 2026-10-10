@@ -102,15 +102,26 @@ export async function renderVideo({ videoDir, stills = null, legenda = null, tre
       '-filter_complex', mix, '-map', '0:v', '-map', '[a]',
       '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-movflags', '+faststart', '-t', String(length), out], { stdio: ['pipe', 'ignore', 'pipe'] });
     let ffErr = '';
+    let exited = false;
     ff.stderr.on('data', (c) => { ffErr += c; });
-    const closed = new Promise((ok) => ff.on('close', ok));
-    for (let f = 0; f < Math.ceil(length * FPS); f += 1) {
-      const buf = await shot(t0 + f / FPS);
-      if (!ff.stdin.write(buf)) await new Promise((ok) => ff.stdin.once('drain', ok));
+    ff.stdin.on('error', () => {}); // EPIPE when ffmpeg dies early: reported through the exit code below
+    const closed = new Promise((ok, fail) => {
+      ff.on('error', (err) => { exited = true; fail(new Error(`ffmpeg falhou: ${err.message}`)); });
+      ff.on('close', (code) => { exited = true; ok(code); });
+    });
+    closed.catch(() => {}); // rejection is awaited below; avoid an unhandled one while frames render
+    try {
+      for (let f = 0; f < Math.ceil(length * FPS) && !exited; f += 1) {
+        const buf = await shot(t0 + f / FPS);
+        if (exited) break;
+        if (!ff.stdin.write(buf)) await Promise.race([new Promise((ok) => ff.stdin.once('drain', ok)), closed.catch(() => {})]);
+      }
+      ff.stdin.end();
+      const code = await closed;
+      if (code !== 0) throw new Error(`ffmpeg falhou: ${ffErr.slice(-400)}`);
+    } finally {
+      if (!exited) ff.kill();
     }
-    ff.stdin.end();
-    const code = await closed;
-    if (code !== 0) throw new Error(`ffmpeg falhou: ${ffErr.slice(-400)}`);
     return { duration, out };
   } finally {
     await browser.close();
