@@ -94,6 +94,23 @@ test('a video that is already queued or running is refused with 409 and not re-q
   }, { busy: true });
 });
 
+test('two concurrent approvals queue the stage once; delete and roteiro save are refused while busy', async () => {
+  await withServer(async (dir, server, enqueued) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    await updateVideo('king', id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const before = enqueued.length;
+    const [a, b] = await Promise.all([1, 2].map(() => call(server, `/api/projects/king/videos/${id}/aprovar-roteiro`, {})));
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    assert.equal(enqueued.length, before + 1);
+  });
+  await withServer(async (_dir, server) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    assert.equal((await call(server, `/api/projects/king/videos/${body.video.id}/excluir`, {})).status, 409);
+    assert.equal((await call(server, `/api/projects/king/videos/${body.video.id}/roteiro`, { cenas: [] })).status, 409);
+  }, { busy: true });
+});
+
 async function readVideoStatus(dir, id) {
   return JSON.parse(await readFile(join(videoDir(dir, 'king', id), 'video.json'), 'utf8')).status;
 }
@@ -109,6 +126,18 @@ test('files are served from a whitelist, the MP4 honours Range', async () => {
     const ranged = await realFetch(`${base}/video.mp4`, { headers: { range: 'bytes=2-5' } });
     assert.equal(ranged.status, 206);
     assert.equal(await ranged.text(), '2345');
+    const open = await realFetch(`${base}/video.mp4`, { headers: { range: 'bytes=2-' } });
+    assert.equal(open.status, 206);
+    assert.equal(await open.text(), '23456789');
+    const suffix = await realFetch(`${base}/video.mp4`, { headers: { range: 'bytes=-3' } });
+    assert.equal(suffix.status, 206);
+    assert.equal(suffix.headers.get('content-range'), 'bytes 7-9/10');
+    assert.equal(await suffix.text(), '789');
+    const past = await realFetch(`${base}/video.mp4`, { headers: { range: 'bytes=50-60' } });
+    assert.equal(past.status, 416);
+    assert.equal(past.headers.get('content-range'), 'bytes */10');
+    await writeFile(join(vdir, 'trecho.mp4'), '');
+    assert.equal((await realFetch(`${base}/trecho.mp4`, { headers: { range: 'bytes=0-5' } })).status, 416);
     assert.equal((await realFetch(`${base}/stills/t0.05.jpg`)).status, 200);
     assert.equal((await realFetch(`${base}/video.json`)).status, 404);
     assert.equal((await realFetch(`${base}/..%2F..%2Fproject.json`)).status, 404);

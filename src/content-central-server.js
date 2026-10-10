@@ -1,5 +1,6 @@
 import { exec, execFile, spawn } from 'node:child_process';
 import { createReadStream, statSync } from 'node:fs';
+import { pipeline } from 'node:stream';
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -921,31 +922,36 @@ async function handleRequest(req, res, targetDir, context = {}) {
       if (method === 'GET' && parts[5] === 'arquivo') return sendVideoFile(req, res, videoDir(targetDir, projectId, vid), parts.slice(6).join('/'));
       if (method === 'POST' && parts.length === 6) {
         const body = await readBody(req);
-        const video = await readVideo(projectId, vid, targetDir);
-        const exige = (status) => { if (video.status !== status) throw Object.assign(new Error('Ação indisponível nesta etapa.'), { status: 409 }); };
-        const iniciar = async (status, etapa, opts = {}) => {
-          if (jobs.isBusy(projectId, vid)) throw Object.assign(new Error('O vídeo já está sendo gerado.'), { status: 409 });
-          const next = await updateVideo(projectId, vid, { status }, targetDir);
-          await jobs.enqueue(projectId, vid, etapa, opts);
-          return sendJson(res, 200, { video: next });
-        };
-        if (parts[5] === 'roteiro') return sendJson(res, 200, { roteiro: await saveRoteiroCenas(projectId, vid, body.cenas, targetDir) });
-        if (parts[5] === 'ajuste') {
-          const pedido = String(body.pedido || '').trim();
-          if (!pedido) throw Object.assign(new Error('Escreva o ajuste.'), { status: 400 });
-          if (body.etapa === 'roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.ROTEIRO_GERANDO, 'roteiro', { ajuste: pedido }); }
-          if (body.etapa === 'producao') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao', { ajuste: pedido }); }
-          throw Object.assign(new Error('Etapa de ajuste inválida.'), { status: 400 });
-        }
-        if (parts[5] === 'aprovar-roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao'); }
-        if (parts[5] === 'aprovar-previa') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.RENDER_GERANDO, 'render'); }
-        if (parts[5] === 'retomar') {
-          if (![VIDEO_STATUS.ERRO, VIDEO_STATUS.INTERROMPIDO, VIDEO_STATUS.AGUARDANDO_LIMITE].includes(video.status)) throw Object.assign(new Error('Nada para retomar.'), { status: 409 });
-          const etapa = { roteiro_gerando: 'roteiro', producao_gerando: 'producao', render_gerando: 'render' }[video.etapaInterrompida] || video.etapaComErro || 'roteiro';
-          const status = { roteiro: VIDEO_STATUS.ROTEIRO_GERANDO, producao: VIDEO_STATUS.PRODUCAO_GERANDO, render: VIDEO_STATUS.RENDER_GERANDO }[etapa];
-          return await iniciar(status, etapa);
-        }
-        if (parts[5] === 'excluir') { await deleteVideo(projectId, vid, targetDir); return sendJson(res, 200, { ok: true }); }
+        // Check and reserve with no await in between, so a double click cannot queue twice.
+        const key = `${projectId}/${vid}`;
+        if (jobs.isBusy(projectId, vid) || videoReservas.has(key)) throw Object.assign(new Error('O vídeo já está sendo gerado.'), { status: 409 });
+        videoReservas.add(key);
+        try {
+          const video = await readVideo(projectId, vid, targetDir);
+          const exige = (status) => { if (video.status !== status) throw Object.assign(new Error('Ação indisponível nesta etapa.'), { status: 409 }); };
+          const iniciar = async (status, etapa, opts = {}) => {
+            const next = await updateVideo(projectId, vid, { status }, targetDir);
+            await jobs.enqueue(projectId, vid, etapa, opts);
+            return sendJson(res, 200, { video: next });
+          };
+          if (parts[5] === 'roteiro') return sendJson(res, 200, { roteiro: await saveRoteiroCenas(projectId, vid, body.cenas, targetDir) });
+          if (parts[5] === 'ajuste') {
+            const pedido = String(body.pedido || '').trim();
+            if (!pedido) throw Object.assign(new Error('Escreva o ajuste.'), { status: 400 });
+            if (body.etapa === 'roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.ROTEIRO_GERANDO, 'roteiro', { ajuste: pedido }); }
+            if (body.etapa === 'producao') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao', { ajuste: pedido }); }
+            throw Object.assign(new Error('Etapa de ajuste inválida.'), { status: 400 });
+          }
+          if (parts[5] === 'aprovar-roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao'); }
+          if (parts[5] === 'aprovar-previa') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.RENDER_GERANDO, 'render'); }
+          if (parts[5] === 'retomar') {
+            if (![VIDEO_STATUS.ERRO, VIDEO_STATUS.INTERROMPIDO, VIDEO_STATUS.AGUARDANDO_LIMITE].includes(video.status)) throw Object.assign(new Error('Nada para retomar.'), { status: 409 });
+            const etapa = { roteiro_gerando: 'roteiro', producao_gerando: 'producao', render_gerando: 'render' }[video.etapaInterrompida] || video.etapaComErro || 'roteiro';
+            const status = { roteiro: VIDEO_STATUS.ROTEIRO_GERANDO, producao: VIDEO_STATUS.PRODUCAO_GERANDO, render: VIDEO_STATUS.RENDER_GERANDO }[etapa];
+            return await iniciar(status, etapa);
+          }
+          if (parts[5] === 'excluir') { await deleteVideo(projectId, vid, targetDir); return sendJson(res, 200, { ok: true }); }
+        } finally { videoReservas.delete(key); }
       }
       return sendJson(res, 404, { error: 'Not found' });
     } catch (err) {
@@ -5866,6 +5872,7 @@ function sendJson(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+const videoReservas = new Set(); // `${projectId}/${vid}` with a mutation in flight
 const VIDEO_FILES = /^(video\.mp4|trecho\.mp4|voz\/narracao\.(mp3|txt)|legenda-post\.txt|NOTAS\.md|stills\/t[\d.]+\.jpg)$/;
 const VIDEO_MIME = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.jpg': 'image/jpeg' };
 
@@ -5877,15 +5884,21 @@ function sendVideoFile(req, res, dir, name) {
   let size;
   try { size = statSync(file).size; } catch { return sendJson(res, 404, { error: 'Arquivo não encontrado.' }); }
   const type = VIDEO_MIME[extname(file)] || 'application/octet-stream';
-  const range = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
   if (range) {
-    const start = range[1] ? Number(range[1]) : 0;
-    const end = range[2] ? Math.min(Number(range[2]), size - 1) : size - 1;
+    const [, a, b] = range;
+    // "-N" is the last N bytes; otherwise start..end, end open or clamped to the file.
+    const start = a ? Number(a) : Math.max(0, size - Number(b));
+    const end = a && b ? Math.min(Number(b), size - 1) : size - 1;
+    if ((!a && !b) || start >= size || start > end) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
     res.writeHead(206, { 'Content-Type': type, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1 });
-    return createReadStream(file, { start, end }).pipe(res);
+    return pipeline(createReadStream(file, { start, end }), res, () => {});
   }
   res.writeHead(200, { 'Content-Type': type, 'Content-Length': size, 'Accept-Ranges': 'bytes' });
-  return createReadStream(file).pipe(res);
+  return pipeline(createReadStream(file), res, () => {});
 }
 
 function sendHtml(res, html) {
