@@ -1,0 +1,48 @@
+{
+  "marca": {
+    "nome": "King",
+    "subtitulo": "Assessoria MKT",
+    "logo": "../_motor/marcas/king.png",
+    "whatsapp": "65 98108-6707",
+    "instagram": "@king.assessoriamkt"
+  },
+  "voz": "gemini:Puck",
+  "velocidade": "+6%",
+  "objetivo": "alcance",
+  "cenas": [
+    {
+      "tipo": "alarme",
+      "fala": "Sexta, sete da noite. E bate aquele susto: nossa, não postei nada essa semana!"
+    },
+    {
+      "tipo": "correria",
+      "fala": "Aí pega qualquer foto, escreve qualquer coisa e posta correndo."
+    },
+    {
+      "tipo": "carimbo",
+      "fala": "Isso é postar por urgência.",
+      "segura": 0.6
+    },
+    {
+      "tipo": "domingo",
+      "fala": "Agora imagina saber, já no domingo, tudo que vai sair na semana."
+    },
+    {
+      "tipo": "quadro",
+      "fala": "Oferta na segunda, bastidor na quarta, novidade na sexta."
+    },
+    {
+      "tipo": "calma",
+      "fala": "Isso é postar com planejamento.",
+      "segura": 0.6
+    },
+    {
+      "tipo": "enquete",
+      "fala": "E aí na sua loja? Comenta: um, posto na urgência. Dois, eu planejo. Três, nem posto!"
+    },
+    {
+      "tipo": "seguir",
+      "fala": "Segue a King pra organizar a sua divulgação."
+    }
+  ]
+}

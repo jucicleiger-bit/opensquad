@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Motor Neon</title>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Poppins:ital,wght@0,600;1,400;1,500&family=Montserrat:wght@900&family=Inter:wght@600;800&display=block" rel="stylesheet">
+<style>
+  :root { --gold: #FFD100; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 540px; height: 960px; overflow: hidden; background: #000; }
+  #stage { position: relative; width: 540px; height: 960px; overflow: hidden; background: radial-gradient(ellipse at 50% 38%, #1d1606 0%, #050403 55%, #000 100%); }
+  #bg { position: absolute; inset: 0; }
+  #cam { position: absolute; inset: 0; perspective: 900px; }
+  .scene { position: absolute; inset: 0; display: none; transform-style: preserve-3d; }
+  .abs { position: absolute; }
+  .center { left: 0; right: 0; text-align: center; }
+  .anton { font-family: Anton, sans-serif; text-transform: uppercase; letter-spacing: 1px; line-height: .95; }
+  .neon { color: #fff; text-shadow: 0 0 4px #fff, 0 0 14px var(--gold), 0 0 34px var(--gold), 0 0 70px #ffd10066; }
+  .neon-gold { color: var(--gold); text-shadow: 0 0 6px #ffe680, 0 0 20px var(--gold), 0 0 50px #ffb30088; }
+  .thin { font-family: Poppins, sans-serif; font-style: italic; font-weight: 400; color: #fff; text-shadow: 0 0 10px #ffffffaa, 0 0 26px #ffd10077; }
+  .chip { display: inline-flex; align-items: center; gap: 10px; padding: 10px 20px; border-radius: 14px; border: 2px solid var(--gold); background: #0a0802e6; font: 600 26px Poppins, sans-serif; color: #fff; box-shadow: 0 0 14px #ffd10099, inset 0 0 12px #ffd10033; white-space: nowrap; }
+  .white { filter: brightness(0) invert(1); }
+  .app { position: absolute; width: 150px; height: 150px; border-radius: 34px; display: flex; align-items: center; justify-content: center; border: 3px solid #ffffff55; }
+  .app img { width: 70%; max-height: 60%; object-fit: contain; }
+  .pill { display: inline-flex; align-items: center; justify-content: center; height: 46px; padding: 0 16px; border-radius: 12px; border: 2px solid #ffffff66; }
+  .pill img { height: 24px; }
+  .tile { position: absolute; width: 150px; height: 266px; border-radius: 10px; overflow: hidden; border: 2px solid #ffd10088; box-shadow: 0 0 20px #000, 0 0 12px #ffd10055; background: #0d0b05; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.txt { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; text-align: center; padding: 10px; }
+  .tile.txt span:first-child { font-size: 54px; }
+  .tile.txt span:last-child { font: 26px/1 Anton, sans-serif; color: var(--gold); text-transform: uppercase; }
+  .obj { position: absolute; left: 0; right: 0; text-align: center; }
+  .obj > div { display: inline-block; position: relative; transform-origin: 50% 100%; }
+  .obj img.o { display: block; filter: drop-shadow(0 0 30px #ffd10033); }
+  .floor { position: absolute; left: -50%; right: -50%; top: 640px; height: 700px; transform-origin: 50% 0; transform: rotateX(78deg);
+    background: repeating-linear-gradient(90deg, #ffd10022 0 2px, transparent 2px 60px), repeating-linear-gradient(0deg, #ffd10022 0 2px, transparent 2px 60px), linear-gradient(#2a1f05, #000 70%); }
+  #cap { position: absolute; left: 20px; right: 20px; top: 612px; text-align: center; font: italic 500 31px Poppins, sans-serif; color: #fff; text-shadow: 0 2px 6px #000, 0 0 3px #000, 0 0 16px #000; z-index: 60; }
+  #fx { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
+  #vignette { position: absolute; inset: 0; z-index: 55; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 55%, #000c 100%); }
+  #flash { position: absolute; inset: 0; z-index: 58; background: #fff; opacity: 0; pointer-events: none; }
+  #streak { position: absolute; left: -50%; width: 200%; height: 160px; top: 400px; z-index: 57; opacity: 0; pointer-events: none; background: linear-gradient(180deg, transparent, #fff6d0aa 45%, #ffffff 50%, #fff6d0aa 55%, transparent); filter: blur(10px); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bg" width="1080" height="1920"></canvas>
+  <div id="cam"></div>
+  <canvas id="fx" width="1080" height="1920"></canvas>
+  <div id="vignette"></div>
+  <div id="streak"></div>
+  <div id="flash"></div>
+  <div id="cap"></div>
+</div>
+
+<script src="legendas.js"></script>
+<script>
+// Generic player: builds the video from <video>/roteiro.json and the voice
+// timings in <video>/voz/tempos.json. Every frame is a pure function of t —
+// render.mjs calls seek(t) and screenshots. Scene types live in TYPES; each
+// one ties its animation to words of its own line ("em": "palavra").
+const $ = (id) => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const p = (t, a, b) => clamp((t - a) / (b - a));
+const eo = (x) => 1 - Math.pow(1 - x, 3);
+const eio = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const back = (x) => { const c = 1.9; return 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); };
+const lerp = (a, b, x) => a + (b - a) * x;
+const st = (el, o, tr, extra) => { el.style.opacity = o; if (tr != null) el.style.transform = tr; if (extra) Object.assign(el.style, extra); };
+const flick = (t, a) => { const k = t - a; if (k < 0) return 0; if (k > 0.35) return 1; return [1, 0.2, 1, 0.4, 1, 0.7, 1][Math.floor(k * 20) % 7]; };
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// Two-line titles: break at the middle word.
+const brk = (s) => { const w = String(s ?? '').split(' '); const h = Math.ceil(w.length / 2); return w.length < 2 ? esc(s) : `${esc(w.slice(0, h).join(' '))}<br>${esc(w.slice(h).join(' '))}`; };
+// The renderer serves the video folder at /v/ and the motor at /_motor/.
+const asset = (path) => `/v/${path}`;
+const obj = (name) => asset(`objetos/${name}.png`);
+
+let VIDEO = {}, cam = { y: 0 };
+var R; // global so legendas.js can read the brand color
+
+// Every video brings its own scene types in cenas.js (VIDEO.tipos).
+const TYPES = {};
+
+
+// Transitions cycle so consecutive cuts never repeat the same move.
+const KINDS = ['zoom', 'whipX', 'zoom', 'whipY'];
+const TR = 0.32;
+let S = [], words = [], DURATION = 0;
+
+function build(tempos) {
+  R.cenas.forEach((c, i) => {
+    const type = TYPES[c.tipo];
+    if (!type) throw new Error(`cena ${i + 1}: tipo "${c.tipo}" não existe (${Object.keys(TYPES).join(', ')})`);
+    const tm = tempos.cenas[i];
+    const el = document.createElement('div');
+    el.className = 'scene';
+    el.innerHTML = type.html(c);
+    $('cam').appendChild(el);
+    const q = (k) => el.querySelector(`[data-k="${k}"]`);
+    // "em" anchors only look inside this scene's own line.
+    const A = (word, n = 1) => {
+      const norm = (w) => w.toLowerCase().normalize('NFC');
+      const hits = tm.words.filter((w) => norm(w.w) === norm(word));
+      if (!hits[n - 1]) throw new Error(`cena ${i + 1} (${c.tipo}): a palavra "${word}" não está na fala "${c.fala}"`);
+      return hits[n - 1].t;
+    };
+    S.push({ c, type, el, q, A, i, start: i ? tm.words[0].t - 0.35 : 0, kind: i ? KINDS[(i - 1) % KINDS.length] : null });
+    words.push(...tm.words.map((w) => ({ ...w, cena: i })));
+  });
+  const last = words[words.length - 1];
+  DURATION = last.t + last.d + 1.3;
+  // "segura": N keeps a scene's picture N seconds into the next line, so a
+  // climax can stay up while the narration carries on without a pause.
+  S.forEach((s, i) => { if (s.c.segura && S[i + 1]) S[i + 1].start += s.c.segura; });
+  S.forEach((s, i) => { s.end = S[i + 1] ? S[i + 1].start : DURATION + 1; });
+  window.SFX = S.flatMap((s) => [...(s.i ? [{ t: s.start - 0.25, s: 'whoosh' }] : []), ...s.type.sfx(s.c, s.A, s)]);
+  window.VOZ = tempos.arquivo ? [{ arquivo: tempos.arquivo, inicio: 0 }] : tempos.cenas.map((tm, i) => ({ arquivo: `voz/cena-${i + 1}.mp3`, inicio: tm.inicio }));
+}
+
+function transitions(t) {
+  // A video may draw its own cuts: VIDEO.transicao(t, s, next, i).
+  let streak = 0;
+  S.forEach((s, i) => {
+    const next = S[i + 1];
+    if (t < s.start - (i ? TR / 2 : 0) || t >= s.end + TR / 2) { s.el.style.display = 'none'; return; }
+    if (VIDEO.transicao) { s.el.style.zIndex = i; VIDEO.transicao(t, s, next, i); return; }
+    const tin = i ? p(t, s.start - TR / 2, s.start + TR / 2) : 1, tout = next ? p(t, s.end - TR / 2, s.end + TR / 2) : 0;
+    let tr = '', blur = 0, o = 1;
+    const enter = 1 - eo(tin), leave = Math.pow(tout, 2);
+    if (s.kind === 'zoom') { tr += `scale(${lerp(1, 0.6, enter)}) `; blur += enter * 12; o = Math.min(o, tin * 2); }
+    if (s.kind === 'whipX') { tr += `translateX(${enter * 620}px) rotateY(${-enter * 40}deg) `; blur += enter * 18; }
+    if (s.kind === 'whipY') { tr += `translateY(${enter * 900}px) rotateX(${enter * 35}deg) `; blur += enter * 18; }
+    if (next?.kind === 'zoom') { tr += `scale(${lerp(1, 2.6, leave)}) `; blur += leave * 16; o = Math.min(o, 1 - leave); }
+    if (next?.kind === 'whipX') { tr += `translateX(${-leave * 620}px) rotateY(${leave * 40}deg) `; blur += leave * 18; }
+    if (next?.kind === 'whipY') { tr += `translateY(${-leave * 900}px) rotateX(${-leave * 35}deg) `; blur += leave * 18; }
+    if (i && s.kind !== 'zoom') streak = Math.max(streak, 1 - Math.abs(tin * 2 - 1));
+    st(s.el, o, tr || 'none', { display: 'block', filter: blur > 0.3 ? `blur(${blur}px)` : 'none', zIndex: i });
+  });
+  st($('streak'), streak * 0.8, `rotate(${Math.sin(t) * 20 - 8}deg) scaleY(${0.4 + streak})`);
+}
+
+// Seeded layers: far stars (move with the camera, slower = depth) and
+// near dust/sparks over everything.
+let seed = 7; const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+const stars = Array.from({ length: 140 }, () => ({ x: rnd() * 1080, y: rnd() * 1920, r: 0.6 + rnd() * 1.8, ph: rnd() * 6.28 }));
+const dust = Array.from({ length: 90 }, () => ({ x: rnd() * 1080, y: rnd() * 1920, vx: (rnd() - 0.6) * 60, vy: -20 - rnd() * 60, r: 1 + rnd() * 3, ph: rnd() * 6.28, gold: rnd() < 0.35 }));
+const wrap = (v, m) => ((v % m) + m) % m;
+function layers(t) {
+  if (VIDEO.estrelas === false) return;
+  const bg = $('bg').getContext('2d'), fx = $('fx').getContext('2d');
+  bg.clearRect(0, 0, 1080, 1920);
+  for (const s of stars) {
+    bg.globalAlpha = 0.25 + 0.5 * Math.abs(Math.sin(t * 1.5 + s.ph));
+    bg.fillStyle = '#fff';
+    bg.beginPath(); bg.arc(wrap(s.x - t * 6, 1080), wrap(s.y + cam.y * 0.6, 1920), s.r, 0, 6.29); bg.fill();
+  }
+  fx.clearRect(0, 0, 1080, 1920);
+  for (const d of dust) {
+    fx.globalAlpha = 0.35 + 0.45 * Math.abs(Math.sin(t * 2 + d.ph));
+    fx.fillStyle = d.gold ? '#FFD100' : '#ffffff';
+    fx.fillRect(wrap(d.x + d.vx * t, 1080), wrap(d.y + d.vy * t + cam.y * 2.2, 1920), d.r * 2.2, d.r);
+  }
+}
+
+let chunks = [];
+function buildChunks() {
+  // Up to 3 words per caption, never across a scene or a sentence break
+  // (sentence ends keep a short pause even in continuous narration).
+  let cur = [];
+  words.forEach((w, i) => {
+    const prev = words[i - 1];
+    if (cur.length && (cur.length >= 3 || w.cena !== prev.cena || prev.fim || w.t - (prev.t + prev.d) > 0.17)) { chunks.push(cur); cur = []; }
+    cur.push(w);
+  });
+  if (cur.length) chunks.push(cur);
+}
+function caption(t) {
+  if (R.legendas === false) return;
+  const i = chunks.findIndex((c, k) => t >= c[0].t - 0.05 && (k === chunks.length - 1 || t < chunks[k + 1][0].t - 0.05));
+  const last = chunks[chunks.length - 1];
+  const c = i >= 0 && !(i === chunks.length - 1 && t > last[last.length - 1].t + 0.8) ? chunks[i] : null;
+  const el = $('cap');
+  const light = S.find((s) => t >= s.start && t < s.end)?.type.light;
+  el.style.color = light ? '#111' : '#fff';
+  el.style.textShadow = light ? '0 0 8px #fff, 0 0 2px #fff' : '';
+  if (!c) { el.textContent = ''; return; }
+  const k = p(t, c[0].t - 0.05, c[0].t + 0.1);
+  // A caption model (roteiro "legenda" or ?legenda=) wins over the video's own caption.
+  const modelo = new URLSearchParams(location.search).get('legenda') || R.legenda;
+  if (modelo && LEGENDAS[modelo]) { LEGENDAS[modelo](t, c, el, k); return; }
+  if (VIDEO.legenda) { VIDEO.legenda(t, c, el, k); return; }
+  el.textContent = c.map((w) => w.w).join(' ');
+  el.style.opacity = k; el.style.transform = `translateY(${lerp(10, 0, k)}px)`;
+}
+
+function seek(t) {
+  cam.y = 0;
+  transitions(t);
+  let shake = 0, flash = 0;
+  for (const s of S) {
+    if (t < s.start - TR || t >= s.end + TR) continue;
+    const r = s.type.frame(t, s.c, s.q, s.A, s) || {};
+    shake = Math.max(shake, r.shake || 0); flash = Math.max(flash, r.flash || 0);
+  }
+  $('cam').style.transform = shake ? `translate(${Math.sin(t * 90) * 9 * shake}px, ${Math.cos(t * 77) * 7 * shake}px)` : VIDEO.estrelas === false ? '' : `rotateZ(${Math.sin(t * 0.9) * 0.8}deg)`;
+  VIDEO.quadro?.(t);
+  $('flash').style.opacity = flash;
+  layers(t);
+  caption(t);
+}
+
+window.ready = (async () => {
+  R = await (await fetch(asset('roteiro.json'))).json();
+  // A video can bring its own scenes, look and cuts in <pasta>/cenas.js.
+  await new Promise((ok) => { const sc = document.createElement('script'); sc.src = asset('cenas.js'); sc.onload = ok; sc.onerror = ok; document.head.appendChild(sc); });
+  VIDEO = window.VIDEO || {};
+  Object.assign(TYPES, VIDEO.tipos || {});
+  if (VIDEO.fontes) {
+    const link = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: VIDEO.fontes });
+    await new Promise((ok) => { link.onload = ok; link.onerror = ok; document.head.appendChild(link); });
+  }
+  if (VIDEO.css) document.head.insertAdjacentHTML('beforeend', `<style>${VIDEO.css}</style>`);
+  document.head.insertAdjacentHTML('beforeend', `<style>${LEGENDAS_CSS}</style>`);
+  build(await (await fetch(asset('voz/tempos.json'))).json());
+  buildChunks();
+  // Fonts only download once text uses them: visit every scene first, so the
+  // very first frame never renders with invisible (still loading) text.
+  S.forEach((sc) => seek(sc.start + 0.5));
+  await document.fonts.ready;
+  await Promise.all([...document.images].map((img) => img.decode().catch(() => {})));
+  seek(0);
+  return DURATION;
+})();
+window.seek = seek;
+// Open /_motor/player.html?v=<pasta>&play to preview in real time with sound.
+if (location.search.includes('play')) {
+  window.ready.then(() => {
+    document.body.addEventListener('click', () => {
+      const t0 = performance.now();
+      for (const v of window.VOZ) setTimeout(() => new Audio(asset(v.arquivo)).play(), v.inicio * 1000);
+      const loop = () => { const t = (performance.now() - t0) / 1000; seek(t); if (t < DURATION) requestAnimationFrame(loop); }; loop();
+    }, { once: true });
+  });
+}
+</script>
+</body>
+</html>

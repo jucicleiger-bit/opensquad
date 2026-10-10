@@ -1,0 +1,4 @@
+{ "arquivo": "voz/narracao.mp3", "cenas": [
+  { "words": [ { "w": "Olá", "t": 0.05, "d": 0.3, "fim": false }, { "w": "mundo", "t": 0.4, "d": 0.3, "fim": false }, { "w": "bonito", "t": 0.75, "d": 0.4, "fim": true } ] },
+  { "words": [ { "w": "Segunda", "t": 1.4, "d": 0.4, "fim": false }, { "w": "cena", "t": 1.85, "d": 0.3, "fim": false }, { "w": "aqui", "t": 2.2, "d": 0.3, "fim": true } ] }
+] }
