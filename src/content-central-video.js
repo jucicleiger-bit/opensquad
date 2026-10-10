@@ -46,7 +46,7 @@ export function videoDir(targetDir, projectId, videoId) {
   return join(getCentralPaths(targetDir, projectId).projectDir, 'videos', videoId);
 }
 
-const slug = (text) => String(text).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+const slug = (text) => String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 
 export function normalizeBriefing(input = {}) {
   const assunto = String(input.assunto || '').trim();
@@ -219,8 +219,12 @@ export async function buildMaterialInventory(projectIds, targetDir) {
         const arte = join(paths.assetsDir, 'generated', basename(url));
         if (!existsSync(arte)) continue;
         const atual = best.get(arte);
-        if (atual && rank(atual.status) <= rank(it.status)) continue;
-        const crua = (it.image.references || []).map((r) => r?.absolutePath).find((p) => p && !/logo/i.test(p) && existsSync(p)) || atual?.cru || null;
+        let crua = (it.image.references || []).map((r) => r?.absolutePath).find((p) => p && !/logo/i.test(p) && existsSync(p)) || null;
+        if (atual && rank(atual.status) <= rank(it.status)) {
+          atual.cru ??= crua;
+          continue;
+        }
+        crua ??= atual?.cru ?? null;
         const topic = it.contentTopic || {};
         best.set(arte, { projeto, produto: topic.offerName || topic.label || atual?.produto || '', canal: it.channel, status: it.status, arte, cru: crua });
       }

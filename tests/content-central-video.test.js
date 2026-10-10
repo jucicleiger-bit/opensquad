@@ -111,6 +111,26 @@ test('buildMaterialInventory lists generated Stories with their raw photo, appro
   });
 });
 
+test('buildMaterialInventory keeps the raw photo when the better item comes first without one', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'mercado', name: 'Mercado' }, dir);
+    const paths = getCentralPaths(dir, 'mercado');
+    await mkdir(join(paths.assetsDir, 'generated'), { recursive: true });
+    await mkdir(paths.referencesDir, { recursive: true });
+    await writeFile(join(paths.assetsDir, 'generated', 'arte-1.png'), 'x');
+    await writeFile(join(paths.referencesDir, 'cru-1.jpg'), 'x');
+    await mkdir(paths.draftsDir, { recursive: true });
+    await writeFile(join(paths.draftsDir, 'day-01.json'), JSON.stringify({ items: [
+      { channel: 'instagram_story', status: 'aprovado', contentTopic: { label: 'Rotina' }, image: { url: '/x/arte-1.png', references: [] } },
+      { channel: 'instagram_story', status: 'test_post_simulated', contentTopic: { offerName: 'Bacon' }, image: { url: '/x/arte-1.png', references: [{ absolutePath: join(paths.referencesDir, 'cru-1.jpg') }] } },
+    ] }));
+    const items = await buildMaterialInventory(['mercado'], dir);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'aprovado');
+    assert.equal(items[0].cru, join(paths.referencesDir, 'cru-1.jpg'));
+  });
+});
+
 test('reconcileInterruptedVideos turns running statuses into interrompido', async () => {
   await withDir(async (dir) => {
     await createCentralProject({ projectId: 'king', name: 'King' }, dir);
