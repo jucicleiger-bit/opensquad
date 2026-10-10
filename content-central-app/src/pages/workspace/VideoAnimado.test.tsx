@@ -90,4 +90,27 @@ describe("Vídeo animado", () => {
     expect(screen.getByRole("link", { name: "Texto da narração" })).toHaveAttribute("href", "/api/projects/king/videos/v1/arquivo/voz/narracao.txt");
     expect(screen.getByRole("link", { name: "Legenda do post" })).toBeInTheDocument();
   });
+
+  it("shows the sidebar link when the project has it on", async () => {
+    stubApi((url) => (url === "/api/state" ? project(true) : { videos: [] }));
+    renderAt("/projects/king/visao-geral");
+    expect(await screen.findByRole("link", { name: "Vídeo animado" })).toBeInTheDocument();
+  });
+
+  it("deletes a video, reloads the list and never fetches the deleted video again", async () => {
+    const calls = stubApi((url) => {
+      if (url === "/api/state") return project(true);
+      if (url.endsWith("/excluir")) return { ok: true };
+      if (url.endsWith("/videos")) return { videos: [] };
+      return { ...roteiroPronto, video: { ...roteiroPronto.video, status: "pronto" } };
+    });
+    renderAt("/projects/king/video?v=v1");
+    await userEvent.click(await screen.findByRole("button", { name: "Excluir vídeo" }));
+    expect(await screen.findByText("Nenhum vídeo ainda.")).toBeInTheDocument();
+    const del = calls.findIndex((c) => c.url.endsWith("/v1/excluir") && c.init?.method === "POST");
+    expect(del).toBeGreaterThan(-1);
+    const after = calls.slice(del + 1);
+    expect(after.some((c) => c.url.endsWith("/api/projects/king/videos"))).toBe(true);
+    expect(after.some((c) => c.url.endsWith("/videos/v1"))).toBe(false);
+  });
 });

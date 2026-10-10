@@ -161,8 +161,8 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
           ))}
           <label className={styles.field}>Pedir ajuste no roteiro<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} /></label>
           <div className={styles.actions}>
-            <Button type="button" variant="secondary" disabled={!ajuste.trim()} onClick={run(async () => { await saveVideoRoteiro(projectId, videoId, cenas); await requestVideoAdjustment(projectId, videoId, "roteiro", ajuste); })}>Pedir ajuste</Button>
-            <Button type="button" onClick={run(async () => { await saveVideoRoteiro(projectId, videoId, cenas); await videoAction(projectId, videoId, "aprovar-roteiro"); })}>Aprovar roteiro</Button>
+            <Button type="button" variant="secondary" disabled={!ajuste.trim() || cenas.length === 0} onClick={run(async () => { await saveVideoRoteiro(projectId, videoId, cenas); await requestVideoAdjustment(projectId, videoId, "roteiro", ajuste); })}>Pedir ajuste</Button>
+            <Button type="button" disabled={cenas.length === 0} onClick={run(async () => { await saveVideoRoteiro(projectId, videoId, cenas); await videoAction(projectId, videoId, "aprovar-roteiro"); })}>Aprovar roteiro</Button>
           </div>
         </>
       ) : null}
@@ -193,7 +193,7 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
       ) : null}
 
       {!GERANDO.has(video.status) ? (
-        <div className={styles.actions}><Button type="button" variant="secondary" onClick={run(async () => { await videoAction(projectId, videoId, "excluir"); onClose(); })}>Excluir vídeo</Button></div>
+        <div className={styles.actions}><Button type="button" variant="secondary" onClick={async () => { setError(null); try { await videoAction(projectId, videoId, "excluir"); onChanged(); onClose(); } catch (e) { setError((e as Error).message); } }}>Excluir vídeo</Button></div>
       ) : null}
     </Card>
   );
