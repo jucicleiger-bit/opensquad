@@ -158,7 +158,10 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo)}`, cwd: dir, addDirs });
     const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
     await runner({ prompt: `# Etapa 2
 ${stagePrompt('PEDIDO-producao.md', video, temLogo)}`, cwd: dir, addDirs: [MOTOR_DIR] });
-    for (const f of ['cenas.js', 'voz/tempos.json']) if (!await escritoDepois(join(dir, f), inicio)) throw new Error(`A produção não gerou ${f}.`);
+    // An adjustment may reuse the existing voice (saves quota): tempos.json then only has to exist.
+    if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
+    const temposPath = join(dir, 'voz', 'tempos.json');
+    if (ajuste ? !existsSync(temposPath) : !await escritoDepois(temposPath, inicio)) throw new Error('A produção não gerou voz/tempos.json.');
     // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
     const atual = await readJson(join(dir, 'roteiro.json'), null);
     if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');

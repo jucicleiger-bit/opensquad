@@ -277,3 +277,36 @@ test('runClaudeCode timeout kills the whole process tree on Windows', { skip: pr
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
+
+// Stage 1, then an old voice already on disk; stage 2 only rewrites cenas.js.
+async function stage2ComVozAntiga(dir, ajuste) {
+  const video = await createVideo('king', briefing, dir);
+  const vdir = videoDir(dir, 'king', video.id);
+  const um = createVideoJobs({ targetDir: dir, runner: fakeRunner([]), renderer: async () => ({}) });
+  await um.enqueue('king', video.id, 'roteiro');
+  await um.idle();
+  await mkdir(join(vdir, 'voz'), { recursive: true });
+  const tempos = join(vdir, 'voz', 'tempos.json');
+  await writeFile(tempos, JSON.stringify({ cenas: [{ words: [{ w: 'Sua', t: 0.05, d: 0.2 }] }] }));
+  await utimes(tempos, velho, velho);
+  await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+  const soCenas = async ({ cwd }) => { await writeFile(join(cwd, 'cenas.js'), 'window.VIDEO = {};'); return { text: '' }; };
+  const dois = createVideoJobs({ targetDir: dir, runner: soCenas, renderer: async () => ({}) });
+  await dois.enqueue('king', video.id, 'producao', ajuste ? { ajuste } : {});
+  await dois.idle();
+  return readVideo('king', video.id, dir);
+}
+
+test('stage 2 with an ajuste may reuse the existing voice (only cenas.js has to be fresh)', async () => {
+  await withProject(async (dir) => {
+    assert.equal((await stage2ComVozAntiga(dir, 'troque as cores')).status, STATUS.PREVIA_PRONTA);
+  });
+});
+
+test('stage 2 without an ajuste still requires a fresh voz/tempos.json', async () => {
+  await withProject(async (dir) => {
+    const v = await stage2ComVozAntiga(dir, '');
+    assert.equal(v.status, STATUS.ERRO);
+    assert.match(v.erro, /tempos\.json/);
+  });
+});
