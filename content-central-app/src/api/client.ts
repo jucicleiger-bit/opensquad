@@ -372,6 +372,7 @@ export interface ProjectSummary {
   };
   contentStrategy?: { offers?: ProjectOffer[]; pillars?: ProjectPillar[]; offerGroups?: OfferGroup[]; offerDrafts?: OfferDraft[]; topicIdeas?: TopicIdeasBank; [key: string]: unknown };
   offerUsage?: OfferUsage;
+  videoAnimado?: { ativo: boolean; projetosDeMaterial: string[]; whatsapp: string };
   rules?: unknown;
   createdAt?: string;
   updatedAt?: string;
@@ -1839,4 +1840,34 @@ export function markBrainPlanApproved(projectId: string): Promise<BrainPlan> {
 
 export function saveBrainNotebook(projectId: string, text: string): Promise<{ notebook: string }> {
   return api(`${brainPath(projectId)}/notebook`, { method: "POST", body: JSON.stringify({ text }) });
+}
+
+export type VideoStatus = "roteiro_gerando" | "roteiro_pronto" | "producao_gerando" | "previa_pronta" | "render_gerando" | "pronto" | "erro" | "aguardando_limite" | "interrompido";
+export interface VideoBriefing { assunto: string; objetivo: "alcance" | "anuncio"; duracao: 15 | 30 | 45 | 60; tom: "criador" | "vendedor"; legenda: "simples" | "karaoke" | "pop" | "destaque" | "caixa" | "do-video" | "sem"; observacao?: string }
+export interface VideoCena { tipo: string; fala: string; descricao: string; segura?: number }
+export interface VideoSummary { id: string; assunto: string; objetivo: string; duracao: number; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; temVideo: boolean }
+export interface VideoRecord { id: string; projectId: string; briefing: VideoBriefing; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string }
+export interface VideoState {
+  video: VideoRecord; roteiro: { cenas: VideoCena[] } | null; estimativa: number | null; avisos: string[]; stills: string[];
+  arquivos: { video: boolean; narracaoMp3: boolean; narracaoTxt: boolean; legendaPost: boolean; notas: boolean }; vozUsada: string | null; ocupado: boolean;
+}
+const videosPath = (projectId: string, rest = "") => `/api/projects/${encodeURIComponent(projectId)}/videos${rest}`;
+export const videoFileUrl = (projectId: string, videoId: string, name: string) => videosPath(projectId, `/${encodeURIComponent(videoId)}/arquivo/${name}`);
+export function listVideos(projectId: string): Promise<{ videos: VideoSummary[] }> {
+  return api(videosPath(projectId));
+}
+export function createVideo(projectId: string, briefing: VideoBriefing): Promise<{ video: VideoRecord }> {
+  return api(videosPath(projectId), { method: "POST", body: JSON.stringify(briefing) });
+}
+export function getVideo(projectId: string, videoId: string): Promise<VideoState> {
+  return api(videosPath(projectId, `/${encodeURIComponent(videoId)}`));
+}
+export function saveVideoRoteiro(projectId: string, videoId: string, cenas: VideoCena[]): Promise<{ roteiro: { cenas: VideoCena[] } }> {
+  return api(videosPath(projectId, `/${encodeURIComponent(videoId)}/roteiro`), { method: "POST", body: JSON.stringify({ cenas }) });
+}
+export function videoAction(projectId: string, videoId: string, action: "aprovar-roteiro" | "aprovar-previa" | "retomar" | "excluir", body: unknown = {}): Promise<{ video?: VideoRecord; ok?: boolean }> {
+  return api(videosPath(projectId, `/${encodeURIComponent(videoId)}/${action}`), { method: "POST", body: JSON.stringify(body) });
+}
+export function requestVideoAdjustment(projectId: string, videoId: string, etapa: "roteiro" | "producao", pedido: string): Promise<{ video: VideoRecord }> {
+  return api(videosPath(projectId, `/${encodeURIComponent(videoId)}/ajuste`), { method: "POST", body: JSON.stringify({ etapa, pedido }) });
 }

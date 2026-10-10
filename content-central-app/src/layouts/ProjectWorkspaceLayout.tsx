@@ -14,7 +14,7 @@ import styles from "./ProjectWorkspaceLayout.module.css";
 // alone as the workspace home; the rest cluster into setup (done once, then
 // revisited rarely), day-to-day content operations, and account settings.
 // See design.md § What pages MUST share.
-const SECTIONS = [
+const SECTIONS: Array<{ to: string; label: string; group: string | null; hideForCatalog?: boolean; catalogLabel?: string; onlyIf?: (p: ProjectSummary) => boolean }> = [
   { to: "visao-geral", label: "Visão geral", group: null as string | null },
   { to: "empresa", label: "Empresa / Raio-X", hideForCatalog: true, group: "Configuração" },
   { to: "referencias", label: "Imagem e referências", group: "Configuração" },
@@ -24,6 +24,7 @@ const SECTIONS = [
   { to: "gerar", label: "Agenda e geração", group: "Conteúdo" },
   { to: "anuncios", label: "Criativos de Anúncio", group: "Conteúdo" },
   { to: "carrossel", label: "Carrossel", group: "Conteúdo" },
+  { to: "video", label: "Vídeo animado", group: "Conteúdo", onlyIf: (p: ProjectSummary) => Boolean(p.videoAnimado?.ativo) },
   { to: "flyer", label: "Flyer", group: "Conteúdo" },
   { to: "teste", label: "Teste seguro", group: "Conteúdo" },
   { to: "aguardando", label: "Aguardando aprovação", group: "Conteúdo" },
@@ -89,7 +90,7 @@ export function ProjectWorkspaceLayout() {
         </NavLink>
         <div className={styles.projectName}>{project.name}</div>
         <nav className={styles.nav}>
-          {SECTIONS.filter((section) => !(section.hideForCatalog && project.projectType === "catalog")).map((section, index, visible) => {
+          {SECTIONS.filter((section) => !(section.hideForCatalog && project.projectType === "catalog") && (!section.onlyIf || section.onlyIf(project))).map((section, index, visible) => {
             const showGroupLabel = section.group && section.group !== visible[index - 1]?.group;
             return (
               <Fragment key={section.to}>

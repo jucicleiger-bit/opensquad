@@ -1,0 +1,17 @@
+.page { display: grid; gap: 16px; }
+.header { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.list { display: grid; gap: 12px; }
+.cardButton { all: unset; cursor: pointer; display: grid; gap: 4px; width: 100%; }
+.status { font-weight: 700; margin: 8px 0; }
+.field { display: grid; gap: 6px; margin-top: 12px; }
+.field textarea { min-height: 70px; }
+.row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; border: 0; padding: 0; }
+.actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+.cena { border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-top: 12px; }
+.cenaHead { display: flex; gap: 8px; align-items: center; }
+.cenaHead span { margin-right: auto; }
+.timebar { position: relative; height: 26px; border-radius: 13px; background: var(--surface-2); overflow: hidden; display: flex; align-items: center; padding: 0 12px; font-size: 13px; font-weight: 700; }
+.timebar span { position: absolute; inset: 0 auto 0 0; background: var(--accent-gradient); opacity: .35; }
+.stills { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin: 12px 0; }
+.stills img { width: 100%; border-radius: 10px; }
+.player { width: 100%; max-width: 360px; border-radius: 14px; }
