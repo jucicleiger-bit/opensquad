@@ -17,6 +17,7 @@ import aiohttp
 import edge_tts
 
 MAX_GAP = 0.22  # longest silence kept between two words, seconds
+TAIL = 0.15     # audio kept after the last word ends, seconds
 FALLBACK = "en-US-BrianMultilingualNeural"
 UV = shutil.which("uv") or str(Path.home() / "AppData/Local/hermes/bin/uv.exe")
 GEMINI_MODEL = "gemini-3.8-flash-tts"
@@ -164,8 +165,13 @@ def encurtar_silencios(bruto, words, saida):
     for ini, fim in cortes:
         partes.append((cursor, ini))
         cursor = fim
-    partes.append((cursor, None))
-    filtros = ";".join(f"[0:a]atrim=start={a:.3f}{'' if b is None else f':end={b:.3f}'},asetpts=PTS-STARTPTS[p{i}]" for i, (a, b) in enumerate(partes))
+    # End just after the last word, with a short fade: Gemini sometimes adds a
+    # burst of noise after the text (sounds like a TV switching off).
+    fim_fala = words[-1]["t"] + words[-1]["d"] + TAIL
+    partes.append((cursor, fim_fala))
+    fade = f",afade=t=out:st={max(0.0, fim_fala - cursor - 0.12):.3f}:d=0.12"
+    filtros = ";".join(f"[0:a]atrim=start={a:.3f}:end={b:.3f},asetpts=PTS-STARTPTS{fade if i == len(partes) - 1 else ''}[p{i}]"
+                       for i, (a, b) in enumerate(partes))
     filtros += ";" + "".join(f"[p{i}]" for i in range(len(partes))) + f"concat=n={len(partes)}:v=0:a=1[out]"
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-i", str(bruto), "-filter_complex", filtros, "-map", "[out]", str(saida)], check=True)
     # Shift each word back by the audio removed before it.
