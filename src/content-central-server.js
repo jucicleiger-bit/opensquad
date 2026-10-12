@@ -77,7 +77,15 @@ import {
   generateAdCreative,
   regenerateAdCreative,
   deleteCarousel,
-  enqueueCarouselGeneration,
+  enqueueCarouselPlanning,
+  requestCarouselReplan,
+  startCarouselImageGeneration,
+  enqueueCarouselImageGeneration,
+  scheduleCarousel,
+  draftCarouselCaption,
+  projectTopicIdeaContext,
+  CAROUSEL_LAYOUTS,
+  CAROUSEL_BACKGROUNDS,
   enqueueCarouselSlideRegeneration,
   enqueueContentCarouselSlideRegeneration,
   generateCarousel,
@@ -408,6 +416,7 @@ export async function startContentCentralServer({
   siteAnalyzer = null,
   webResearcher = null,
   topicIdeaGenerator = null,
+  carouselTopicIdeaGenerator = null,
   learningImageAnalyzer = null,
   offerDirectionSuggester = null,
   productImageSearcher = null,
@@ -432,6 +441,7 @@ export async function startContentCentralServer({
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
     topicIdeaGenerator: topicIdeaGenerator || (enableAiImages ? generateTopicIdeasWithAiAndWeb : null),
+    carouselTopicIdeaGenerator: carouselTopicIdeaGenerator || (enableAiImages ? generateCarouselTopicIdeasWithAiAndWeb : null),
     learningImageAnalyzer: learningImageAnalyzer || (enableAiImages ? analyzeLearningImageWithCodexAgent : null),
     offerDirectionSuggester: offerDirectionSuggester || (enableAiImages ? suggestOfferDirectionWithCodexAgent : null),
     productImageSearcher: productImageSearcher || searchProductImages,
@@ -461,6 +471,7 @@ export async function startContentCentralServer({
   if (openBrowser) openUrl(url);
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
+  const carouselPublishSchedulerTimer = startCarouselPublishScheduler(targetDir);
   const cloudWhatsAppPublishSchedulerTimer = startCloudWhatsAppPublishScheduler(targetDir);
   const cloudArtGenerationSchedulerTimer = startCloudArtGenerationScheduler(targetDir, context);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
@@ -475,6 +486,7 @@ export async function startContentCentralServer({
     close: () => new Promise((resolve, reject) => {
       if (publishSchedulerTimer) clearInterval(publishSchedulerTimer);
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
+      if (carouselPublishSchedulerTimer) clearInterval(carouselPublishSchedulerTimer);
       if (cloudWhatsAppPublishSchedulerTimer) clearInterval(cloudWhatsAppPublishSchedulerTimer);
       if (cloudArtGenerationSchedulerTimer) clearInterval(cloudArtGenerationSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
@@ -1398,28 +1410,74 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { adCreative });
   }
 
-  // Carrossel avulso — separate from every organic/ad-creative route above:
-  // no scheduledDate, no approval, no calendar, no publish. 1 briefing + N
-  // slide count in, N independently-regenerable slides out.
+  // Carrossel avulso: plan first (roteiro only), adjust by message, then
+  // "Gerar imagens"; a finished carousel can be scheduled as an approved post.
   if (parts.length === 4 && parts[3] === 'carousels') {
     const body = await readBody(req);
     const briefing = String(body.briefing || '').trim();
     if (!briefing) return sendJson(res, 400, { error: 'Informe o briefing do carrossel.' });
-    const carousel = await generateCarousel(projectId, { briefing, slideCount: body.slideCount }, targetDir);
-    enqueueCarouselGeneration(projectId, carousel, {
-      imageGenerator: context.imageGenerator,
-      imageReviewer: context.imageReviewer,
-      outlineGenerator: context.carouselOutlineGenerator,
-      // Real cross-slide consistency: resolves slide 1's own generated file
-      // on disk (reusing the same URL->path resolution the targeted-edit
-      // "regenerate with a note" flow already relies on) so every other
-      // slide gets it as an actual attached reference image, not just a
-      // prompt instruction. Returns null (no-op) for anything not a real
-      // local file — a missing key, an unconfigured provider, slide 1
-      // itself failing.
-      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
-    }, targetDir);
+    const carousel = await generateCarousel(projectId, { briefing, slideCount: body.slideCount, offerId: body.offerId }, targetDir);
+    enqueueCarouselPlanning(projectId, carousel.carouselId, { outlineGenerator: context.carouselOutlineGenerator }, targetDir);
     return sendJson(res, 201, { carousel });
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-replan') {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const { carousel, request } = await requestCarouselReplan(projectId, parts[4], body.message, targetDir);
+      enqueueCarouselPlanning(projectId, carousel.carouselId, { outlineGenerator: context.carouselOutlineGenerator }, targetDir, { request });
+      return sendJson(res, 200, { carousel });
+    } catch (err) {
+      return sendCarouselError(res, err);
+    }
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-generate') {
+    try {
+      const carousel = await startCarouselImageGeneration(projectId, parts[4], targetDir);
+      enqueueCarouselImageGeneration(projectId, carousel.carouselId, {
+        imageGenerator: context.imageGenerator,
+        imageReviewer: context.imageReviewer,
+        // Real cross-slide consistency: slide 1's own generated file becomes
+        // an attached reference for the rest (null for anything not local).
+        resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+      }, targetDir);
+      return sendJson(res, 200, { carousel });
+    } catch (err) {
+      return sendCarouselError(res, err);
+    }
+  }
+
+  if (parts.length === 4 && parts[3] === 'carousels-topic-ideas') {
+    if (typeof context.carouselTopicIdeaGenerator !== 'function') {
+      return sendJson(res, 400, { error: 'IA não configurada para pesquisar assuntos.' });
+    }
+    try {
+      const project = await loadProject(getCentralPaths(targetDir, projectId));
+      const ideas = await context.carouselTopicIdeaGenerator({ project });
+      return sendJson(res, 200, { ideas });
+    } catch (err) {
+      return sendJson(res, 502, { error: err.message });
+    }
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-caption') {
+    try {
+      const caption = await draftCarouselCaption(projectId, parts[4], { captionGenerator: context.captionGenerator }, targetDir);
+      return sendJson(res, 200, { caption });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-schedule') {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const { item, carousel } = await scheduleCarousel(projectId, parts[4], { date: body.date, time: body.time, caption: body.caption }, targetDir);
+      return sendJson(res, 200, { item, carousel });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
   }
 
   if (parts.length === 5 && parts[3] === 'carousels-delete') {
@@ -4493,6 +4551,54 @@ async function generateTopicIdeasWithAiAndWeb({ project, goals, goalKeys, ideasP
   return parsed;
 }
 
+function buildCarouselTopicIdeasPrompt({ project, raioX, evidence = [] }) {
+  return [
+    'Você é um agente editorial do Content Central. Sugira assuntos para um CARROSSEL de Instagram (vários slides lidos em sequência).',
+    '',
+    'RAIO-X DA MARCA',
+    `Empresa: ${project.name}`,
+    `Segmento: ${raioX.segment}`,
+    `Produtos/serviços: ${raioX.productsOrServices}`,
+    `Público: ${raioX.audience}`,
+    '',
+    evidence.length ? 'PESQUISA ONLINE RECENTE / EVIDÊNCIA COLETADA' : '',
+    evidence.length ? formatOnlineResearchEvidence(evidence) : '',
+    '',
+    'REGRAS',
+    '- Exatamente 5 assuntos, cada um rendendo de 4 a 8 slides (lista, passo a passo, mito x verdade, antes e depois, perguntas frequentes).',
+    '- Assuntos que o público desse segmento está buscando ou comentando agora; concretos e específicos, nada genérico.',
+    '- Não inventar números, provas, cases, prêmios, garantias, preço ou resultado financeiro.',
+    '- Pode usar a pesquisa online só como inspiração de dúvidas/tendências; não copiar títulos, marcas nem concorrentes.',
+    '',
+    'Responda APENAS com JSON válido neste formato:',
+    '{"ideas":[{"title":"","angle":""}]}',
+  ].filter(Boolean).join('\n');
+}
+
+// "Assuntos em alta do segmento" on the Carrossel tab — on demand, nothing
+// stored. Same web evidence the topic-idea bank uses.
+async function generateCarouselTopicIdeasWithAiAndWeb({ project }) {
+  const raioX = projectTopicIdeaContext(project);
+  const evidence = await collectOnlineTopicResearchEvidence({
+    segment: raioX.segment,
+    productsOrServices: raioX.productsOrServices,
+    audience: raioX.audience,
+  });
+  const raw = await callAiText(buildCarouselTopicIdeasPrompt({ project, raioX, evidence }), 'OPENSQUAD_TOPIC_IDEAS_TIMEOUT_MS');
+  let parsed = null;
+  try {
+    parsed = extractFirstJsonObject(raw);
+  } catch {
+    parsed = null;
+  }
+  const ideas = (Array.isArray(parsed?.ideas) ? parsed.ideas : [])
+    .map((idea) => ({ title: String(idea?.title || '').trim(), angle: String(idea?.angle || '').trim() }))
+    .filter((idea) => idea.title)
+    .slice(0, 5);
+  if (!ideas.length) throw new Error('A pesquisa não trouxe assuntos agora. Tente de novo em instantes.');
+  return ideas;
+}
+
 function buildOnlineVisualResearchPrompt({ segment, productsOrServices, evidence = [] }) {
   return [
     'Você vai transformar evidências reais de busca/navegação em direções visuais para uma IA de imagem.',
@@ -4672,7 +4778,10 @@ async function readCarouselFormatsReference(targetDir) {
   }
 }
 
-export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }) {
+export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference, offer, carouselStyle, currentPlan, request }) {
+  // Every optional block below is '' when its input is absent (dropped by
+  // filter(Boolean)), so the calendar carousel's prompt is unchanged.
+  const editorial = carouselStyle === 'clean';
   return [
     contentCentralPersonaLine('sofia'),
     contentCentralPersonaResponsibilityLine('sofia'),
@@ -4687,19 +4796,126 @@ export function buildCarouselOutlinePrompt({ project, briefing, slideCount, form
     '',
     'BRIEFING DO OPERADOR',
     briefing,
+    offer ? 'OFERTA/ASSUNTO CADASTRADO (única fonte de nome, preço e detalhes — usar exatamente assim)' : '',
+    offer ? `- Nome: ${offer.name}` : '',
+    offer?.price ? `- Preço: ${offer.price}` : '',
+    offer?.items ? `- Detalhes: ${offer.items}` : '',
+    currentPlan ? `PLANO ATUAL (formato: ${currentPlan.format || 'livre'})` : '',
+    ...(currentPlan ? currentPlan.slides.map((slide, index) => (slide.content
+      ? `${index + 1}. [${slide.role}] ${JSON.stringify(slide.content)}`
+      : `${index + 1}. [${slide.role}] ${slide.slideText}`)) : []),
+    currentPlan ? 'AJUSTE PEDIDO PELO OPERADOR' : '',
+    currentPlan ? request : '',
+    currentPlan ? 'Refaça o plano aplicando só esse ajuste: mantenha tudo que o pedido não mencionar.' : '',
     '',
-    `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
-    'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
+    currentPlan
+      ? 'Mantenha a mesma quantidade de slides do plano atual, a não ser que o ajuste peça outra quantidade (mínimo 2, máximo 10). O plano continua com capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta").'
+      : `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
+    ...(editorial ? editorialCarouselOutlineRules(offer, project) : [
+      'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
+    ]),
     '- Nunca inventar preço, promoção, prazo, estoque, depoimento ou dado que não foi passado no briefing.',
     '',
     'Responda APENAS com um JSON válido, sem markdown e sem texto fora do JSON, neste formato exato:',
-    `{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`,
+    `${editorial ? EDITORIAL_OUTLINE_JSON_EXAMPLE : '{"format":"listicle","slides":[{"role":"cover","slideText":""}]}'}  // ${currentPlan ? '"slides" na ordem de exibição' : `"slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`}`,
   ].filter(Boolean).join('\n');
 }
 
-async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir }) {
+const EDITORIAL_OUTLINE_JSON_EXAMPLE = '{"format":"listicle","slides":[{"role":"cover","title":"","body":"","highlight":"","bullets":[],"visual":"","layout":"imagem_cheia","background":"escuro","bridge":""}]}';
+
+// The standalone tab's "reading carousel" (operator feedback 2026-10-12, V4
+// reference): every slide carries a complete piece of information plus what
+// to show and how to lay it out, instead of one giant phrase per slide.
+function editorialCarouselOutlineRules(offer, project) {
+  const differential = project.companyProfile?.differentiators || project.brandInput?.mainDifferential || '';
+  const profile = project.companyProfile?.websiteOrInstagram || '';
+  return [
+    'ROTEIRO DE LEITURA: cada slide entrega uma informação completa e o carrossel se lê como uma sequência — não como letreiros soltos com uma frase gigante.',
+    '- "title": título do slide, de 3 a 9 palavras.',
+    '- "body": texto de apoio de 1 a 3 frases (até ~35 palavras), com **negrito** nas 2 ou 3 palavras mais importantes. Pode ficar vazio na capa.',
+    '- "highlight": opcional — uma expressão curta (até 4 palavras) que merece letra gigante; usar em no máximo 1 a cada 3 slides, e nunca repetindo palavras do "title".',
+    '- "bullets": opcional — de 3 a 5 itens curtos, só quando o slide for uma lista.',
+    '- "visual": o que a imagem do slide mostra, de forma concreta (ex.: "celular mostrando uma agenda de posts", "dono de loja organizando a prateleira"). Vazio quando o layout for texto_central.',
+    offer?.hasPhotos ? '- Este assunto tem foto real do produto cadastrada: nos slides com imagem, "visual" é a foto real do produto (com um contexto simples, se fizer sentido).' : '',
+    `- "layout": um destes — ${Object.entries(CAROUSEL_LAYOUTS).map(([key, description]) => `${key} (${description})`).join('; ')}`,
+    '- Alternar os layouts: nunca o mesmo layout em dois slides seguidos.',
+    `- "background": um destes — ${Object.keys(CAROUSEL_BACKGROUNDS).join(', ')}. Alternar: nunca o mesmo fundo em dois slides seguidos.`,
+    '- "bridge": opcional — frase curta de rodapé que puxa para o próximo slide (ex.: "Veja como resolver"); usar em 1 ou 2 slides, nunca no último.',
+    '- Capa: layout imagem_cheia, com um "visual" forte e concreto ligado ao gancho e o título-gancho por cima. texto_central só se nenhuma imagem fizer sentido para o assunto.',
+    // V4 holds attention with a concrete fact (R$ 0,99, a coupon screen);
+    // ours gave generic advice. Only registered data, never an invented one.
+    '- PROVA: pelo menos um slide do meio traz um dado concreto que já está aqui (preço, produto ou detalhe da oferta, ou o diferencial da empresa), com o dado no "highlight". Sem dado assim, usar um exemplo prático e específico do dia a dia do segmento — nunca inventar número, porcentagem, preço, cliente ou resultado.',
+    differential ? `- Diferencial cadastrado da empresa: ${differential}` : '',
+    `- Último slide (CTA): uma única ação concreta — "Comente PALAVRA" (com a PALAVRA curta no "highlight") ou visitar o perfil da marca. Nesse caso, "visual" é um mockup de celular mostrando o perfil da própria marca (com a logo)${profile ? `, perfil ${profile}` : ', sem inventar @'}, e o layout é texto_imagem ou dividido.`,
+    '- Nunca citar nem mostrar marca, logo ou tela de outra empresa, nem pessoa famosa. Em "visual", objetos aparecem sem marca (ex.: "tênis branco liso", nunca "tênis Nike").',
+  ].filter(Boolean);
+}
+
+// A structured (editorial) slide also gets a plain slideText — the plan view,
+// the caption writer, replans and the calendar card all read slideText.
+export function parseCarouselOutlineSlide(entry) {
+  const role = ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content';
+  const title = String(entry?.title || '').trim();
+  if (!title) return { role, slideText: String(entry?.slideText || '').trim() };
+  const highlight = String(entry?.highlight || '').trim();
+  const content = {
+    title,
+    body: String(entry?.body || '').trim(),
+    // King's cover (2026-10-12): "Muitos produtos, pouca divulgação" over a
+    // giant "POUCA DIVULGAÇÃO" said the same thing twice.
+    highlight: carouselWords(highlight).every((word) => carouselWords(title).includes(word)) ? '' : highlight,
+    bullets: (Array.isArray(entry?.bullets) ? entry.bullets : []).map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5),
+    visual: String(entry?.visual || '').trim(),
+    layout: Object.hasOwn(CAROUSEL_LAYOUTS, entry?.layout) ? entry.layout : 'texto_imagem',
+    background: Object.hasOwn(CAROUSEL_BACKGROUNDS, entry?.background) ? entry.background : '',
+    bridge: String(entry?.bridge || '').trim(),
+  };
+  return { role, slideText: carouselOutlineSlideText(content), content };
+}
+
+function carouselWords(text) {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+function carouselOutlineSlideText(content) {
+  return [content.title, content.highlight, content.body.replace(/\*\*/g, ''), ...content.bullets.map((item) => `• ${item}`)]
+    .filter(Boolean)
+    .join('\n');
+}
+
+// The roteiro asks for these limits but the King roteiro (2026-10-12) still
+// put a giant highlight on 4 of 7 slides and a bridge on 3, so they are
+// enforced here. Highlights kept: the cover, then the ones carrying a number
+// (the proof slide), then the CTA, then the rest in order, up to 1 in 3.
+// Backgrounds never repeat on two slides in a row.
+export function balanceCarouselOutlineSlides(slides) {
+  const structured = slides.filter((slide) => slide.content);
+  if (!structured.length) return slides;
+  const highlightLimit = Math.max(1, Math.floor(slides.length / 3));
+  const rank = (slide) => (slide.role === 'cover' ? 0 : /\d/.test(slide.content.highlight) ? 1 : slide.role === 'cta' ? 2 : 3);
+  const keptHighlights = new Set(structured
+    .filter((slide) => slide.content.highlight)
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, highlightLimit));
+  let bridges = 0;
+  let previousBackground = '';
+  return slides.map((slide, index) => {
+    if (!slide.content) return slide;
+    const content = { ...slide.content };
+    if (!keptHighlights.has(slide)) content.highlight = '';
+    if (content.bridge && (index === slides.length - 1 || bridges >= 2)) content.bridge = '';
+    if (content.bridge) bridges += 1;
+    if (!content.background || content.background === previousBackground) {
+      content.background = Object.keys(CAROUSEL_BACKGROUNDS).find((key) => key !== previousBackground);
+    }
+    previousBackground = content.background;
+    return { ...slide, slideText: carouselOutlineSlideText(content), content };
+  });
+}
+
+async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir, offer, carouselStyle, currentPlan, request }) {
   const formatsReference = await readCarouselFormatsReference(targetDir);
-  const raw = await callAiText(buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }), 'OPENSQUAD_COPY_TIMEOUT_MS');
+  const raw = await callAiText(buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference, offer, carouselStyle, currentPlan, request }), 'OPENSQUAD_COPY_TIMEOUT_MS');
   if (!raw) return null;
   const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
   if (!jsonText) return null;
@@ -4710,13 +4926,12 @@ async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, t
     return null;
   }
   if (!parsed || !Array.isArray(parsed.slides)) return null;
-  const slides = parsed.slides
-    .map((entry) => ({
-      role: ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content',
-      slideText: String(entry?.slideText || '').trim(),
-    }))
-    .filter((entry) => entry.slideText);
-  if (slides.length !== slideCount) return null;
+  const slides = balanceCarouselOutlineSlides(parsed.slides
+    .map(parseCarouselOutlineSlide)
+    .filter((entry) => entry.slideText));
+  // A replan may change the count; the engine (applyCarouselOutline) checks
+  // the 2-10 range itself.
+  if (!currentPlan && slides.length !== slideCount) return null;
   return { format: String(parsed.format || '').trim(), slides };
 }
 
@@ -5442,6 +5657,31 @@ export function startWhatsAppPublishScheduler(targetDir) {
   return timer;
 }
 
+// Carousels only. gaveta skips them (isGavetaItem in startGavetaSyncScheduler)
+// and production runs with OPENSQUAD_AUTO_PUBLISH_SCHEDULER=false, so without
+// this an approved carousel only went out through "Publicar agora". Starts
+// only while the general sweep is off — that sweep already publishes
+// carousels, and two sweeps on the same item could post it twice.
+export function startCarouselPublishScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  if (process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER !== 'false') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
+  // Same overlap guard as the other publish sweeps.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runDuePublishSweep(targetDir, {
+      metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
+      itemFilter: (item) => item.format === 'carousel',
+    }).catch((err) => console.error('[content-central] carousel publish sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
 // Cloud-aware counterpart to startWhatsAppPublishScheduler: that one only
 // ever sees local project.json content/schedules. Content approved from
 // the cloud panel (Approval.tsx) lives in Supabase instead, and nothing
@@ -5802,6 +6042,10 @@ async function readBody(req) {
   const raw = Buffer.concat(chunks).toString('utf-8');
   if (!raw) return {};
   return JSON.parse(raw);
+}
+
+function sendCarouselError(res, err) {
+  return sendJson(res, err.code === 'CAROUSEL_CONFLICT' ? 409 : 400, { error: err.message });
 }
 
 function sendJson(res, status, body) {

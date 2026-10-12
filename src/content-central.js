@@ -3034,6 +3034,44 @@ export async function deleteAdCreative(projectId, adCreativeId, targetDir = proc
   });
 }
 
+// The layouts the standalone roteiro may pick per slide (and the image
+// prompt then draws). Shared with the outline prompt in
+// content-central-server.js so both describe the same set. A reading
+// carousel alternates these instead of repeating "big text on a flat
+// background" on every slide (operator feedback 2026-10-12, V4 reference).
+export const CAROUSEL_LAYOUTS = {
+  texto_imagem: 'Texto no topo (título e texto de apoio) e a imagem ocupando a metade de baixo do slide.',
+  dividido: 'Slide dividido ao meio: um lado é um bloco na cor da marca com o texto, o outro lado é a imagem.',
+  imagem_cheia: 'Imagem ocupando o slide inteiro, com o texto sobre uma área mais escura ou mais clara que garanta a leitura.',
+  lista: 'Título no topo e os itens da lista em cartões ou linhas empilhadas, cada um com um marcador; imagem pequena ou nenhuma.',
+  texto_central: 'Só texto, centralizado, com o destaque em evidência — para capa ou CTA.',
+};
+
+// The background each standalone slide gets from the roteiro. All-black
+// King slides (2026-10-12) read flat next to the V4 reference, which
+// alternates white, brand colour and dark; slide 1 is attached as a style
+// reference, so without a per-slide background every slide copied its own.
+export const CAROUSEL_BACKGROUNDS = {
+  claro: 'claro — branco ou off-white, texto escuro, destaques na cor da marca.',
+  marca: 'liso na cor principal da marca, texto em branco ou na cor de contraste da marca.',
+  escuro: 'escuro (preto ou grafite), texto claro, destaques na cor da marca.',
+};
+
+// "marca" on King (#000000, #FFFFFF, #FFD100) came out black — the same as
+// "escuro". The brand background is its first vivid colour; a palette with
+// only black/white/greys keeps the generic line.
+function carouselBrandBackgroundLine(colors) {
+  const vivid = colors.find((color) => {
+    const rgb = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(color || '').trim());
+    if (!rgb) return false;
+    const channels = rgb.slice(1).map((hex) => parseInt(hex, 16));
+    return Math.max(...channels) - Math.min(...channels) >= 48;
+  });
+  return vivid
+    ? `liso na cor ${vivid} da marca, texto em preto ou branco (o que contrastar melhor), destaques na outra cor da marca.`
+    : CAROUSEL_BACKGROUNDS.marca;
+}
+
 const CAROUSEL_SLIDE_COUNT_MIN = 2;
 const CAROUSEL_SLIDE_COUNT_MAX = 10;
 
@@ -3043,7 +3081,7 @@ function clampCarouselSlideCount(value) {
   return Math.min(CAROUSEL_SLIDE_COUNT_MAX, Math.max(CAROUSEL_SLIDE_COUNT_MIN, numeric));
 }
 
-function buildCarouselSlideSkeleton(carouselId, order) {
+function buildCarouselSlideSkeleton(carouselId, order, { generating = true } = {}) {
   return {
     slideId: `${carouselId}-slide-${order}`,
     order,
@@ -3054,7 +3092,7 @@ function buildCarouselSlideSkeleton(carouselId, order) {
     channel: 'instagram_feed',
     formatLabel: CHANNEL_LABELS.instagram_feed,
     image: {
-      generating: true,
+      generating,
       prompt: '',
       references: [],
       aspectRatio: imageAspectRatioForChannel(),
@@ -3088,11 +3126,19 @@ export async function generateCarousel(projectId, options = {}, targetDir = proc
       carouselId,
       projectId: project.projectId,
       briefing,
+      // Re-read from the project when the plan is built (findCarouselOffer),
+      // so a price edited in Ofertas before planning is honored.
+      offerId: String(options.offerId || '').trim() || null,
+      carouselStyle: 'clean',
       format: '',
       slideCount,
-      slides: Array.from({ length: slideCount }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1)),
+      // Standalone carousels plan first: nothing generates until the
+      // operator approves the plan (startCarouselImageGeneration).
+      slides: Array.from({ length: slideCount }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1, { generating: false })),
+      planMessages: [],
+      planError: null,
       outlineGenerationError: null,
-      status: 'generating',
+      status: 'planning',
       createdAt,
       updatedAt: createdAt,
       filePath,
@@ -3137,7 +3183,7 @@ export function carouselBriefingFromContentTopic(topic) {
   return [topic.offerName || topic.label, topic.objective, topic.items].filter(Boolean).join(' — ');
 }
 
-function buildCarouselSlideContentTopic({ project, order, slideCount, slideText }) {
+function buildCarouselSlideContentTopic({ project, order, slideCount, slideText, offer = null, carouselStyle = '', slideContent = null }) {
   return {
     id: `carousel-slide-${order}`,
     type: 'institutional',
@@ -3158,11 +3204,32 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
     // message matters, not fidelity to the exact sentence shape. And "mesmo
     // template" read as "identical layout every slide", not just "same
     // brand identity" — now split those two apart explicitly.
-    objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Manter fiel o sentido, a mensagem e qualquer preço/promessa/CTA mencionado — mas adaptar a FORMA para leitura visual: pode quebrar em frases curtas, virar bullets/lista, destacar uma frase principal e reduzir o resto. Nunca mudar o significado nem inventar informação que não estava no texto original. Manter a MESMA identidade visual (paleta, tipografia, moldura, grafismos, posição da logo) dos outros slides deste carrossel, mas a composição/disposição dos elementos pode variar de slide para slide dentro dessa identidade — não repetir sempre o exato mesmo layout.`,
+    // With a structured roteiro the exact texts and layout come in their own
+    // prompt section; "adapt the form, cut the rest" would undo them.
+    objective: carouselStyle && slideContent
+      ? `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Os textos exatos e o layout deste slide estão em CONTEÚDO E LAYOUT DESTE SLIDE — seguir à risca, sem resumir nem cortar. Manter a MESMA identidade visual (paleta, tipografia, posição da logo) dos outros slides deste carrossel; o layout muda de slide para slide conforme indicado.`
+      : `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Manter fiel o sentido, a mensagem e qualquer preço/promessa/CTA mencionado — mas adaptar a FORMA para leitura visual: pode quebrar em frases curtas, virar bullets/lista, destacar uma frase principal e reduzir o resto. Nunca mudar o significado nem inventar informação que não estava no texto original. Manter a MESMA identidade visual (paleta, tipografia, moldura, grafismos, posição da logo) dos outros slides deste carrossel, mas a composição/disposição dos elementos pode variar de slide para slide dentro dessa identidade — não repetir sempre o exato mesmo layout.`,
     // Read by buildChatGptFinalCardPrompt's carousel FORMATO branch to
     // decide whether this slide gets the "swipe for more" arrow — every
     // slide except the last one, which is where the sequence actually ends.
     isLastCarouselSlide: order === slideCount,
+    // Only the photos travel with each slide. offerName/price would become
+    // every slide's "Título exato" and exact price in
+    // buildChatGptFinalCardPrompt; they reach the slides through the roteiro
+    // instead. type stays 'institutional' — an offer type would demand a
+    // registered offer template and attach the single-product structure.
+    ...(offer ? {
+      offerId: offer.id,
+      photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
+      productTreatment: offer.productTreatment || '',
+    } : {}),
+    // Read by buildCreativeSpec and buildChatGptFinalCardPrompt. Only the
+    // standalone tab sets it, so the calendar carousel keeps its look.
+    ...(carouselStyle ? { carouselStyle } : {}),
+    // The roteiro's per-slide layout (title/body/highlight/bullets/visual/
+    // layout/bridge) — read by buildChatGptFinalCardPrompt's CONTEÚDO E
+    // LAYOUT DO SLIDE section. Standalone tab only, like carouselStyle.
+    ...(carouselStyle && slideContent ? { slideContent } : {}),
   };
 }
 
@@ -3216,17 +3283,19 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
   await writeJson(carousel.filePath, carousel);
 }
 
-// Full pipeline for a freshly created carousel: roteiro first (decides
-// slideText/role/format for every slide), then 1 real image per slide in
-// bounded parallel. All 3 workers below share the same in-memory `carousel`
-// object (mutating different slides[i]) — every writeJson call serializes
-// the current full object, so concurrent writes are safe (no partial file,
-// last write always reflects the freshest combined state; Node has no
-// thread-level race on the same in-memory object).
-async function runCarouselGeneration(carousel, project, projectId, options, paths, overrides = {}) {
+function findCarouselOffer(project, offerId) {
+  if (!offerId) return null;
+  return normalizeProjectOffers(project.contentStrategy?.offers || []).find((offer) => offer.id === offerId) || null;
+}
+
+// Roteiro half: asks the outline generator for one text per slide and fills
+// slideText/role/contentTopic in place. Returns false — leaving the slides
+// untouched — when the outline is missing or the wrong size, so each caller
+// decides what a failure means: the one-shot pipeline marks every slide
+// errored, the standalone planning step keeps the previous plan.
+async function applyCarouselOutline(carousel, project, options, overrides = {}) {
   const briefing = overrides.briefing ?? carousel.briefing;
   const slideCount = overrides.slideCount ?? carousel.slideCount;
-  const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
   // A standalone Carousel's own .format field IS the roteiro's visual style.
   // A batch item overloads that same field name as its 'carousel' vs
   // 'single' discriminator (reconcile, approval rendering and publish all
@@ -3235,16 +3304,93 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
   // would sit on disk as format:"listicle" for the whole multi-minute
   // generation window and a crash mid-run would leave it stuck forever.
   const setFormat = overrides.setFormat || ((c, style) => { c.format = style; });
+  // Only a replan adds keys to the generator payload — the batch path and a
+  // first plan send exactly { project, briefing, slideCount }, as before.
+  const replanning = Boolean(overrides.currentPlan);
+  const offer = findCarouselOffer(project, carousel.offerId);
   let outline = null;
   if (typeof options.outlineGenerator === 'function') {
     try {
-      outline = await options.outlineGenerator({ project, briefing, slideCount });
+      outline = await options.outlineGenerator({
+        project,
+        briefing,
+        slideCount,
+        // hasPhotos lets the roteiro put the real product photo on the image
+        // slides instead of inventing a picture of it.
+        ...(offer ? { offer: { name: offer.name, price: offerPriceLabel(offer), items: offer.items || '', hasPhotos: Boolean(offer.photoReferenceIds?.length) } } : {}),
+        ...(carousel.carouselStyle ? { carouselStyle: carousel.carouselStyle } : {}),
+        ...(replanning ? { currentPlan: overrides.currentPlan, request: overrides.request } : {}),
+      });
     } catch (err) {
       carousel.outlineGenerationError = err.message;
     }
   }
-  const validOutline = outline && Array.isArray(outline.slides) && outline.slides.length === slideCount;
-  if (!validOutline) {
+  const size = Array.isArray(outline?.slides) ? outline.slides.length : 0;
+  // A replan may change the count ("faz com 6 slides"); a first plan and the
+  // batch path must return exactly what was asked.
+  const sizeOk = replanning
+    ? size >= CAROUSEL_SLIDE_COUNT_MIN && size <= CAROUSEL_SLIDE_COUNT_MAX
+    : size === slideCount;
+  if (!sizeOk) return false;
+  if (size !== carousel.slides.length) {
+    carousel.slides = Array.from({ length: size }, (_, index) => buildCarouselSlideSkeleton(carousel.carouselId, index + 1, { generating: false }));
+    carousel.slideCount = size;
+  }
+
+  setFormat(carousel, outline.format || '');
+  carousel.slides.forEach((slide, index) => {
+    const outlineSlide = outline.slides[index];
+    slide.role = outlineSlide.role || 'content';
+    slide.slideText = outlineSlide.slideText || '';
+    // Structured per-slide layout from the standalone roteiro; the batch
+    // roteiro returns none and keeps the plain slideText shape.
+    slide.slideContent = outlineSlide.content || null;
+    slide.contentTopic = buildCarouselSlideContentTopic({
+      project,
+      order: slide.order,
+      slideCount: size,
+      slideText: slide.slideText,
+      offer,
+      carouselStyle: carousel.carouselStyle || '',
+      slideContent: slide.slideContent,
+    });
+  });
+  return true;
+}
+
+// Image half. Slide 1 goes first, alone — every other slide then gets its
+// finished image as a real reference file (not just a prompt instruction),
+// so the template/palette/typography actually repeats instead of each slide
+// being its own independent roll of the dice. options.resolveCarouselStyleReference
+// is optional and best-effort: no AI images configured, provider doesn't
+// expose a local file, or slide 1 itself failed all resolve to null and
+// the rest of the carousel still generates fine, just back to
+// prompt-only consistency (see the "MESMO template" line in
+// buildCarouselSlideContentTopic).
+async function generateCarouselSlideImages(carousel, project, projectId, options, paths) {
+  const [firstSlide, ...restSlides] = carousel.slides;
+  if (firstSlide) {
+    await enrichCarouselSlideWithRealImage(carousel, firstSlide, project, projectId, paths, options);
+  }
+  const styleReferencePath = typeof options.resolveCarouselStyleReference === 'function' && firstSlide
+    ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
+    : null;
+
+  await mapWithConcurrency(restSlides, BATCH_IMAGE_CONCURRENCY, (slide) => (
+    enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath)
+  ));
+}
+
+// Full one-shot pipeline (automatic calendar carousel, and the legacy
+// enqueueCarouselGeneration): roteiro, then 1 real image per slide. All
+// workers share the same in-memory `carousel` object (mutating different
+// slides[i]) — every writeJson call serializes the current full object, so
+// concurrent writes are safe (no partial file, last write always reflects
+// the freshest combined state).
+async function runCarouselGeneration(carousel, project, projectId, options, paths, overrides = {}) {
+  const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
+  const outlineOk = await applyCarouselOutline(carousel, project, options, overrides);
+  if (!outlineOk) {
     if (!carousel.outlineGenerationError) {
       carousel.outlineGenerationError = 'O roteirista de IA não retornou um roteiro válido para este carrossel (resposta vazia ou incompleta). Apague e gere de novo para tentar outra vez.';
     }
@@ -3257,42 +3403,10 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
     await writeJson(carousel.filePath, carousel);
     return;
   }
-
-  setFormat(carousel, outline.format || '');
-  carousel.slides.forEach((slide, index) => {
-    const outlineSlide = outline.slides[index];
-    slide.role = outlineSlide.role || 'content';
-    slide.slideText = outlineSlide.slideText || '';
-    slide.contentTopic = buildCarouselSlideContentTopic({
-      project,
-      order: slide.order,
-      slideCount,
-      slideText: slide.slideText,
-    });
-  });
   carousel.updatedAt = new Date().toISOString();
   await writeJson(carousel.filePath, carousel);
 
-  // Slide 1 goes first, alone — every other slide then gets its finished
-  // image as a real reference file (not just a prompt instruction), so the
-  // template/palette/typography actually repeats instead of each slide
-  // being its own independent roll of the dice. options.resolveCarouselStyleReference
-  // is optional and best-effort: no AI images configured, provider doesn't
-  // expose a local file, or slide 1 itself failed all resolve to null and
-  // the rest of the carousel still generates fine, just back to
-  // prompt-only consistency (see the "MESMO template" line in
-  // buildCarouselSlideContentTopic).
-  const [firstSlide, ...restSlides] = carousel.slides;
-  if (firstSlide) {
-    await enrichCarouselSlideWithRealImage(carousel, firstSlide, project, projectId, paths, options);
-  }
-  const styleReferencePath = typeof options.resolveCarouselStyleReference === 'function' && firstSlide
-    ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
-    : null;
-
-  await mapWithConcurrency(restSlides, BATCH_IMAGE_CONCURRENCY, (slide) => (
-    enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath)
-  ));
+  await generateCarouselSlideImages(carousel, project, projectId, options, paths);
 
   markReady(carousel);
   carousel.updatedAt = new Date().toISOString();
@@ -3310,6 +3424,265 @@ export function enqueueCarouselGeneration(projectId, carousel, options = {}, tar
     .catch((err) => {
       console.error(`[content-central] background carousel generation failed for ${projectId}/${carousel.carouselId}:`, err.message);
     });
+}
+
+const CAROUSEL_PLAN_ERROR = 'Não consegui montar o plano, tente de novo.';
+const CAROUSEL_REPLAN_ERROR = 'Não consegui ajustar o plano, tente de novo.';
+
+function carouselConflict(message) {
+  const err = new Error(message);
+  err.code = 'CAROUSEL_CONFLICT';
+  return err;
+}
+
+function carouselHasPlan(carousel) {
+  return carousel.slides.length > 0 && carousel.slides.every((slide) => slide.slideText);
+}
+
+async function readCarousel(paths, carouselId) {
+  const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+  if (!safeId) throw new Error('ID do carrossel inválido.');
+  return readJson(join(paths.carouselsDir, `${safeId}.json`));
+}
+
+// Roteiro only — the standalone tab's "Planejar"/"Ajustar". A failure never
+// loses work: the previous plan stays and planError says to try again.
+async function runCarouselPlanning(carousel, project, options, overrides = {}) {
+  const previous = { slides: carousel.slides, slideCount: carousel.slideCount, format: carousel.format };
+  const planned = await applyCarouselOutline(carousel, project, options, overrides);
+  if (planned) {
+    carousel.planError = null;
+  } else {
+    Object.assign(carousel, previous);
+    carousel.planError = overrides.currentPlan ? CAROUSEL_REPLAN_ERROR : CAROUSEL_PLAN_ERROR;
+  }
+  carousel.outlineGenerationError = null;
+  carousel.status = 'plan_ready';
+  carousel.updatedAt = new Date().toISOString();
+  await writeJson(carousel.filePath, carousel);
+}
+
+// Fire-and-forget, same as enqueueCarouselGeneration. `request` non-empty
+// means "adjust the current plan"; empty means "plan from the briefing".
+export function enqueueCarouselPlanning(projectId, carouselId, options = {}, targetDir = process.cwd(), { request = '' } = {}) {
+  const paths = getCentralPaths(targetDir, projectId);
+  Promise.all([loadProject(paths), readCarousel(paths, carouselId)])
+    .then(([project, carousel]) => runCarouselPlanning(carousel, project, options, request
+      ? {
+        currentPlan: {
+          format: carousel.format,
+          slides: carousel.slides.map(({ role, slideText, slideContent }) => ({ role, slideText, ...(slideContent ? { content: slideContent } : {}) })),
+        },
+        request,
+      }
+      : {}))
+    .catch((err) => {
+      console.error(`[content-central] background carousel planning failed for ${projectId}/${carouselId}:`, err.message);
+    });
+}
+
+// "Ajustar" / "Tentar de novo". With no plan yet (a failed first plan) the
+// message is only logged and the plan is rebuilt from the briefing.
+export async function requestCarouselReplan(projectId, carouselId, message, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const carousel = await readCarousel(paths, carouselId);
+    if (carousel.status !== 'plan_ready') throw carouselConflict('O plano só pode ser ajustado antes de gerar as imagens.');
+    const text = String(message || '').trim();
+    const hasPlan = carouselHasPlan(carousel);
+    if (hasPlan && !text) throw new Error('Escreva o que mudar no plano.');
+    if (text) carousel.planMessages = [...(carousel.planMessages || []), { text, at: new Date().toISOString() }];
+    carousel.status = 'planning';
+    carousel.planError = null;
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return { carousel, request: hasPlan ? text : '' };
+  });
+}
+
+// "Gerar imagens". A planError left by a failed adjust does not block this:
+// the previous plan is intact.
+export async function startCarouselImageGeneration(projectId, carouselId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const carousel = await readCarousel(paths, carouselId);
+    if (carousel.status !== 'plan_ready' || !carouselHasPlan(carousel)) {
+      throw carouselConflict('Monte o plano antes de gerar as imagens.');
+    }
+    carousel.status = 'generating';
+    carousel.planError = null;
+    for (const slide of carousel.slides) {
+      slide.image.generating = true;
+      slide.imageGenerationError = null;
+    }
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return carousel;
+  });
+}
+
+export function enqueueCarouselImageGeneration(projectId, carouselId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  Promise.all([loadProject(paths), readCarousel(paths, carouselId)])
+    .then(async ([project, carousel]) => {
+      await generateCarouselSlideImages(carousel, project, projectId, options, paths);
+      carousel.status = 'ready';
+      carousel.updatedAt = new Date().toISOString();
+      await writeJson(carousel.filePath, carousel);
+    })
+    .catch((err) => {
+      console.error(`[content-central] background carousel image generation failed for ${projectId}/${carouselId}:`, err.message);
+    });
+}
+
+// The post's own topic (caption writer, calendar card). Unlike a slide's
+// topic, the offer name and price belong here — the caption may name them.
+function carouselPostTopic(carousel, project) {
+  const offer = findCarouselOffer(project, carousel.offerId);
+  return {
+    id: 'carousel-post',
+    type: 'institutional',
+    source: 'carousel',
+    label: `Carrossel — ${project.name}`,
+    offerId: offer?.id || null,
+    offerName: offer?.name || '',
+    price: offer ? offerPriceLabel(offer) : '',
+    items: carousel.slides.map((slide) => slide.slideText).filter(Boolean).join(' | '),
+    cta: offer?.cta || '',
+    autoGenerateCta: !offer?.cta,
+    notes: '',
+    objective: carousel.briefing,
+  };
+}
+
+function carouselIsFinished(carousel) {
+  return carousel.status === 'ready'
+    && carousel.slides.length > 0
+    && carousel.slides.every((slide) => slide.image?.url && !slide.image.generating && !slide.imageGenerationError);
+}
+
+// "Agendar" opens with a caption already written; nothing is saved here.
+export async function draftCarouselCaption(projectId, carouselId, options = {}, targetDir = process.cwd()) {
+  if (typeof options.captionGenerator !== 'function') throw new Error('Redator de IA não configurado — escreva a legenda à mão.');
+  const paths = getCentralPaths(targetDir, projectId);
+  const [project, carousel] = await Promise.all([loadProject(paths), readCarousel(paths, carouselId)]);
+  const item = {
+    channel: 'instagram_feed',
+    formatLabel: CHANNEL_LABELS.instagram_feed,
+    format: 'carousel',
+    briefing: carousel.briefing,
+    slides: carousel.slides,
+    contentTopic: carouselPostTopic(carousel, project),
+    caption: { text: '', version: 1 },
+  };
+  await writeAiCaptionForItem(item, project, options);
+  if (!item.caption.text) throw new Error(item.captionGenerationError || 'O redator de IA não retornou uma legenda.');
+  return item.caption.text;
+}
+
+let carouselScheduleCounter = 0;
+
+// "Agendar": the finished carousel becomes a normal calendar item, already
+// approved (the operator reviewed every slide here), in the same shape the
+// automatic calendar carousel uses — so the calendar, the approval screens and
+// publishCarouselToInstagram need nothing new. Slide images already live in
+// the project's generated assets and deleteCarousel removes only the JSON, so
+// the slides are cloned, not their files.
+export async function scheduleCarousel(projectId, carouselId, input = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const carousel = await readCarousel(paths, carouselId);
+    if (!carouselIsFinished(carousel)) throw new Error('Gere todos os slides antes de agendar.');
+    const date = String(input.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Data inválida.');
+    const time = String(input.time || project.contentSettings?.defaultPostTime || DEFAULT_TIME).trim();
+    if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('Horário inválido.');
+    if (Number(time.slice(0, 2)) > 23 || Number(time.slice(3)) > 59) throw new Error('Horário inválido.');
+    // Same local-time parse isPublishDue uses. The round trip catches what V8
+    // rolls over (2026-02-30 -> Mar 2) or rejects (2026-13-45).
+    const dueAt = new Date(`${date}T${time}:00`);
+    const pad = (n) => String(n).padStart(2, '0');
+    if (Number.isNaN(dueAt.getTime()) || `${dueAt.getFullYear()}-${pad(dueAt.getMonth() + 1)}-${pad(dueAt.getDate())}` !== date) throw new Error('Data inválida.');
+    // A past slot would be published by the very next sweep: irreversible.
+    if (dueAt.getTime() < Date.now() - 5 * 60 * 1000) throw new Error('Escolha uma data e horário que ainda não passaram.');
+    if ((carousel.schedules || []).some((entry) => entry.date === date && entry.time === time)) {
+      throw new Error('Este carrossel já está agendado para esse dia e horário.');
+    }
+    const caption = String(input.caption || '').trim();
+    if (!caption) throw new Error('Escreva a legenda antes de agendar.');
+
+    // Same uniqueness reasoning as flyerBatchTokenCounter.
+    const batchId = `${date}-carrossel-${Date.now()}-${carouselScheduleCounter++}`;
+    const batchDir = join(paths.draftsDir, batchId);
+    await mkdir(batchDir, { recursive: true });
+    const contentId = `${project.projectId}-${batchId}`;
+    const filePath = join(batchDir, 'day-01-instagram_feed-01.json');
+    const now = new Date().toISOString();
+    const contentTopic = carouselPostTopic(carousel, project);
+    const item = {
+      schemaVersion: 1,
+      contentId,
+      projectId: project.projectId,
+      batchId,
+      dayNumber: 1,
+      slotNumber: 1,
+      scheduledDate: date,
+      scheduledTime: time,
+      channel: 'instagram_feed',
+      formatLabel: CHANNEL_LABELS.instagram_feed,
+      contentTopic,
+      creativeGroupKey: null,
+      creativeSharedWith: null,
+      contentReview: buildContentReview({
+        channel: 'instagram_feed',
+        aspectRatio: imageAspectRatioForChannel(),
+        dimensions: imageDimensionsForChannel('instagram_feed'),
+        contentTopic,
+      }),
+      status: 'aprovado',
+      title: `Carrossel — ${project.name}`,
+      format: 'carousel',
+      briefing: carousel.briefing,
+      carouselFormat: carousel.format || '',
+      slideCount: carousel.slides.length,
+      slides: structuredClone(carousel.slides),
+      outlineGenerationError: null,
+      caption: { text: caption, version: 1 },
+      dayRules: [],
+      generationContext: { globalRules: [], projectRules: [...(project.rules?.project || [])], contentRules: [] },
+      approval: { required: false, emailSentAt: null, approvedAt: now, approvalSource: 'carousel_scheduled' },
+      publish: { publishedAt: null, metaMediaId: null, error: null },
+      sourceCarouselId: carousel.carouselId,
+      filePath,
+      createdAt: now,
+      updatedAt: now,
+    };
+    // The item file is what makes the post live (listProjectContent reads the
+    // day file), so it goes last: a failure before it leaves nothing to retry
+    // into a duplicate.
+    await writeJson(join(batchDir, 'batch.json'), {
+      batchId,
+      projectId: project.projectId,
+      createdAt: now,
+      days: 1,
+      channel: 'instagram_feed',
+      startDate: date,
+      items: [item],
+    });
+    await writeJson(filePath, item);
+
+    carousel.schedules = [...(carousel.schedules || []), { contentId, batchId, date, time }];
+    carousel.updatedAt = now;
+    // The post exists already; failing to note it on the carousel must not
+    // make the operator retry into a second post.
+    try {
+      await writeJson(carousel.filePath, carousel);
+    } catch (error) {
+      console.error(`scheduleCarousel: could not record the schedule on ${carouselId}: ${error.message}`);
+    }
+    return { item, carousel };
+  });
 }
 
 // "Regenerar esse slide" — refreshes just that slide's image references
@@ -4910,6 +5283,7 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
     const projectId = projectSummary.projectId;
     let content = await listProjectContent(projectId, targetDir);
     if (options.channels) content = content.filter((item) => options.channels.has(item.channel));
+    if (options.itemFilter) content = content.filter(options.itemFilter);
     // A marker with no outcome means that attempt died mid-send (PC shut
     // down or slept) — sweeps never overlap, so it isn't still running. It
     // may already be live, so it's never auto-retried (see publishOneItem);
@@ -5461,6 +5835,11 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
         }
         if (carousel.status === 'generating') {
           carousel.status = 'ready';
+          touched = true;
+        }
+        if (carousel.status === 'planning') {
+          carousel.status = 'plan_ready';
+          carousel.planError = 'Planejamento interrompido (o servidor foi reiniciado). Tente de novo.';
           touched = true;
         }
         if (!touched) continue;
@@ -6648,7 +7027,7 @@ function selectedTopicIdeaGoalKeys(project = {}) {
     .filter((goalKey) => TOPIC_IDEA_GOALS.has(goalKey) && GOAL_TOPIC_TEMPLATES[goalKey]);
 }
 
-function projectTopicIdeaContext(project = {}) {
+export function projectTopicIdeaContext(project = {}) {
   const brandInput = project.brandInput || {};
   const companyProfile = project.companyProfile || {};
   const xray = project.brandXray?.status === 'approved' ? project.brandXray.blocks || {} : {};
@@ -8090,11 +8469,14 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   // (goal/authority/institutional, special-date, carousel, ad-creative) still
   // has no UI to turn it off and keeps the free background regardless of what
   // topic.backgroundStyle happens to contain.
+  const cleanCarousel = topic.source === 'carousel' && topic.carouselStyle === 'clean';
   const backgroundStyle = topic.source === 'offer'
     ? normalizeBackgroundStyle(topic.backgroundStyle)
     : topic.source === 'flyer' && topic.backgroundStyle
       ? normalizeBackgroundStyle(topic.backgroundStyle)
-      : 'elaborate';
+      : cleanCarousel
+        ? 'simple_brand'
+        : 'elaborate';
   return {
     schemaVersion: 1,
     project: {
@@ -8140,7 +8522,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
     // The clean title is an offer-form opt-in; every other source has no UI
     // for it and keeps the free, drawn title.
     title: {
-      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : 'lettering',
+      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : cleanCarousel ? 'clean' : 'lettering',
     },
     references: selectedReferences.map((reference) => ({
       id: reference.id || '',
@@ -8222,7 +8604,18 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // Two offers side by side (buildComboOfferTopic): its offerName "A + B"
   // as the exact headline is what made the pair read as one kit.
   const isOfferPair = topic.source === 'offer' && hasProductList(topic);
-  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle || isOfferPair;
+  // Fifth case, and it broke a real piece: a carousel slide has no offerName
+  // either, so every slide was told "Título exato: <project name>" + "Não
+  // alterar título" right next to its own text. King's CTA slide
+  // (2026-10-12) obeyed and came out as the bare brand name, its CTA gone.
+  // A slide's title is its own roteiro text (the "Base para este slide"
+  // line in the objective).
+  const isCarouselSlide = topic.source === 'carousel';
+  // Standalone (tab) carousel: a reading carousel with a per-slide layout
+  // from the roteiro. The calendar carousel never sets carouselStyle.
+  const editorialCarousel = isCarouselSlide && topic.carouselStyle === 'clean';
+  const slideContent = editorialCarousel && topic.slideContent ? topic.slideContent : null;
+  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle || isOfferPair || isCarouselSlide;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
     || topic.ideaTitle
@@ -8326,7 +8719,12 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // a middle/explanation slide needs more room for actual body text.
       // Feedback 27/08/2026: a single flat "25-30% max" ceiling ignored
       // that a slide's job changes what "too big" even means.
-      topic.source === 'carousel'
+      // A reading carousel: the King slides (2026-10-12) came out with the
+      // title over ~half the canvas on every slide, so the 20–35% budget
+      // below is replaced, not just tightened.
+      editorialCarousel
+        ? 'Hierarquia de leitura de carrossel: título em tamanho médio (no máximo 2 linhas, nunca ocupando metade do slide), texto de apoio em tamanho confortável de ler no celular, e no máximo UM destaque grande por slide — só quando o conteúdo trouxer um "Destaque". Manter respiro nas bordas.'
+        : topic.source === 'carousel'
         ? (content.role === 'cover' || content.role === 'cta'
           ? 'Manter respiro/margem nas bordas do canvas; é um slide de capa/CTA — título pode ser maior e mais impactante, ocupando até ~35% da altura, sem preencher o canvas inteiro nem cortar a margem.'
           : 'Manter respiro/margem nas bordas do canvas; título ocupando geralmente entre 20-30% da altura do slide, deixando espaço equilibrado pro corpo de texto/explicação — sem letras gigantes tomando o slide inteiro.')
@@ -8335,6 +8733,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // is where the sequence ends, an arrow there would point at nothing.
       topic.source === 'carousel' && !topic.isLastCarouselSlide
         ? 'Adicionar um pequeno indicador visual de "arraste para o lado" no canto inferior direito do slide (ex.: seta/chevron simples, discreto, na cor de acento da marca) — sinaliza que o carrossel continua no próximo slide.'
+        : '',
+      // Leaving the line out wasn't enough: King's last slide (2026-10-12)
+      // copied the arrow from slide 1, attached as its style reference.
+      topic.source === 'carousel' && topic.isLastCarouselSlide
+        ? 'Este é o último slide do carrossel: NÃO desenhar seta, chevron nem indicador de "arraste", mesmo que o slide 1 anexado tenha um.'
         : '',
     ]),
     // Only present when runCarouselGeneration/enqueueCarouselSlideRegeneration
@@ -8345,6 +8748,40 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         'Uma das imagens anexadas é o slide 1, já gerado, deste MESMO carrossel.',
         'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — mesma identidade visual, não apenas inspiração livre.',
         'A composição/disposição dos elementos deste slide pode ser diferente da do slide 1 (ex.: título maior de um lado, bloco de texto do outro, lista de bullets) — o que precisa ser idêntico é a identidade visual, não o layout exato.',
+        slideContent?.background ? 'A cor de fundo deste slide é a indicada em "Fundo" (CONTEÚDO E LAYOUT DESTE SLIDE), mesmo que seja diferente da do slide 1.' : '',
+      ])
+      : '',
+    editorialCarousel
+      ? section('ESTILO CARROSSEL EDITORIAL', [
+        'Carrossel de leitura, estilo editorial de Instagram: cada slide entrega uma informação completa, que a pessoa lê e então arrasta para o próximo — não é um letreiro com uma frase gigante.',
+        slideContent?.background
+          ? 'O fundo muda de slide para slide (claro, cor da marca, escuro) conforme indicado em "Fundo"; o que se repete entre os slides são a tipografia, as cores de destaque e a logo. Sem texturas, ondas ou grafismos carregados.'
+          : 'Fundo claro/branco ou liso na cor da marca, alternando entre os slides; sem texturas, ondas ou grafismos carregados.',
+        'Tipografia: uma fonte forte e condensada para título e destaque, e uma fonte limpa para o texto de apoio — as mesmas em todos os slides.',
+        'Palavras marcadas com **asteriscos** no texto vão em negrito (sem mostrar os asteriscos).',
+        'Logo pequena, sempre no mesmo canto em todos os slides.',
+        'Se houver foto real do produto anexada, ela é a imagem do slide: recorte limpo, sem colagem nem vários produtos misturados.',
+        // A generated sneaker came out with what reads as a Nike swoosh.
+        'Nenhuma imagem mostra marca, logo, produto ou tela de outra empresa, nem pessoas famosas ou reconhecíveis. Objetos do dia a dia (tênis, roupas, celulares, notebooks, embalagens) aparecem lisos, sem logotipo, símbolo ou nome de marca.',
+        content.role === 'cta' ? 'Se a imagem deste slide for um mockup do perfil da marca, a foto de perfil é a logo anexada; não inventar @, número de seguidores nem posts.' : '',
+      ])
+      : '',
+    slideContent
+      ? section('CONTEÚDO E LAYOUT DESTE SLIDE', [
+        `Layout: ${CAROUSEL_LAYOUTS[slideContent.layout] || CAROUSEL_LAYOUTS.texto_imagem}`,
+        CAROUSEL_BACKGROUNDS[slideContent.background]
+          ? `Fundo (nas áreas sem imagem): ${slideContent.background === 'marca' ? carouselBrandBackgroundLine(brandColorsForBackground) : CAROUSEL_BACKGROUNDS[slideContent.background]}`
+          : '',
+        slideContent.title ? `Título (escrever exatamente): ${slideContent.title}` : '',
+        slideContent.body ? `Texto de apoio (escrever exatamente, com os negritos indicados): ${slideContent.body}` : '',
+        slideContent.highlight ? `Destaque grande (escrever exatamente, em caixa alta, na cor de destaque da marca): ${slideContent.highlight}` : '',
+        slideContent.bullets?.length ? `Lista (escrever cada item exatamente, um por linha ou cartão): ${slideContent.bullets.map((item) => `• ${item}`).join(' ')}` : '',
+        slideContent.visual && slideContent.layout !== 'texto_central' ? `Imagem: ${slideContent.visual}` : '',
+        slideContent.bridge ? `Rodapé: a frase de continuação "${slideContent.bridge}" numa pílula discreta com uma seta →, puxando para o próximo slide.` : '',
+        topic.isLastCarouselSlide
+          ? 'Não acrescentar nenhum outro texto além destes e da logo.'
+          : 'Não acrescentar nenhum outro texto além destes, da logo e da seta de arraste.',
+        'Margem interna generosa em todos os lados: nenhum texto, imagem ou logo pode tocar ou ser cortado pela borda.',
       ])
       : '',
     section('OBJETIVO DO CRIATIVO', [
@@ -8373,6 +8810,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? `Título: criar uma chamada curta (até 5 palavras) que apresente os produtos juntos (ex.: a categoria ou o momento de uso deles), acima dos produtos. Não juntar os nomes dos produtos num título de kit (ex.: "Produto A + Produto B"). Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
         : isSpecialDateFreeTitle
         ? `Título: criar um título curto (até 8 palavras) com tom caloroso e comemorativo sobre "${freeTitleSubject}" — é um post de celebração da data, não uma oferta nem uma peça comercial. Pode conectar de leve com o negócio/segmento da marca, mas sem soar como anúncio, pitch de venda ou gancho de captação. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo.`
+        : isCarouselSlide
+        ? `Título: o título deste slide vem do texto-base dele ("Base para este slide", acima) — não usar o nome "${project.name}" como título, o nome da marca já aparece na logo.`
         : isGoalTopic || isAdCreativeFreeTitle
           ? `Título: criar um título curto (até 8 palavras), chamativo, em formato de gancho ou pergunta específica sobre "${freeTitleSubject}" — não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Ex. de estilo (adaptar ao assunto real, não copiar): pergunta direta que gera curiosidade, seguida de um subtítulo curto que reforça o valor.`
           : useSalesHookTitle
@@ -8395,7 +8834,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? (useSubtleCta
           ? `CTA sutil: "${exactCta}" como texto pequeno, sem botão/selo.`
           : `CTA exato: ${exactCta}`)
-        : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte.',
+        // A carousel's CTA lives in its last slide's own text, never in
+        // topic.cta — the generic ban below erased it.
+        : isCarouselSlide && content.role === 'cta'
+          ? 'CTA: a chamada para ação deste slide é a do texto-base dele — escrever como texto, sem botão nem selo.'
+          : isCarouselSlide
+            ? 'Sem botão ou selo de CTA neste slide (é um slide do meio do carrossel) — não acrescentar chamada para ação que não esteja no texto-base.'
+            : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte.',
       isOfferPair
         ? 'Tipo de publicação: produtos lado a lado, cada um com o seu próprio preço — não é combo nem kit.'
         : topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
@@ -8467,6 +8912,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       `${topic.source === 'flyer' ? 'Este encarte' : 'Esta peça'} está sem foto real de produto anexada, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.`,
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
+    ] : editorialCarousel ? [
+      // The service-business branch below ("resolver com tipografia forte")
+      // is what made every King slide plain text on black.
+      'Sem foto real de produto neste slide: criar a imagem descrita em "Imagem" (ilustração, foto realista genérica do segmento ou mockup de celular/tela com conteúdo genérico), coerente com a marca.',
+      'Nada de marca, logo, produto ou tela de outra empresa; nada de pessoas famosas ou reconhecíveis.',
     ] : hasAnyProductPhotoReference(project) ? [
       'Sem foto real selecionada nesta geração; criar produto/serviço coerente sem copiar marca de terceiros.',
       ...productFocus.assetLines,
@@ -8525,7 +8975,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? `Rodapé: chamada “${exactCta}” em texto pequeno, sem botão — logo/fechamento limpo domina.`
         : 'Rodapé: fechamento visual limpo (logo ou elemento decorativo), sem botão ou selo de CTA.',
       'A composição deve ter leitura clara de cima para baixo e aproveitar topo, centro e base.',
-    ]) : section('ESTRUTURA FEED OBRIGATÓRIA', [
+    ])
+    // The slide's own layout (CONTEÚDO E LAYOUT DESTE SLIDE) replaces the
+    // fixed logo/product/CTA zones — those forbid the lists, cards and
+    // side-by-side image a reading carousel is made of.
+    : slideContent ? '' : section('ESTRUTURA FEED OBRIGATÓRIA', [
       // Mirrors the Story block above with a positive zone-by-zone layout —
       // a "não faça X" ban in RESTRIÇÕES FINAIS (below) wasn't enough on its
       // own to stop the model from adding a decorative ribbon + icon row;
@@ -8540,7 +8994,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       exactPrice ? 'Base: preço em um único selo compacto e legível — não duplicar em outro selo ou faixa.' : '',
       exactCta
         ? `Rodapé: chamada “${exactCta}” em texto ou botão simples — não repetir como selo/ícone extra. Se for botão, deixar respiro visível entre ele e a borda inferior.`
-        : 'Rodapé: fechamento limpo (logo), sem botão ou selo de CTA.',
+        : isCarouselSlide && content.role === 'cta'
+          ? 'Rodapé: a chamada do texto-base deste slide em texto (sem botão nem selo), com respiro até a borda inferior.'
+          : 'Rodapé: fechamento limpo (logo), sem botão ou selo de CTA.',
       'Exatamente estes blocos: nenhum selo secundário, fileira de ícones/benefícios ou faixa de texto fora do definido aqui.',
       'Margem interna generosa em todos os lados: nenhum texto, selo, ícone, botão, @ ou logo pode tocar, ultrapassar ou ser cortado pela borda da imagem — vale pro rodapé inteiro, não só pro CTA.',
       'Se algum texto (item, @ da marca, chamada) não couber inteiro dentro da margem no tamanho de fonte legível, encurtar o texto ou reduzir a fonte — nunca deixar vazar, quebrar de forma estranha ou sair cortado da arte.',

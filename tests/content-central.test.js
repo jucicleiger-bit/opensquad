@@ -48,6 +48,10 @@ import {
   enqueueCarouselGeneration,
   regenerateCarouselSlide,
   enqueueCarouselSlideRegeneration,
+  enqueueCarouselPlanning,
+  requestCarouselReplan,
+  startCarouselImageGeneration,
+  enqueueCarouselImageGeneration,
   generateCatalogSchedulePlan,
   chooseCreativeCta,
   creativeShapeGroupForChannel,
@@ -94,6 +98,8 @@ import {
   saveProjectOffer,
   saveProjectOfferGroup,
   saveProjectPillar,
+  scheduleCarousel,
+  draftCarouselCaption,
   suggestProjectPillars,
   saveProjectAsset,
   saveProjectToken,
@@ -9610,7 +9616,7 @@ test('listAdCreatives returns an empty list for a project that never generated a
   });
 });
 
-test('generateCarousel creates a placeholder carousel with N generating slides, no image/roteiro yet', async () => {
+test('generateCarousel creates a carousel waiting for its plan: N empty slides, nothing generating yet', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-base', name: 'Boss Pizzaria' }, dir);
 
@@ -9618,13 +9624,15 @@ test('generateCarousel creates a placeholder carousel with N generating slides, 
 
     assert.equal(carousel.slideCount, 5);
     assert.equal(carousel.slides.length, 5);
-    assert.equal(carousel.status, 'generating');
+    assert.equal(carousel.status, 'planning');
     assert.equal(carousel.format, '');
     assert.equal(carousel.outlineGenerationError, null);
+    assert.equal(carousel.planError, null);
+    assert.deepEqual(carousel.planMessages, []);
     carousel.slides.forEach((slide, index) => {
       assert.equal(slide.order, index + 1);
       assert.equal(slide.channel, 'instagram_feed');
-      assert.equal(slide.image.generating, true);
+      assert.equal(slide.image.generating, false);
       assert.deepEqual(slide.image.dimensions, { width: 1080, height: 1350 });
       assert.equal(slide.contentTopic, null);
       assert.equal(slide.slideText, '');
@@ -10506,6 +10514,411 @@ test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only 
     const untouchedSlide = reloaded.slides.find((s) => s.slideId !== targetSlideId);
     assert.equal(changedSlide.image.url, 'https://cdn.example.com/regenerated.png');
     assert.equal(untouchedSlide.image.url, 'https://cdn.example.com/original.png', 'the other slide must be untouched');
+  });
+});
+
+// Polls disk until `done(carousel)` holds — every planning/generation step
+// below is fire-and-forget, same as the rest of this file's carousel tests.
+async function waitForCarousel(projectId, carouselId, dir, done) {
+  let carousel;
+  for (let i = 0; i < 100; i += 1) {
+    carousel = (await listCarousels(projectId, dir)).find((entry) => entry.carouselId === carouselId);
+    if (carousel && done(carousel)) return carousel;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  return carousel;
+}
+
+function fakeOutline(texts, format = 'listicle') {
+  return { format, slides: texts.map((slideText, index) => ({ role: index === 0 ? 'cover' : 'content', slideText })) };
+}
+
+test('enqueueCarouselPlanning fills the plan without generating any image', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-plano', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-plano', { briefing: 'Pizza de sexta', slideCount: 2 }, dir);
+    let imageCalls = 0;
+
+    enqueueCarouselPlanning('carrossel-plano', carousel.carouselId, {
+      outlineGenerator: async () => fakeOutline(['Sexta é dia de pizza', 'Peça pelo WhatsApp']),
+      imageGenerator: async () => { imageCalls += 1; return { url: 'https://cdn.example.com/x.png' }; },
+    }, dir);
+
+    const planned = await waitForCarousel('carrossel-plano', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(planned.status, 'plan_ready');
+    assert.equal(planned.format, 'listicle');
+    assert.deepEqual(planned.slides.map((s) => s.slideText), ['Sexta é dia de pizza', 'Peça pelo WhatsApp']);
+    assert.equal(planned.planError, null);
+    planned.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.image.url, undefined);
+      assert.ok(slide.contentTopic);
+    });
+    assert.equal(imageCalls, 0, 'planning must never generate an image');
+  });
+});
+
+test('requestCarouselReplan + enqueueCarouselPlanning send the current plan and the request, and can change the slide count', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-ajuste', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-ajuste', { briefing: 'Pizza de sexta', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-ajuste', carousel.carouselId, {
+      outlineGenerator: async () => fakeOutline(['Capa', 'CTA']),
+    }, dir);
+    await waitForCarousel('carrossel-ajuste', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    const { carousel: pending, request } = await requestCarouselReplan('carrossel-ajuste', carousel.carouselId, 'faz com 3 slides e fala da entrega', dir);
+    assert.equal(pending.status, 'planning');
+    assert.equal(request, 'faz com 3 slides e fala da entrega');
+    assert.equal(pending.planMessages.length, 1);
+    assert.equal(pending.planMessages[0].text, 'faz com 3 slides e fala da entrega');
+
+    let received;
+    enqueueCarouselPlanning('carrossel-ajuste', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Capa', 'Entrega em 30 min', 'CTA']); },
+    }, dir, { request });
+
+    const replanned = await waitForCarousel('carrossel-ajuste', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(received.request, 'faz com 3 slides e fala da entrega');
+    assert.deepEqual(received.currentPlan.slides.map((s) => s.slideText), ['Capa', 'CTA']);
+    assert.equal(replanned.slideCount, 3);
+    assert.deepEqual(replanned.slides.map((s) => s.slideText), ['Capa', 'Entrega em 30 min', 'CTA']);
+    assert.deepEqual(replanned.slides.map((s) => s.order), [1, 2, 3]);
+  });
+});
+
+test('a failed replan keeps the previous plan and sets planError', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-ajuste-falho', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-ajuste-falho', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-ajuste-falho', carousel.carouselId, {
+      outlineGenerator: async () => fakeOutline(['Capa', 'CTA']),
+    }, dir);
+    await waitForCarousel('carrossel-ajuste-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    const { request } = await requestCarouselReplan('carrossel-ajuste-falho', carousel.carouselId, 'muda tudo', dir);
+    enqueueCarouselPlanning('carrossel-ajuste-falho', carousel.carouselId, {
+      outlineGenerator: async () => { throw new Error('timeout'); },
+    }, dir, { request });
+
+    const after = await waitForCarousel('carrossel-ajuste-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.deepEqual(after.slides.map((s) => s.slideText), ['Capa', 'CTA']);
+    assert.equal(after.planError, 'Não consegui ajustar o plano, tente de novo.');
+    assert.equal(after.outlineGenerationError, null);
+  });
+});
+
+test('a failed first plan lands in plan_ready with planError and empty slides, and a retry with no message plans fresh', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-plano-falho', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-plano-falho', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-plano-falho', carousel.carouselId, { outlineGenerator: async () => null }, dir);
+    const failed = await waitForCarousel('carrossel-plano-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(failed.planError, 'Não consegui montar o plano, tente de novo.');
+    assert.ok(failed.slides.every((s) => !s.slideText));
+
+    const { request } = await requestCarouselReplan('carrossel-plano-falho', carousel.carouselId, '', dir);
+    assert.equal(request, '', 'no plan yet: a retry is a fresh plan, not an adjustment');
+    let received;
+    enqueueCarouselPlanning('carrossel-plano-falho', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Capa', 'CTA']); },
+    }, dir, { request });
+    const planned = await waitForCarousel('carrossel-plano-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready' && !c.planError);
+    assert.equal(received.currentPlan, undefined);
+    assert.deepEqual(planned.slides.map((s) => s.slideText), ['Capa', 'CTA']);
+  });
+});
+
+test('requestCarouselReplan refuses a carousel that is not in plan_ready, and a blank message when a plan exists', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-ajuste-recusa', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-ajuste-recusa', { briefing: 'teste', slideCount: 2 }, dir);
+    await assert.rejects(
+      () => requestCarouselReplan('carrossel-ajuste-recusa', carousel.carouselId, 'muda', dir),
+      (err) => err.code === 'CAROUSEL_CONFLICT',
+    );
+    enqueueCarouselPlanning('carrossel-ajuste-recusa', carousel.carouselId, { outlineGenerator: async () => fakeOutline(['Capa', 'CTA']) }, dir);
+    await waitForCarousel('carrossel-ajuste-recusa', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    await assert.rejects(
+      () => requestCarouselReplan('carrossel-ajuste-recusa', carousel.carouselId, '   ', dir),
+      /Escreva o que mudar no plano/,
+    );
+  });
+});
+
+test('startCarouselImageGeneration + enqueueCarouselImageGeneration generate images from the approved plan', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-imagens', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-imagens', { briefing: 'teste', slideCount: 2 }, dir);
+    await assert.rejects(
+      () => startCarouselImageGeneration('carrossel-imagens', carousel.carouselId, dir),
+      (err) => err.code === 'CAROUSEL_CONFLICT',
+      'no plan yet',
+    );
+    enqueueCarouselPlanning('carrossel-imagens', carousel.carouselId, { outlineGenerator: async () => fakeOutline(['Capa do plano', 'CTA do plano']) }, dir);
+    await waitForCarousel('carrossel-imagens', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    const started = await startCarouselImageGeneration('carrossel-imagens', carousel.carouselId, dir);
+    assert.equal(started.status, 'generating');
+    started.slides.forEach((slide) => assert.equal(slide.image.generating, true));
+
+    const objectives = [];
+    enqueueCarouselImageGeneration('carrossel-imagens', carousel.carouselId, {
+      imageGenerator: async (payload) => { objectives.push(payload.content.contentTopic.objective); return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+    }, dir);
+
+    const ready = await waitForCarousel('carrossel-imagens', carousel.carouselId, dir, (c) => c.status === 'ready');
+    assert.equal(ready.status, 'ready');
+    ready.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.image.url, 'https://cdn.example.com/x.png');
+    });
+    assert.ok(objectives.some((text) => text.includes('Capa do plano')));
+    assert.ok(objectives.some((text) => text.includes('CTA do plano')));
+  });
+});
+
+test('reconcileInterruptedGenerations turns a carousel stuck in planning into plan_ready with a retry message', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-plano-travado', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-plano-travado', { briefing: 'teste', slideCount: 2 }, dir);
+
+    await reconcileInterruptedGenerations(dir);
+
+    const reloaded = JSON.parse(await readFile(carousel.filePath, 'utf-8'));
+    assert.equal(reloaded.status, 'plan_ready');
+    assert.match(reloaded.planError, /interrompido/);
+  });
+});
+
+test('a carousel pulled from an offer sends the offer to the roteiro and puts its photos (not its name/price) on every slide', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-oferta', name: 'Boss Pizzaria' }, dir);
+    const { offer } = await saveProjectOffer('carrossel-oferta', {
+      name: 'Pizza Calabresa',
+      type: 'offer',
+      price: 'R$ 49,90',
+      items: 'Borda recheada',
+      photoReferenceIds: ['ref-foto-calabresa'],
+      productTreatment: 'faithful_enhance',
+    }, dir);
+    const carousel = await generateCarousel('carrossel-oferta', { briefing: 'Pizza Calabresa — Borda recheada', slideCount: 2, offerId: offer.id }, dir);
+    assert.equal(carousel.offerId, offer.id);
+    assert.equal(carousel.carouselStyle, 'clean');
+
+    let received;
+    enqueueCarouselPlanning('carrossel-oferta', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Calabresa por R$ 49,90', 'Peça já']); },
+    }, dir);
+    const planned = await waitForCarousel('carrossel-oferta', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    assert.deepEqual(received.offer, { name: 'Pizza Calabresa', price: 'R$ 49,90', items: 'Borda recheada', hasPhotos: true });
+    assert.equal(received.carouselStyle, 'clean');
+    planned.slides.forEach((slide) => {
+      assert.equal(slide.contentTopic.offerId, offer.id);
+      assert.deepEqual(slide.contentTopic.photoReferenceIds, ['ref-foto-calabresa']);
+      assert.equal(slide.contentTopic.productTreatment, 'faithful_enhance');
+      assert.equal(slide.contentTopic.carouselStyle, 'clean');
+      assert.equal(slide.contentTopic.type, 'institutional', 'never the offer type — that would demand an offer template');
+      assert.equal(slide.contentTopic.offerName, undefined, 'offerName would become every slide\'s exact title');
+      assert.equal(slide.contentTopic.price, '', 'price would be stamped on every slide');
+    });
+  });
+});
+
+test('an offerId that no longer exists falls back to a plain briefing carousel', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-oferta-sumiu', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-oferta-sumiu', { briefing: 'teste', slideCount: 2, offerId: 'nao-existe' }, dir);
+    let received;
+    enqueueCarouselPlanning('carrossel-oferta-sumiu', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Capa', 'CTA']); },
+    }, dir);
+    const planned = await waitForCarousel('carrossel-oferta-sumiu', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(received.offer, undefined);
+    assert.equal(planned.planError, null);
+    assert.equal(planned.slides[0].contentTopic.offerId, undefined);
+  });
+});
+
+test('a standalone carousel slide is built clean: simple brand background, clean title, clean carousel block in the prompt', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-clean', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-clean', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-clean', carousel.carouselId, { outlineGenerator: async () => fakeOutline(['Capa', 'CTA']) }, dir);
+    await waitForCarousel('carrossel-clean', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    await startCarouselImageGeneration('carrossel-clean', carousel.carouselId, dir);
+
+    const seen = [];
+    enqueueCarouselImageGeneration('carrossel-clean', carousel.carouselId, {
+      imageGenerator: async (payload) => {
+        seen.push({ prompt: payload.content.image.prompt, spec: payload.content.creativeSpec });
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    await waitForCarousel('carrossel-clean', carousel.carouselId, dir, (c) => c.status === 'ready');
+
+    assert.equal(seen.length, 2);
+    seen.forEach(({ prompt, spec }) => {
+      assert.equal(spec.background.style, 'simple_brand');
+      assert.equal(spec.title.style, 'clean');
+      assert.match(prompt, /ESTILO CARROSSEL EDITORIAL/);
+    });
+  });
+});
+
+// Operator feedback 2026-10-12 (V4 reference): our slides were one giant
+// phrase each; a reading carousel gives every slide its own texts, image and
+// layout, and the fixed logo/product/CTA zones must not override that.
+test('a structured roteiro slide reaches the image prompt as its exact texts, image and layout, with a reading hierarchy', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-editorial', name: 'Boss Pizzaria' }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-editorial');
+    const projectJson = JSON.parse(await readFile(paths.projectPath, 'utf-8'));
+    projectJson.brandIdentity.extractedColors = ['#000000', '#FFFFFF', '#FFD100'];
+    await writeFile(paths.projectPath, JSON.stringify(projectJson, null, 2));
+    const carousel = await generateCarousel('carrossel-editorial', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-editorial', carousel.carouselId, {
+      outlineGenerator: async () => ({
+        format: 'listicle',
+        slides: [
+          {
+            role: 'cover',
+            slideText: 'Por que a pizza chega fria?',
+            content: { title: 'Por que a pizza chega fria?', body: '', highlight: 'PIZZA FRIA', bullets: [], visual: '', layout: 'texto_central', background: 'marca', bridge: '' },
+          },
+          {
+            role: 'cta',
+            slideText: 'Três cuidados na entrega',
+            content: {
+              title: 'Três cuidados na entrega',
+              body: 'A gente usa **bolsa térmica** em todo pedido.',
+              highlight: '',
+              bullets: ['Bolsa térmica', 'Rota curta', 'Saída na hora'],
+              visual: 'motoboy entregando uma caixa de pizza',
+              layout: 'lista',
+              background: 'claro',
+              bridge: '',
+            },
+          },
+        ],
+      }),
+    }, dir);
+    const planned = await waitForCarousel('carrossel-editorial', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(planned.slides[1].slideContent.layout, 'lista');
+    await startCarouselImageGeneration('carrossel-editorial', carousel.carouselId, dir);
+
+    const prompts = {};
+    enqueueCarouselImageGeneration('carrossel-editorial', carousel.carouselId, {
+      imageGenerator: async (payload) => {
+        prompts[payload.content.role] = payload.content.image.prompt;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    await waitForCarousel('carrossel-editorial', carousel.carouselId, dir, (c) => c.status === 'ready');
+
+    const cta = prompts.cta;
+    assert.match(cta, /CONTEÚDO E LAYOUT DESTE SLIDE/);
+    assert.match(cta, /Layout: Título no topo e os itens da lista/);
+    assert.match(cta, /Título \(escrever exatamente\): Três cuidados na entrega/);
+    assert.match(cta, /\*\*bolsa térmica\*\*/);
+    assert.match(cta, /• Bolsa térmica • Rota curta • Saída na hora/);
+    assert.match(cta, /Imagem: motoboy entregando uma caixa de pizza/);
+    assert.match(cta, /Fundo \(nas áreas sem imagem\): claro — branco/);
+    assert.match(cta, /O fundo muda de slide para slide/);
+    assert.match(cta, /último slide do carrossel: NÃO desenhar seta/);
+    assert.doesNotMatch(cta, /arraste para o lado/);
+    assert.doesNotMatch(cta, /da logo e da seta de arraste/);
+    assert.match(cta, /sem logotipo, símbolo ou nome de marca/);
+    assert.match(cta, /mockup do perfil da marca, a foto de perfil é a logo anexada/);
+    assert.match(prompts.cover, /Fundo \(nas áreas sem imagem\): liso na cor #FFD100 da marca/, 'a black/white palette is skipped for its vivid colour');
+    assert.doesNotMatch(prompts.cover, /último slide do carrossel/);
+    assert.match(prompts.cover, /arraste para o lado/);
+    assert.match(cta, /Hierarquia de leitura de carrossel/);
+    assert.doesNotMatch(cta, /20-30% da altura|até ~35% da altura/);
+    assert.doesNotMatch(cta, /ESTRUTURA FEED OBRIGATÓRIA/, 'the slide layout replaces the fixed feed zones');
+    assert.doesNotMatch(cta, /Resolver a composição com elementos gráficos conceituais: tipografia forte/);
+    assert.match(prompts.cover, /Destaque grande .*PIZZA FRIA/);
+    assert.doesNotMatch(prompts.cover, /Imagem: /, 'a texto_central slide has no image line');
+  });
+});
+
+// King, 2026-10-12: every slide was told "Título exato: <project name>" and
+// "Sem CTA nesta peça"; the CTA slide obeyed and came out as the bare brand
+// name with its call to action gone.
+test('carousel slide prompts take the title from the slide text, and only the CTA slide keeps its call to action', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-titulo', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-titulo', { briefing: 'teste', slideCount: 3 }, dir);
+    enqueueCarouselPlanning('carrossel-titulo', carousel.carouselId, {
+      outlineGenerator: async () => ({
+        format: 'problem-solution',
+        slides: [
+          { role: 'cover', slideText: 'Pizza fria na sexta?' },
+          { role: 'content', slideText: 'Entrega em 30 minutos' },
+          { role: 'cta', slideText: 'Comente "PIZZA" e peça a sua' },
+        ],
+      }),
+    }, dir);
+    await waitForCarousel('carrossel-titulo', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    await startCarouselImageGeneration('carrossel-titulo', carousel.carouselId, dir);
+
+    const prompts = {};
+    enqueueCarouselImageGeneration('carrossel-titulo', carousel.carouselId, {
+      imageGenerator: async (payload) => {
+        prompts[payload.content.role] = payload.content.image.prompt;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    await waitForCarousel('carrossel-titulo', carousel.carouselId, dir, (c) => c.status === 'ready');
+
+    for (const role of ['cover', 'content', 'cta']) {
+      assert.doesNotMatch(prompts[role], /Título exato: Boss Pizzaria/, `${role}: the brand name is not the slide title`);
+      assert.doesNotMatch(prompts[role], /Não alterar título/, `${role}: nothing forbids the slide's own title`);
+      assert.match(prompts[role], /título deste slide vem do texto-base/);
+      assert.doesNotMatch(prompts[role], /Sem CTA nesta peça/);
+    }
+    assert.match(prompts.cta, /chamada para ação deste slide é a do texto-base/);
+    assert.match(prompts.cta, /Rodapé: a chamada do texto-base deste slide/);
+    assert.doesNotMatch(prompts.cta, /Rodapé: fechamento limpo/);
+    assert.match(prompts.content, /Sem botão ou selo de CTA neste slide/);
+  });
+});
+
+test('the automatic calendar carousel keeps today\'s look and outline payload: no clean block, no offer, no style', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-lote-intacto', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-lote-intacto', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-lote-intacto');
+    const project = await loadProjectForTest('carrossel-lote-intacto', dir);
+    const outlinePayloads = [];
+    const seen = [];
+
+    await enrichBatchItemsWithRealImages(batch, project, 'carrossel-lote-intacto', {
+      imageGenerator: async (payload) => {
+        if (payload.content.contentTopic?.source === 'carousel') seen.push({ prompt: payload.content.image.prompt, spec: payload.content.creativeSpec });
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+      carouselOutlineGenerator: async (payload) => {
+        outlinePayloads.push(payload);
+        return fakeOutline(Array.from({ length: payload.slideCount }, (_, i) => `Slide ${i + 1}`));
+      },
+    }, paths);
+
+    assert.equal(outlinePayloads.length, 1);
+    assert.deepEqual(Object.keys(outlinePayloads[0]).sort(), ['briefing', 'project', 'slideCount']);
+    assert.ok(seen.length > 0);
+    seen.forEach(({ prompt, spec }) => {
+      assert.doesNotMatch(prompt, /ESTILO CARROSSEL (CLEAN|EDITORIAL)|CONTEÚDO E LAYOUT DESTE SLIDE/);
+      assert.equal(spec.background.style, 'elaborate');
+      assert.equal(spec.title.style, 'lettering');
+    });
   });
 });
 
@@ -11730,4 +12143,156 @@ test('offer drafts are stored apart from offers and can be removed', async () =>
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// scheduleCarousel refuses past slots, so the tests schedule for tomorrow
+// (local time, like the app and isPublishDue).
+function localDateIso(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const TOMORROW = localDateIso(1);
+
+// A carousel whose plan and images are already done, written straight to
+// disk — scheduling only reads the finished file, it never generates.
+async function writeReadyCarousel(projectId, dir, extra = {}) {
+  const carousel = await generateCarousel(projectId, { briefing: 'Pizza de sexta', slideCount: 2 }, dir);
+  const ready = {
+    ...carousel,
+    status: 'ready',
+    format: 'listicle',
+    slides: carousel.slides.map((slide, index) => ({
+      ...slide,
+      role: index === 0 ? 'cover' : 'cta',
+      slideText: index === 0 ? 'Sexta é dia de pizza' : 'Peça pelo WhatsApp',
+      image: { ...slide.image, generating: false, url: `/api/projects/${projectId}/assets/assets/generated/slide-${index + 1}.png` },
+      imageGenerationError: null,
+    })),
+    ...extra,
+  };
+  await writeFile(carousel.filePath, JSON.stringify(ready, null, 2), 'utf-8');
+  return ready;
+}
+
+test('scheduleCarousel writes an approved carousel item for the date/time with the given caption, reusing the slide images', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda', name: 'Boss Pizzaria' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-agenda', dir);
+
+    const { item, carousel: updated } = await scheduleCarousel('carrossel-agenda', carousel.carouselId, {
+      date: TOMORROW, time: '18:30', caption: 'Sexta tem pizza! 🍕',
+    }, dir);
+
+    assert.equal(item.format, 'carousel');
+    assert.equal(item.channel, 'instagram_feed');
+    assert.equal(item.status, 'aprovado');
+    assert.equal(item.approval.approvalSource, 'carousel_scheduled');
+    assert.ok(item.approval.approvedAt);
+    assert.equal(item.scheduledDate, TOMORROW);
+    assert.equal(item.scheduledTime, '18:30');
+    assert.equal(item.caption.text, 'Sexta tem pizza! 🍕');
+    assert.equal(item.carouselFormat, 'listicle');
+    assert.equal(item.sourceCarouselId, carousel.carouselId);
+    assert.deepEqual(item.slides.map((s) => s.image.url), carousel.slides.map((s) => s.image.url));
+
+    const listed = await listProjectContent('carrossel-agenda', dir);
+    assert.ok(listed.some((entry) => entry.contentId === item.contentId), 'it is a normal calendar item');
+    assert.deepEqual(updated.schedules, [{ contentId: item.contentId, batchId: item.batchId, date: TOMORROW, time: '18:30' }]);
+
+    // Deleting the standalone carousel must not break the scheduled post.
+    await deleteCarousel('carrossel-agenda', carousel.carouselId, dir);
+    const stillThere = JSON.parse(await readFile(item.filePath, 'utf-8'));
+    assert.equal(stillThere.slides[0].image.url, carousel.slides[0].image.url);
+  });
+});
+
+test('scheduleCarousel twice on the same day creates two distinct items', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda-2x', name: 'Boss Pizzaria' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-agenda-2x', dir);
+    const first = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: TOMORROW, time: '09:00', caption: 'a' }, dir);
+    const second = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: TOMORROW, time: '18:00', caption: 'b' }, dir);
+    assert.notEqual(first.item.contentId, second.item.contentId);
+    assert.equal(second.carousel.schedules.length, 2);
+  });
+});
+
+test('scheduleCarousel refuses an unfinished carousel, a bad date/time and an empty caption', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda-recusa', name: 'Boss Pizzaria' }, dir);
+    const planning = await generateCarousel('carrossel-agenda-recusa', { briefing: 'teste', slideCount: 2 }, dir);
+    await assert.rejects(
+      () => scheduleCarousel('carrossel-agenda-recusa', planning.carouselId, { date: TOMORROW, time: '09:00', caption: 'x' }, dir),
+      /Gere todos os slides antes de agendar/,
+    );
+    const failedSlide = await writeReadyCarousel('carrossel-agenda-recusa', dir);
+    failedSlide.slides[1].imageGenerationError = 'provider timeout';
+    await writeFile(failedSlide.filePath, JSON.stringify(failedSlide, null, 2), 'utf-8');
+    await assert.rejects(
+      () => scheduleCarousel('carrossel-agenda-recusa', failedSlide.carouselId, { date: TOMORROW, time: '09:00', caption: 'x' }, dir),
+      /Gere todos os slides antes de agendar/,
+    );
+    const ready = await writeReadyCarousel('carrossel-agenda-recusa', dir);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '10/10/2026', time: '09:00', caption: 'x' }, dir), /Data inválida/);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: TOMORROW, time: '9h', caption: 'x' }, dir), /Horário inválido/);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: TOMORROW, time: '09:00', caption: '  ' }, dir), /legenda/);
+  });
+});
+
+test('scheduleCarousel refuses a past slot, an impossible date or time and the same slot twice', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda-passado', name: 'Boss Pizzaria' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-agenda-passado', dir);
+    const schedule = (input) => scheduleCarousel('carrossel-agenda-passado', carousel.carouselId, { caption: 'x', ...input }, dir);
+    await assert.rejects(() => schedule({ date: localDateIso(-1), time: '09:00' }), /ainda não passaram/);
+    await assert.rejects(() => schedule({ date: '2026-02-30', time: '09:00' }), /Data inválida/);
+    await assert.rejects(() => schedule({ date: '2026-13-45', time: '09:00' }), /Data inválida/);
+    await assert.rejects(() => schedule({ date: TOMORROW, time: '99:99' }), /Horário inválido/);
+    assert.equal((await listProjectContent('carrossel-agenda-passado', dir)).length, 0, 'a refused slot leaves no item behind');
+
+    await schedule({ date: TOMORROW, time: '09:00' });
+    await assert.rejects(() => schedule({ date: TOMORROW, time: '09:00' }), /já está agendado para esse dia e horário/);
+    assert.equal((await listProjectContent('carrossel-agenda-passado', dir)).length, 1);
+  });
+});
+
+test('draftCarouselCaption asks the caption writer about the carousel (its slides and offer) and returns the text without saving', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-legenda', name: 'Boss Pizzaria' }, dir);
+    const { offer } = await saveProjectOffer('carrossel-legenda', { name: 'Pizza Calabresa', type: 'offer', price: 'R$ 49,90' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-legenda', dir, { offerId: offer.id });
+    let received;
+    const text = await draftCarouselCaption('carrossel-legenda', carousel.carouselId, {
+      captionGenerator: async (payload) => { received = payload; return 'Legenda pronta'; },
+    }, dir);
+    assert.equal(text, 'Legenda pronta');
+    assert.equal(received.content.format, 'carousel');
+    assert.match(received.content.contentTopic.items, /Sexta é dia de pizza/);
+    assert.equal(received.content.contentTopic.offerName, 'Pizza Calabresa');
+    assert.equal(received.content.contentTopic.price, 'R$ 49,90');
+    await assert.rejects(() => draftCarouselCaption('carrossel-legenda', carousel.carouselId, {}, dir), /legenda à mão/);
+  });
+});
+
+test('runDuePublishSweep with an itemFilter publishes only the due carousel, leaving a due single-image post alone', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-varredura', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('carrossel-varredura', { days: 1, startDate: TOMORROW, postTime: '09:00' }, dir);
+    await approveContent('carrossel-varredura', batch.items[0].contentId, dir, batch.batchId);
+    const carousel = await writeReadyCarousel('carrossel-varredura', dir);
+    const { item } = await scheduleCarousel('carrossel-varredura', carousel.carouselId, { date: TOMORROW, time: '09:00', caption: 'x' }, dir);
+
+    const published = [];
+    const result = await runDuePublishSweep(dir, {
+      now: new Date(`${TOMORROW}T09:05:00`),
+      metaPublisher: async ({ content }) => { published.push(content.contentId); return { mediaId: 'm-1' }; },
+      itemFilter: (entry) => entry.format === 'carousel',
+    });
+
+    assert.deepEqual(published, [item.contentId]);
+    assert.deepEqual(result.published, [item.contentId]);
+    const single = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    assert.ok(!single.publish.realPublished, 'the single-image post belongs to gaveta, not this sweep');
+  });
 });
