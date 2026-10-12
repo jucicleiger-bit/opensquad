@@ -40,10 +40,17 @@ def tokens(texto):
     return re.findall(r"[\w]+(?:['-][\w]+)*", texto)
 
 def env_key(name):
-    for line in (motor.parent.parent / ".env").read_text(encoding="utf-8").splitlines():
-        if line.startswith(name + "="):
-            return line.split("=", 1)[1].strip()
-    return os.environ.get(name)
+    # Environment first, then the nearest .env up the tree (a git worktree
+    # under .claude/worktrees has none of its own; the main checkout's is above).
+    if os.environ.get(name):
+        return os.environ[name]
+    for d in motor.parents:
+        env = d / ".env"
+        if env.is_file():
+            for line in env.read_text(encoding="utf-8").splitlines():
+                if line.startswith(name + "="):
+                    return line.split("=", 1)[1].strip()
+    return None
 
 async def falar_edge(texto, mp3, voice):
     words = []
