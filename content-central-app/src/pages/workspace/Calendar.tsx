@@ -8,7 +8,16 @@ import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/Skeleton";
 import { addMonths, buildMonthGrid, monthLabel, startOfMonth, toDateKey, weekdayLabels } from "./calendarUtils";
 import { ContentPipeline } from "./ContentPipeline";
-import { bucketForItem, channelLabel, imageSource, isFeedChannel, statusMeta } from "./contentDisplay";
+import {
+  bucketForItem,
+  channelFullLabel,
+  channelLabel,
+  groupSameCreativeItems,
+  imageSource,
+  isFeedChannel,
+  statusMeta,
+  type ContentGroup,
+} from "./contentDisplay";
 import styles from "./Calendar.module.css";
 
 interface ActionState {
@@ -18,6 +27,58 @@ interface ActionState {
 }
 
 const IDLE_ACTION_STATE: ActionState = { busy: false, error: null, message: null };
+
+const itemKey = (item: ContentItem) => `${item.batchId || "__no_batch__"}::${item.contentId}`;
+
+function groupLabel(group: ContentGroup): string {
+  if (group.members.length === 1) return channelLabel(group.leader.channel);
+
+  const hasStory = group.members.some((item) => item.channel.includes("story") || item.channel === "whatsapp_status");
+  const hasReels = group.members.some((item) => item.channel.includes("reels"));
+  const format = group.members.every((item) => isFeedChannel(item.channel))
+    ? "Feed"
+    : hasStory && hasReels
+      ? "Story + Reels"
+      : hasReels
+        ? "Reels"
+        : "Story";
+
+  return `${format} · ${group.members.length} canais`;
+}
+
+function groupTime(group: ContentGroup): string {
+  return group.leader.scheduledTime?.trim().slice(0, 5) || "";
+}
+
+function calendarGroupLabel(group: ContentGroup): string {
+  const time = groupTime(group);
+  return time ? `${time} · ${groupLabel(group)}` : groupLabel(group);
+}
+
+function visibleGroupLabel(group: ContentGroup): string {
+  if (group.members.length === 1) return groupLabel(group);
+  return `${groupLabel(group).replace(/ · \d+ canais$/, "")} ×${group.members.length}`;
+}
+
+function compactGroupLabel(group: ContentGroup): string {
+  const prefix = group.members.every((item) => isFeedChannel(item.channel))
+    ? "F"
+    : group.members.some((item) => item.channel.includes("reels"))
+      ? "R"
+      : "S";
+  const channelSummary = group.members.length > 1 ? `${prefix}${group.members.length}` : prefix;
+  const hour = groupTime(group).slice(0, 2);
+  return hour ? `${hour}${channelSummary}` : channelSummary;
+}
+
+function groupStatusItem(group: ContentGroup): ContentItem {
+  return (
+    group.members.find((item) => item.publish?.error) ||
+    group.members.find((item) => item.image?.generating) ||
+    group.members.find((item) => !item.publish?.realPublished) ||
+    group.leader
+  );
+}
 
 export function Calendar() {
   const { project } = useOutletContext<WorkspaceContext>();
@@ -67,8 +128,10 @@ export function Calendar() {
 
   const gridDays = useMemo(() => buildMonthGrid(cursor), [cursor]);
   const todayKey = toDateKey(new Date());
-  const itemKey = (item: ContentItem) => `${item.batchId || "__no_batch__"}::${item.contentId}`;
   const selectedItem = scheduledItems.find((item) => itemKey(item) === selectedItemKey) ?? null;
+  const selectedGroup = selectedItem
+    ? groupSameCreativeItems(scheduledItems).find((group) => group.members.some((item) => itemKey(item) === selectedItemKey))
+    : null;
 
   function selectItem(item: ContentItem) {
     setSelectedItemKey(itemKey(item));
@@ -133,6 +196,7 @@ export function Calendar() {
         {gridDays.map((day) => {
           const key = toDateKey(day);
           const dayItems = byDate.get(key) || [];
+          const dayGroups = groupSameCreativeItems(dayItems);
           const isOutside = day.getMonth() !== cursor.getMonth();
           const isToday = key === todayKey;
           return (
@@ -142,17 +206,24 @@ export function Calendar() {
             >
               <span className={styles.dayNumber}>{day.getDate()}</span>
               <div className={styles.chips}>
-                {dayItems.map((item) => {
-                  const meta = statusMeta(item);
+                {dayGroups.map((group) => {
+                  const meta = statusMeta(groupStatusItem(group));
+                  const isSelected = group.members.some((item) => itemKey(item) === selectedItemKey);
+                  const fullChannels = group.members.map((item) => channelFullLabel(item.channel)).join(", ");
                   return (
                     <button
-                      key={itemKey(item)}
+                      key={group.leader.creativeGroupKey || itemKey(group.leader)}
                       type="button"
-                      className={`${styles.chip} ${meta.chipClass ? styles[meta.chipClass] : ""} ${itemKey(item) === selectedItemKey ? styles.chipSelected : ""}`.trim()}
-                      onClick={() => selectItem(item)}
+                      className={`${styles.chip} ${meta.chipClass ? styles[meta.chipClass] : ""} ${isSelected ? styles.chipSelected : ""}`.trim()}
+                      aria-label={`${calendarGroupLabel(group)}: ${fullChannels}`}
+                      onClick={() => selectItem(group.leader)}
                     >
                       <span className={`${styles.dot} ${styles[meta.dotClass]}`} />
-                      {channelLabel(item.channel)}
+                      <span className={styles.chipLabel}>
+                        {groupTime(group) ? <span className={styles.chipTime}>{groupTime(group)}</span> : null}
+                        {groupTime(group) ? " · " : ""}{visibleGroupLabel(group)}
+                      </span>
+                      <span className={styles.chipCompact} aria-hidden="true">{compactGroupLabel(group)}</span>
                     </button>
                   );
                 })}
@@ -178,7 +249,27 @@ export function Calendar() {
               <h3 style={{ margin: 0 }}>
                 {selectedItem.scheduledDate} · {selectedItem.scheduledTime || ""}
               </h3>
-              <span className="pill">{selectedItem.formatLabel || channelLabel(selectedItem.channel)}</span>
+              {selectedGroup && selectedGroup.members.length > 1 ? (
+                <div className={styles.channelTabs} aria-label="Canais desta publicação">
+                  {selectedGroup.members.map((item) => {
+                    const selected = itemKey(item) === selectedItemKey;
+                    return (
+                      <button
+                        key={itemKey(item)}
+                        type="button"
+                        className={`${styles.channelTab} ${selected ? styles.channelTabSelected : ""}`.trim()}
+                        aria-label={`Ver ${channelFullLabel(item.channel)}`}
+                        aria-pressed={selected}
+                        onClick={() => selectItem(item)}
+                      >
+                        {channelLabel(item.channel)}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <span className="pill">{selectedItem.formatLabel || channelLabel(selectedItem.channel)}</span>
+              )}
             </div>
             <div style={{ marginTop: 8 }}>
               <span className="pill">{statusMeta(selectedItem).label}</span>

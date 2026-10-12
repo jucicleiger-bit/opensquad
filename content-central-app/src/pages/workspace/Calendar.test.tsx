@@ -120,6 +120,51 @@ describe("Calendar", () => {
     expect(chips).toHaveLength(1);
   });
 
+  it("groups channels that share one creative and keeps each channel selectable in the detail", async () => {
+    const creativeGroupKey = `${SAME_MONTH_DAY}::vertical::slot0`;
+    stubFetchSequence([
+      { body: PROJECT_STATE },
+      {
+        body: {
+          content: [
+            baseItem({
+              contentId: "story-instagram",
+              channel: "instagram_story",
+              formatLabel: "Instagram Stories",
+              creativeGroupKey,
+            }),
+            baseItem({
+              contentId: "story-facebook",
+              channel: "facebook_story",
+              formatLabel: "Facebook Story",
+              creativeGroupKey,
+            }),
+          ],
+        },
+      },
+    ]);
+
+    renderProjectCalendar();
+
+    const groupedChip = await screen.findByRole("button", {
+      name: "09:00 · Story · 2 canais: Instagram Stories, Facebook Story",
+    });
+    expect(groupedChip).toHaveTextContent("09:00 · Story ×2");
+    expect(screen.queryByRole("button", { name: "FB Story" })).not.toBeInTheDocument();
+
+    await userEvent.click(groupedChip);
+
+    const instagram = screen.getByRole("button", { name: "Ver Instagram Stories" });
+    const facebook = screen.getByRole("button", { name: "Ver Facebook Story" });
+    expect(instagram).toHaveAttribute("aria-pressed", "true");
+    expect(facebook).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(facebook);
+
+    expect(facebook).toHaveAttribute("aria-pressed", "true");
+    expect(instagram).toHaveAttribute("aria-pressed", "false");
+  });
+
   it("publishes a card through the real endpoint and reflects the refreshed status", async () => {
     stubFetchSequence([
       { body: PROJECT_STATE },

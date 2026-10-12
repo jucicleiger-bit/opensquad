@@ -98,6 +98,22 @@
   transform: none;
 }
 
+.chipLabel {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chipTime {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.chipCompact {
+  display: none;
+  font-variant-numeric: tabular-nums;
+}
+
 .chipSelected {
   border-color: var(--accent-strong);
   background: oklch(from var(--accent) l c h / 16%);
@@ -106,6 +122,36 @@
 .chipPublicado {
   border-color: var(--status-published);
   background: oklch(from var(--status-published) l c h / 18%);
+}
+
+.channelTabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.channelTab {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: var(--surface);
+  color: var(--soft);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.channelTab:hover {
+  background: var(--surface-2);
+  transform: none;
+}
+
+.channelTabSelected {
+  border-color: var(--accent-strong);
+  background: oklch(from var(--accent) l c h / 16%);
+  color: var(--text);
 }
 
 .dot {
@@ -199,6 +245,26 @@
 }
 
 @media (max-width: 720px) {
+  .chip {
+    justify-content: center;
+    gap: 2px;
+    padding-inline: 2px;
+    font-size: 9px;
+  }
+
+  .chipLabel {
+    display: none;
+  }
+
+  .chipCompact {
+    display: inline;
+  }
+
+  .dot {
+    width: 5px;
+    height: 5px;
+  }
+
   .detail {
     grid-template-columns: 1fr;
   }
