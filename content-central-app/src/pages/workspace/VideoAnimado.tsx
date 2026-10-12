@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import {
   createVideo, getVideo, listVideos, requestVideoAdjustment, saveVideoRoteiro, videoAction, videoFileUrl,
-  type VideoBriefing, type VideoCena, type VideoState, type VideoSummary,
+  type VideoBriefing, type VideoCena, type VideoState, type VideoStatus, type VideoSummary,
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
+import { ImageLightbox } from "@/components/ImageLightbox";
+import { Skeleton } from "@/components/Skeleton";
 import type { WorkspaceContext } from "@/layouts/ProjectWorkspaceLayout";
 import styles from "./VideoAnimado.module.css";
 
@@ -14,47 +16,200 @@ const ROTULO: Record<string, string> = {
   previa_pronta: "Prévia para revisar", render_gerando: "Gerando o vídeo final…", pronto: "Pronto", erro: "Erro",
   aguardando_limite: "Aguardando o limite do Claude Code", interrompido: "Interrompido",
 };
+// Shorter labels for the list badges, where space is tight.
+const SELO: Record<VideoStatus, string> = {
+  roteiro_gerando: "Escrevendo roteiro", roteiro_pronto: "Revisar roteiro", producao_gerando: "Produzindo",
+  previa_pronta: "Revisar prévia", render_gerando: "Renderizando", pronto: "Pronto", erro: "Erro",
+  aguardando_limite: "Aguardando limite", interrompido: "Interrompido",
+};
 const GERANDO = new Set(["roteiro_gerando", "producao_gerando", "render_gerando"]);
+const FALHA = new Set(["erro", "interrompido", "aguardando_limite"]);
 const LEGENDAS: Array<[VideoBriefing["legenda"], string]> = [["do-video", "Do vídeo (sob medida)"], ["simples", "Simples"], ["karaoke", "Karaokê"], ["pop", "Pop (palavra por vez)"], ["destaque", "Destaque"], ["caixa", "Caixa"], ["sem", "Sem legenda"]];
+const MODELOS = new Set(["simples", "karaoke", "pop", "destaque", "caixa"]);
+const LEGENDA_INFO: Record<VideoBriefing["legenda"], { titulo: string; ajuda: string }> = {
+  "do-video": { titulo: "Do vídeo", ajuda: "Legenda criada junto com as cenas deste vídeo" },
+  simples: { titulo: "Simples", ajuda: "Frase limpa com contorno, sem efeitos" },
+  karaoke: { titulo: "Karaokê", ajuda: "A palavra falada acende no ritmo da voz" },
+  pop: { titulo: "Pop", ajuda: "Uma palavra de cada vez, com impacto" },
+  destaque: { titulo: "Destaque", ajuda: "Texto grande com a palavra-chave em cor" },
+  caixa: { titulo: "Caixa", ajuda: "Texto numa caixa clara, fácil de ler" },
+  sem: { titulo: "Sem legenda", ajuda: "Só a narração, sem texto na tela" },
+};
+const OBJETIVOS = [
+  { v: "alcance", nome: "Alcance", ajuda: "Ganhar seguidores e comentários · fecha com enquete", ideal: [20, 45] },
+  { v: "anuncio", nome: "Anúncio", ajuda: "Converter no WhatsApp · fecha com chamada direta", ideal: [15, 30] },
+] as const;
+const TONS = [
+  { v: "criador", nome: "Criador de conteúdo", curto: "Criador", ajuda: "Animado, sorrindo" },
+  { v: "vendedor", nome: "Vendedor de bairro", curto: "Vendedor", ajuda: "Próximo, confiante" },
+] as const;
+const ETAPAS = ["Roteiro", "Prévia", "Vídeo final"];
 const PALAVRAS_POR_SEGUNDO = 2.6;
 const segundos = (fala: string) => Math.round(((fala.match(/[\p{L}\d]+/gu) || []).length / PALAVRAS_POR_SEGUNDO) * 10) / 10;
+// React sets `muted` only as a property, and Chrome then refuses to autoplay; the attribute makes the loop start.
+const mudo = (el: HTMLVideoElement | null) => { if (el) el.defaultMuted = true; };
+const nomeObjetivo = (o: string) => (o === "anuncio" ? "Anúncio" : "Alcance");
+
+type Tom = "gen" | "review" | "ok" | "bad" | "warn";
+function tomDoStatus(s: string): Tom {
+  if (GERANDO.has(s)) return "gen";
+  if (s === "pronto") return "ok";
+  if (s === "aguardando_limite") return "warn";
+  if (FALHA.has(s)) return "bad";
+  return "review";
+}
+// Which of Roteiro / Prévia / Vídeo is in play; -1 when the status alone can't tell (failures).
+function etapaDoStatus(s: string): number {
+  if (s === "roteiro_gerando" || s === "roteiro_pronto") return 0;
+  if (s === "producao_gerando" || s === "previa_pronta") return 1;
+  if (s === "render_gerando" || s === "pronto") return 2;
+  return -1;
+}
+function dataCurta(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hoje = new Date();
+  if (d.toDateString() === hoje.toDateString()) return `Hoje, ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+  return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "short" });
+}
+function decorrido(iso: string) {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  const min = Math.floor(ms / 60000);
+  return min < 1 ? "há menos de 1 min" : min < 60 ? `há ${min} min` : `há ${Math.floor(min / 60)} h ${min % 60} min`;
+}
+
+const ICONES: Record<string, string> = {
+  play: "M8 5.5v13l10.5-6.5z",
+  pause: "M8 5.5h2.8v13H8zM13.2 5.5H16v13h-2.8z",
+  check: "M5 12.5l4.5 4.5L19 7.5",
+  film: "M4 9.5h16v9a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18.5zM4 9.5l.9-3.6A1.5 1.5 0 0 1 6.7 4.8L19 3.6l.6 3.4L4 9.5M9.2 4.4l1.4 4M14.4 3.9l1.4 4.1",
+  up: "M12 19V5M6 11l6-6 6 6",
+  down: "M12 5v14M6 13l6 6 6-6",
+  trash: "M4.5 7h15M9.5 7V4.5h5V7M6.5 7l.9 12.5h9.2l.9-12.5",
+  alert: "M12 4l9 15.5H3zM12 10v4M12 17v.01",
+  clock: "M12 3.5a8.5 8.5 0 1 0 0 17a8.5 8.5 0 1 0 0-17M12 7.5V12l3 2",
+  sparkle: "M12 3.5l1.9 5.1 5.1 1.9-5.1 1.9L12 17.5l-1.9-5.1L5 10.5l5.1-1.9zM18.5 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z",
+  script: "M7 3.5h7l4 4v13H7zM14 3.5v4h4M10 12h5M10 15.5h5",
+  eye: "M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5",
+  download: "M12 4v11M7 10.5l5 5 5-5M5 19.5h14",
+  copy: "M9 9h10.5v10.5H9zM15 9V4.5H4.5V15H9",
+  back: "M19 12H5M11 6l-6 6 6 6",
+  captions: "M3.5 5.5h17v13h-17zM7 11h4M13 11h4M7 14.5h7",
+  nocaptions: "M3.5 5.5h17v13h-17zM7 14.5h4M5 4l14 16",
+  mic: "M12 3.5a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0v-5a3 3 0 0 0-3-3zM6 11.5a6 6 0 0 0 12 0M12 17.5V21",
+  retry: "M20 12a8 8 0 1 1-2.3-5.6M20 4.5v4h-4",
+  doc: "M7 3.5h7l4 4v13H7zM14 3.5v4h4",
+  plus: "M12 5v14M5 12h14",
+};
+const CHEIOS = new Set(["play", "pause"]);
+function Icon({ name, size = 18 }: { name: keyof typeof ICONES; size?: number }) {
+  const cheio = CHEIOS.has(name);
+  return (
+    <svg className={styles.icon} width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" focusable="false"
+      fill={cheio ? "currentColor" : "none"} stroke={cheio ? "none" : "currentColor"} strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      <path d={ICONES[name]} />
+    </svg>
+  );
+}
+const ICONE_STATUS: Record<VideoStatus, keyof typeof ICONES> = {
+  roteiro_gerando: "sparkle", producao_gerando: "sparkle", render_gerando: "sparkle", roteiro_pronto: "script", previa_pronta: "eye",
+  pronto: "film", erro: "alert", interrompido: "alert", aguardando_limite: "clock",
+};
+
+function Selo({ status }: { status: VideoStatus }) {
+  return <span className={styles.badge} data-tom={tomDoStatus(status)}>{SELO[status] || status}</span>;
+}
+
+function MiniEtapas({ status }: { status: VideoStatus }) {
+  const atual = etapaDoStatus(status);
+  const tudo = status === "pronto";
+  // Lives inside the card's <button>, so spans only; the badge already tells screen readers the status.
+  return (
+    <span className={styles.miniSteps} aria-hidden="true">
+      {["Roteiro", "Prévia", "Vídeo"].map((e, i) => (
+        <span key={e} data-estado={tudo || i < atual ? "feito" : i === atual ? "atual" : "fila"}>{e}</span>
+      ))}
+    </span>
+  );
+}
 
 export function VideoAnimado() {
   const { project } = useOutletContext<WorkspaceContext>();
   const [params, setParams] = useSearchParams();
   const selected = params.get("v");
-  const [videos, setVideos] = useState<VideoSummary[]>([]);
+  const [videos, setVideos] = useState<VideoSummary[] | null>(null);
   const [novo, setNovo] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(() => listVideos(project.projectId).then((r) => setVideos(r.videos)).catch((e: Error) => setError(e.message)), [project.projectId]);
   useEffect(() => { reload(); }, [reload]);
   const open = (id: string | null) => setParams(id ? { v: id } : {});
+  const comecar = () => { setNovo(true); open(null); };
 
   return (
     <div className={styles.page}>
-      <div className={styles.header}>
-        <h2 className="section-heading">Vídeo animado</h2>
-        <Button type="button" onClick={() => { setNovo(true); open(null); }}>Novo vídeo</Button>
-      </div>
+      <header className={styles.pageHead}>
+        <div>
+          <h2 className={styles.pageTitle}>Vídeo animado</h2>
+          <p className={styles.pageSub}>Reels criados do zero a partir de um assunto: você aprova o roteiro e a prévia antes do vídeo final.</p>
+        </div>
+        <Button type="button" onClick={comecar}><Icon name="plus" />Novo vídeo</Button>
+      </header>
       {error ? <div className="pill bad">{error}</div> : null}
       {novo ? <NovoVideo project={project} onCreated={(id) => { setNovo(false); reload(); open(id); }} onCancel={() => setNovo(false)} /> : null}
       {selected ? <VideoDetalhe projectId={project.projectId} videoId={selected} onChanged={reload} onClose={() => open(null)} /> : null}
       {!selected && !novo ? (
-        <div className={styles.list}>
-          {videos.length === 0 ? <p className="muted">Nenhum vídeo ainda.</p> : null}
-          {videos.map((v) => (
-            <Card key={v.id} style={{ padding: 16 }}>
-              <button type="button" className={styles.cardButton} onClick={() => open(v.id)}>
-                <b>{v.assunto}</b>
-                <span className="muted">{v.objetivo === "anuncio" ? "Anúncio" : "Alcance"} · {v.duracao}s · {new Date(v.criadoEm).toLocaleDateString("pt-BR")}</span>
-                <span className={styles.status}>{ROTULO[v.status]}</span>
-              </button>
-            </Card>
-          ))}
-        </div>
+        videos === null ? (
+          <div className={styles.grid}>{[0, 1, 2].map((i) => <Skeleton key={i} height={420} />)}</div>
+        ) : videos.length === 0 ? (
+          <div className={styles.empty}>
+            <p className={styles.emptyTitle}>Nenhum vídeo ainda.</p>
+            <p className="muted">Escolha um assunto, aprove o roteiro e a prévia, e o Reel sai pronto para postar.</p>
+            <Button type="button" onClick={comecar}>Criar o primeiro vídeo</Button>
+          </div>
+        ) : (
+          <ul className={styles.grid}>
+            {videos.map((v) => (
+              <li key={v.id}>
+                <button type="button" className={styles.videoCard} onClick={() => open(v.id)}>
+                  <span className={styles.thumb} data-tom={tomDoStatus(v.status)}>
+                    {v.temVideo
+                      ? <video src={`${videoFileUrl(project.projectId, v.id, "video.mp4")}#t=0.5`} muted preload="metadata" />
+                      : <span className={styles.thumbIcon}><Icon name={ICONE_STATUS[v.status] || "film"} size={30} /></span>}
+                    <Selo status={v.status} />
+                  </span>
+                  <span className={styles.cardBody}>
+                    <span className={styles.cardTitle}>{v.assunto}</span>
+                    <span className={styles.chips}>
+                      <span className={styles.chip}>{nomeObjetivo(v.objetivo)}</span>
+                      <span className={styles.chip}>{v.duracao}s</span>
+                      <span className={styles.date}>{dataCurta(v.criadoEm)}</span>
+                    </span>
+                    <MiniEtapas status={v.status} />
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
       ) : null}
     </div>
+  );
+}
+
+function Secao({ n, titulo, ajuda, id, children }: { n: number; titulo: string; ajuda: string; id: string; children: ReactNode }) {
+  return (
+    <section className={styles.section}>
+      <div className={styles.sectionHead}>
+        <span className={styles.num} aria-hidden="true">{n}</span>
+        <div>
+          <h3 id={id} className={styles.sectionTitle}>{titulo}</h3>
+          <p className={styles.sectionHelp}>{ajuda}</p>
+        </div>
+      </div>
+      <div className={styles.sectionBody}>{children}</div>
+    </section>
   );
 }
 
@@ -62,12 +217,27 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   const [b, setB] = useState<VideoBriefing>({ assunto: "", objetivo: "alcance", duracao: 30, tom: "criador", legenda: "do-video", observacao: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [tocando, setTocando] = useState<string | null>(null);
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const uid = useId();
   const assuntos = useMemo(() => {
     const ofertas = (project.contentStrategy?.offers || []).map((o) => (o as { name?: string }).name).filter(Boolean) as string[];
     const banco = Object.values(project.contentStrategy?.topicIdeas?.goals || {}).flatMap((g) => (g.items || []).map((i) => i.title));
     return [...new Set([...ofertas, ...banco])];
   }, [project]);
   const set = <K extends keyof VideoBriefing>(k: K, v: VideoBriefing[K]) => setB((prev) => ({ ...prev, [k]: v }));
+  useEffect(() => () => audio.current?.pause(), []);
+
+  // One sample at a time; the button sits outside the option's label so it never changes the selection.
+  function amostra(tom: string) {
+    audio.current?.pause();
+    if (tocando === tom) { setTocando(null); return; }
+    const a = new Audio(`/video-vozes/${tom}.mp3`);
+    a.onended = () => setTocando(null);
+    audio.current = a;
+    setTocando(tom);
+    Promise.resolve(a.play()).catch(() => setTocando(null));
+  }
 
   async function submit() {
     setBusy(true);
@@ -75,36 +245,127 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
     try { onCreated((await createVideo(project.projectId, b)).video.id); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
 
+  const objetivo = OBJETIVOS.find((o) => o.v === b.objetivo)!;
+  const foraDoIdeal = b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1];
+  const resumo = [objetivo.nome, `${b.duracao}s`, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
+
   return (
-    <Card style={{ padding: 20 }}>
-      <label className={styles.field}>Assunto<input value={b.assunto} onChange={(e) => set("assunto", e.target.value)} placeholder="Ex.: O que colocar na bio do Instagram" /></label>
-      <label className={styles.field}>Importar assunto
-        <select value="" onChange={(e) => e.target.value && set("assunto", e.target.value)}>
-          <option value="">Escolha um assunto cadastrado…</option>
-          {assuntos.map((a) => <option key={a} value={a}>{a}</option>)}
-        </select>
-      </label>
-      <fieldset className={styles.row}><legend>Objetivo</legend>
-        {(["alcance", "anuncio"] as const).map((o) => <label key={o}><input type="radio" name="objetivo" checked={b.objetivo === o} onChange={() => set("objetivo", o)} />{o === "alcance" ? "Alcance" : "Anúncio"}</label>)}
-      </fieldset>
-      <fieldset className={styles.row}><legend>Duração</legend>
-        {([15, 30, 45, 60] as const).map((d) => <label key={d}><input type="radio" name="duracao" checked={b.duracao === d} onChange={() => set("duracao", d)} />{d}s</label>)}
-      </fieldset>
-      <fieldset className={styles.row}><legend>Tom da voz</legend>
-        {(["criador", "vendedor"] as const).map((t) => <label key={t}><input type="radio" name="tom" checked={b.tom === t} onChange={() => set("tom", t)} />{t === "criador" ? "Criador de conteúdo" : "Vendedor de bairro"}</label>)}
-      </fieldset>
-      <label className={styles.field}>Legenda
-        <select value={b.legenda} onChange={(e) => set("legenda", e.target.value as VideoBriefing["legenda"])}>
-          {LEGENDAS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-      </label>
-      <label className={styles.field}>Observação (opcional)<textarea value={b.observacao} onChange={(e) => set("observacao", e.target.value)} /></label>
-      {error ? <div className="pill bad">{error}</div> : null}
-      <div className={styles.actions}>
-        <Button type="button" variant="secondary" onClick={onCancel}>Cancelar</Button>
-        <Button type="button" disabled={busy || !b.assunto.trim()} onClick={submit}>{busy ? "Enviando…" : "Gerar roteiro"}</Button>
+    <Card className={styles.form}>
+      <Secao n={1} id={`${uid}-assunto`} titulo="Assunto" ajuda="Sobre o que é o Reel. Uma frase basta: o roteiro sai dela.">
+        <input aria-labelledby={`${uid}-assunto`} value={b.assunto} onChange={(e) => set("assunto", e.target.value)} placeholder="Ex.: O que colocar na bio do Instagram" />
+        {assuntos.length ? (
+          <div className={styles.suggest}>
+            <span className={styles.suggestLabel}>Sugestões</span>
+            <div className={styles.suggestChips}>
+              {assuntos.slice(0, 8).map((a) => (
+                <button key={a} type="button" className={styles.suggestChip} aria-pressed={b.assunto === a} onClick={() => set("assunto", a)}>{a}</button>
+              ))}
+            </div>
+            <select className={styles.suggestAll} aria-label="Importar assunto" value="" onChange={(e) => e.target.value && set("assunto", e.target.value)}>
+              <option value="">Ver todos os {assuntos.length} assuntos…</option>
+              {assuntos.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+        ) : null}
+      </Secao>
+
+      <Secao n={2} id={`${uid}-obj`} titulo="Objetivo" ajuda="Muda o tom do roteiro e como o vídeo termina.">
+        <div role="radiogroup" aria-labelledby={`${uid}-obj`} className={styles.options2}>
+          {OBJETIVOS.map((o) => (
+            <label key={o.v} className={styles.option}>
+              <input type="radio" className="sr-only" name="objetivo" aria-label={o.nome} checked={b.objetivo === o.v} onChange={() => set("objetivo", o.v)} />
+              <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+              <span className={styles.optionName}>{o.nome}</span>
+              <span className={styles.optionHelp}>{o.ajuda}</span>
+            </label>
+          ))}
+        </div>
+      </Secao>
+
+      <Secao n={3} id={`${uid}-dur`} titulo="Duração" ajuda="Tempo alvo do vídeo. O roteiro mostra quanto a fala ocupa de verdade.">
+        <div role="radiogroup" aria-labelledby={`${uid}-dur`} className={styles.segmented}>
+          {([15, 30, 45, 60] as const).map((d) => (
+            <label key={d} className={styles.segment} data-ideal={d >= objetivo.ideal[0] && d <= objetivo.ideal[1]}>
+              <input type="radio" className="sr-only" name="duracao" checked={b.duracao === d} onChange={() => set("duracao", d)} />{d}s
+            </label>
+          ))}
+        </div>
+        <p className={styles.hint} data-fora={foraDoIdeal}>
+          {foraDoIdeal ? <Icon name="alert" size={15} /> : null}
+          {foraDoIdeal
+            ? `${b.duracao}s fica fora do ideal para ${objetivo.nome.toLowerCase()} (${objetivo.ideal[0]}–${objetivo.ideal[1]} s). Dá para usar, mas a retenção costuma cair.`
+            : `Ideal para ${objetivo.nome.toLowerCase()}: ${objetivo.ideal[0]}–${objetivo.ideal[1]} s.`}
+        </p>
+      </Secao>
+
+      <Secao n={4} id={`${uid}-voz`} titulo="Voz" ajuda="Quem narra. Toque no play para ouvir uma amostra.">
+        <div role="radiogroup" aria-labelledby={`${uid}-voz`} className={styles.options2}>
+          {TONS.map((t) => (
+            <div key={t.v} className={styles.voiceWrap}>
+              <label className={`${styles.option} ${styles.voice}`}>
+                <input type="radio" className="sr-only" name="tom" aria-label={t.nome} checked={b.tom === t.v} onChange={() => set("tom", t.v)} />
+                <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+                <span className={styles.optionName}>{t.nome}</span>
+                <span className={styles.optionHelp}>{t.ajuda}</span>
+              </label>
+              <button type="button" className={styles.playBtn} data-on={tocando === t.v} onClick={() => amostra(t.v)}
+                aria-label={`${tocando === t.v ? "Pausar" : "Ouvir"} amostra: ${t.nome}`}>
+                <Icon name={tocando === t.v ? "pause" : "play"} size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      </Secao>
+
+      <Secao n={5} id={`${uid}-leg`} titulo="Legenda" ajuda="Veja cada estilo rodando antes de escolher.">
+        <div role="radiogroup" aria-labelledby={`${uid}-leg`} className={styles.gallery}>
+          {LEGENDAS.map(([v, l]) => (
+            <label key={v} className={styles.tile}>
+              <input type="radio" className="sr-only" name="legenda" aria-label={l} checked={b.legenda === v} onChange={() => set("legenda", v)} />
+              <span className={styles.tileMedia} data-tipo={v}>
+                {MODELOS.has(v)
+                  ? <video ref={mudo} src={`/video-legendas/${v}.mp4`} autoPlay loop muted playsInline preload="auto" aria-hidden="true" />
+                  : <span className={styles.tileIcon}><Icon name={v === "sem" ? "nocaptions" : "captions"} size={34} /></span>}
+                <span className={styles.tileCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+                {v === "do-video" ? <span className={styles.tileTag}>Padrão</span> : null}
+              </span>
+              <span className={styles.tileName}>{LEGENDA_INFO[v].titulo}</span>
+              <span className={styles.tileHelp}>{LEGENDA_INFO[v].ajuda}</span>
+            </label>
+          ))}
+        </div>
+      </Secao>
+
+      <Secao n={6} id={`${uid}-obs`} titulo="Observação (opcional)" ajuda="Algo que o roteiro precisa citar ou evitar.">
+        <textarea aria-labelledby={`${uid}-obs`} value={b.observacao} onChange={(e) => set("observacao", e.target.value)} placeholder="Ex.: citar o preço do plano mensal" />
+      </Secao>
+
+      <div className={styles.actionBar}>
+        <span className={styles.summary}>{resumo}</span>
+        {error ? <div className="pill bad">{error}</div> : null}
+        <div className={styles.actions}>
+          <Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button>
+          <Button type="button" disabled={busy || !b.assunto.trim()} onClick={submit}>{busy ? "Enviando…" : "Gerar roteiro"}</Button>
+        </div>
       </div>
     </Card>
+  );
+}
+
+function Etapas({ status, falhou }: { status: VideoStatus; falhou: number }) {
+  const atual = FALHA.has(status) ? falhou : etapaDoStatus(status);
+  return (
+    <ol className={styles.steps}>
+      {ETAPAS.map((e, i) => {
+        const estado = status === "pronto" || i < atual ? "feito" : i === atual ? (FALHA.has(status) ? "falhou" : "atual") : "fila";
+        return (
+          <li key={e} data-estado={estado} aria-current={estado === "atual" ? "step" : undefined}>
+            <span className={styles.stepDot}>{estado === "feito" ? <Icon name="check" size={13} /> : i + 1}</span>
+            <span>{e}</span>
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -113,6 +374,8 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
   const [cenas, setCenas] = useState<VideoCena[]>([]);
   const [ajuste, setAjuste] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [still, setStill] = useState<string | null>(null);
+  const [copiado, setCopiado] = useState(false);
   const load = useCallback(() => getVideo(projectId, videoId).then((s) => { setState(s); setCenas(s.roteiro?.cenas || []); return s; }), [projectId, videoId]);
 
   useEffect(() => { load().catch((e: Error) => setError(e.message)); }, [load]);
@@ -123,7 +386,7 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
     return () => clearInterval(timer);
   }, [state, load, onChanged]);
 
-  if (!state) return error ? <div className="pill bad">{error}</div> : <p className="muted">Carregando…</p>;
+  if (!state) return error ? <div className="pill bad">{error}</div> : <Card className={styles.detail}><Skeleton height={28} width="50%" /><Skeleton height={44} /><Skeleton height={220} /></Card>;
   const { video } = state;
   const file = (name: string) => videoFileUrl(projectId, videoId, name);
   const run = (fn: () => Promise<unknown>) => async () => {
@@ -131,69 +394,153 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
     try { await fn(); setAjuste(""); await load(); onChanged(); } catch (e) { setError((e as Error).message); }
   };
   const total = Math.round((cenas.reduce((n, c) => n + segundos(c.fala) + (c.segura || 0), 0)) * 10) / 10;
+  const meta = video.briefing.duracao;
+  const escala = Math.max(meta * 1.3, total * 1.05);
+  const desvio = total < meta * 0.85 ? "curto" : total > meta * 1.15 ? "longo" : null;
   const move = (i: number, d: number) => setCenas((cs) => { const next = [...cs]; const [c] = next.splice(i, 1); next.splice(i + d, 0, c); return next; });
+  const falhou = !state.roteiro ? 0 : state.stills.length ? 2 : 1;
+  async function copiarLegenda() {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(await (await fetch(file("legenda-post.txt"))).text());
+      setCopiado(true);
+      setTimeout(() => setCopiado(false), 2000);
+    } catch (e) { setError(`Não deu para copiar: ${(e as Error).message}`); }
+  }
 
   return (
-    <Card style={{ padding: 20 }}>
-      <div className={styles.header}>
-        <div><b>{video.briefing.assunto}</b><div className="muted">{video.briefing.objetivo === "anuncio" ? "Anúncio" : "Alcance"} · meta {video.briefing.duracao}s</div></div>
-        <Button type="button" variant="secondary" onClick={onClose}>Voltar à lista</Button>
+    <Card className={styles.detail}>
+      <div className={styles.detailHead}>
+        <Button type="button" variant="ghost" className={styles.back} onClick={onClose}><Icon name="back" />Voltar à lista</Button>
+        <h3 className={styles.detailTitle}>{video.briefing.assunto}</h3>
+        <div className={styles.chips}>
+          <span className={styles.chip}>{nomeObjetivo(video.briefing.objetivo)}</span>
+          <span className={styles.chip}>{meta}s</span>
+        </div>
       </div>
-      <div className={styles.status}>{ROTULO[video.status]}</div>
-      {video.erro ? <div className="pill bad">{video.erro}</div> : null}
+      <Etapas status={video.status} falhou={falhou} />
+
+      {GERANDO.has(video.status) ? (
+        <div className={styles.working} role="status">
+          <span className={styles.spinner} aria-hidden="true" />
+          <div>
+            <p className={styles.panelTitle}>{ROTULO[video.status]}</p>
+            <p className={styles.panelText}>Começou {decorrido(video.atualizadoEm)}. Você pode sair desta tela; o trabalho continua.</p>
+          </div>
+        </div>
+      ) : null}
+
+      {FALHA.has(video.status) ? (
+        <div className={styles.alert} data-tom={tomDoStatus(video.status)} role="alert">
+          <Icon name={video.status === "aguardando_limite" ? "clock" : "alert"} size={22} />
+          <div>
+            <p className={styles.panelTitle}>{ROTULO[video.status]}</p>
+            {video.erro ? <p className={styles.panelText}>{video.erro}</p> : null}
+          </div>
+          <Button type="button" onClick={run(() => videoAction(projectId, videoId, "retomar"))}><Icon name="retry" />Tentar de novo</Button>
+        </div>
+      ) : video.erro ? <div className="pill bad">{video.erro}</div> : null}
       {error ? <div className="pill bad">{error}</div> : null}
-      {["erro", "interrompido", "aguardando_limite"].includes(video.status) ? <Button type="button" onClick={run(() => videoAction(projectId, videoId, "retomar"))}>Tentar de novo</Button> : null}
 
       {video.status === "roteiro_pronto" ? (
-        <>
-          <div className={styles.timebar}><span style={{ width: `${Math.min(100, (total / video.briefing.duracao) * 100)}%` }} />{total}s de {video.briefing.duracao}s</div>
-          {state.avisos.map((a) => <div key={a} className="notice">{a}</div>)}
-          {cenas.map((c, i) => (
-            <div key={i} data-testid="cena" className={styles.cena}>
-              <div className={styles.cenaHead}><b>Cena {i + 1}</b><span className="muted">~{segundos(c.fala)}s</span>
-                <button type="button" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Subir cena ${i + 1}`}>↑</button>
-                <button type="button" disabled={i === cenas.length - 1} onClick={() => move(i, 1)} aria-label={`Descer cena ${i + 1}`}>↓</button>
-                <button type="button" onClick={() => setCenas((cs) => cs.filter((_, j) => j !== i))} aria-label={`Apagar cena ${i + 1}`}>✕</button>
-              </div>
-              <label className={styles.field}>Fala da cena {i + 1}<textarea aria-label={`Fala da cena ${i + 1}`} value={c.fala} onChange={(e) => setCenas((cs) => cs.map((x, j) => (j === i ? { ...x, fala: e.target.value } : x)))} /></label>
-              <p className="muted">{c.descricao}</p>
+        <section className={styles.stage}>
+          <div className={styles.stageHead}>
+            <h4 className={styles.stageTitle}>{ROTULO.roteiro_pronto}</h4>
+            <p className={styles.panelText}>Edite as falas, reordene ou apague cenas. A barra mostra o tempo estimado contra a meta.</p>
+          </div>
+          <div className={styles.timebar} data-desvio={desvio || undefined}>
+            <div className={styles.track}>
+              <span className={styles.fill} style={{ width: `${Math.min(100, (total / escala) * 100)}%` }} />
+              <span className={styles.target} style={{ left: `${(meta / escala) * 100}%` }} title={`Meta ${meta}s`} />
             </div>
-          ))}
-          <label className={styles.field}>Pedir ajuste no roteiro<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} /></label>
+            <span className={styles.timeText}>{total}s de {meta}s</span>
+            {desvio ? <span className={styles.timeFlag}>{desvio === "curto" ? "Curto" : "Longo"} demais</span> : null}
+          </div>
+          {state.avisos.map((a) => <div key={a} className={styles.notice}><Icon name="alert" size={15} />{a}</div>)}
+          <ol className={styles.cenas}>
+            {cenas.map((c, i) => (
+              <li key={i} data-testid="cena" className={styles.cena}>
+                <span className={styles.cenaNum}>{i + 1}</span>
+                <div className={styles.cenaMain}>
+                  <textarea aria-label={`Fala da cena ${i + 1}`} value={c.fala} rows={2} onChange={(e) => setCenas((cs) => cs.map((x, j) => (j === i ? { ...x, fala: e.target.value } : x)))} />
+                  <p className={styles.cenaDesc}><Icon name="film" size={14} />{c.descricao}</p>
+                </div>
+                <div className={styles.cenaSide}>
+                  <span className={styles.chip}>~{segundos(c.fala)}s</span>
+                  <div className={styles.iconBtns}>
+                    <button type="button" className={styles.iconBtn} disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Subir cena ${i + 1}`}><Icon name="up" size={16} /></button>
+                    <button type="button" className={styles.iconBtn} disabled={i === cenas.length - 1} onClick={() => move(i, 1)} aria-label={`Descer cena ${i + 1}`}><Icon name="down" size={16} /></button>
+                    <button type="button" className={`${styles.iconBtn} ${styles.danger}`} onClick={() => setCenas((cs) => cs.filter((_, j) => j !== i))} aria-label={`Apagar cena ${i + 1}`}><Icon name="trash" size={16} /></button>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <label className={styles.field}>Pedir ajuste no roteiro<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} placeholder="Ex.: abrir com uma pergunta mais direta" /></label>
           <div className={styles.actions}>
             <Button type="button" variant="secondary" disabled={!ajuste.trim() || cenas.length === 0} onClick={run(async () => { await saveVideoRoteiro(projectId, videoId, cenas); await requestVideoAdjustment(projectId, videoId, "roteiro", ajuste); })}>Pedir ajuste</Button>
             <Button type="button" disabled={cenas.length === 0} onClick={run(async () => { await saveVideoRoteiro(projectId, videoId, cenas); await videoAction(projectId, videoId, "aprovar-roteiro"); })}>Aprovar roteiro</Button>
           </div>
-        </>
+        </section>
       ) : null}
 
       {video.status === "previa_pronta" ? (
-        <>
-          <div className={styles.stills}>{state.stills.map((s) => <img key={s} src={file(`stills/${s}`)} alt={s} />)}</div>
-          {state.arquivos.narracaoMp3 ? <audio controls src={file("voz/narracao.mp3")} /> : null}
-          {state.vozUsada ? <div className="muted">Voz usada: {state.vozUsada}</div> : null}
-          {state.arquivos.notas ? <a href={file("NOTAS.md")} target="_blank" rel="noreferrer">Notas do Claude</a> : null}
-          <label className={styles.field}>Pedir ajuste na prévia<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} /></label>
+        <section className={styles.stage}>
+          <div className={styles.stageHead}>
+            <h4 className={styles.stageTitle}>{ROTULO.previa_pronta}</h4>
+            <p className={styles.panelText}>Confira as cenas e a narração. Clique numa cena para ver grande.</p>
+          </div>
+          {state.stills.length ? (
+            <div className={styles.stills}>
+              {state.stills.map((s) => (
+                <button key={s} type="button" className={styles.stillBtn} onClick={() => setStill(s)} aria-label={`Ver ${s} grande`}>
+                  <img src={file(`stills/${s}`)} alt={s} loading="lazy" />
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {state.arquivos.narracaoMp3 || state.vozUsada || state.arquivos.notas ? (
+            <div className={styles.narration}>
+              <span className={styles.narrationIcon}><Icon name="mic" size={20} /></span>
+              <div className={styles.narrationMain}>
+                <div className={styles.narrationHead}>
+                  <b>Narração</b>
+                  {state.vozUsada ? <span className={styles.chip}>Voz usada: {state.vozUsada}</span> : null}
+                  {state.arquivos.notas ? <a className={styles.link} href={file("NOTAS.md")} target="_blank" rel="noreferrer"><Icon name="doc" size={14} />Notas do Claude</a> : null}
+                </div>
+                {state.arquivos.narracaoMp3 ? <audio controls src={file("voz/narracao.mp3")} /> : null}
+              </div>
+            </div>
+          ) : null}
+          <label className={styles.field}>Pedir ajuste na prévia<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} placeholder="Ex.: trocar a cena 3 por algo mais claro" /></label>
           <div className={styles.actions}>
             <Button type="button" variant="secondary" disabled={!ajuste.trim()} onClick={run(() => requestVideoAdjustment(projectId, videoId, "producao", ajuste))}>Pedir ajuste</Button>
             <Button type="button" onClick={run(() => videoAction(projectId, videoId, "aprovar-previa"))}>Aprovar prévia</Button>
           </div>
-        </>
+          {still ? <ImageLightbox src={file(`stills/${still}`)} alt={still} fileName={still} onClose={() => setStill(null)} /> : null}
+        </section>
       ) : null}
 
       {video.status === "pronto" ? (
-        <>
-          {state.arquivos.video ? <video className={styles.player} controls src={file("video.mp4")} /> : null}
-          <div className={styles.actions}>
-            <a href={file("video.mp4")} download>Baixar MP4</a>
-            {state.arquivos.legendaPost ? <a href={file("legenda-post.txt")} target="_blank" rel="noreferrer">Legenda do post</a> : null}
-            {state.arquivos.narracaoTxt ? <a href={file("voz/narracao.txt")} target="_blank" rel="noreferrer">Texto da narração</a> : null}
+        <section className={styles.final}>
+          {state.arquivos.video ? <div className={styles.phone}><video controls playsInline src={file("video.mp4")} /></div> : null}
+          <div className={styles.finalActions}>
+            <h4 className={styles.stageTitle}>Vídeo pronto</h4>
+            <p className={styles.panelText}>Baixe o MP4 e poste com a legenda pronta.</p>
+            <a className={styles.primaryLink} href={file("video.mp4")} download><Icon name="download" />Baixar MP4</a>
+            {state.arquivos.legendaPost ? (
+              <div className={styles.linkRow}>
+                <a className={styles.link} href={file("legenda-post.txt")} target="_blank" rel="noreferrer"><Icon name="doc" size={15} />Legenda do post</a>
+                <Button type="button" variant="ghost" className={styles.smallBtn} onClick={copiarLegenda}><Icon name={copiado ? "check" : "copy"} size={15} />{copiado ? "Copiado!" : "Copiar legenda"}</Button>
+              </div>
+            ) : null}
+            {state.arquivos.narracaoTxt ? <a className={styles.link} href={file("voz/narracao.txt")} target="_blank" rel="noreferrer"><Icon name="mic" size={15} />Texto da narração</a> : null}
           </div>
-        </>
+        </section>
       ) : null}
 
       {!GERANDO.has(video.status) ? (
-        <div className={styles.actions}><Button type="button" variant="secondary" onClick={async () => { setError(null); try { await videoAction(projectId, videoId, "excluir"); onChanged(); onClose(); } catch (e) { setError((e as Error).message); } }}>Excluir vídeo</Button></div>
+        <div className={styles.footer}><Button type="button" variant="ghost" className={styles.deleteBtn} onClick={async () => { setError(null); try { await videoAction(projectId, videoId, "excluir"); onChanged(); onClose(); } catch (e) { setError((e as Error).message); } }}><Icon name="trash" size={16} />Excluir vídeo</Button></div>
       ) : null}
     </Card>
   );

@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -49,11 +49,48 @@ describe("Vídeo animado", () => {
     await userEvent.selectOptions(screen.getByLabelText("Importar assunto"), "Diagnóstico antes do anúncio");
     await userEvent.click(screen.getByRole("radio", { name: "Anúncio" }));
     await userEvent.click(screen.getByRole("radio", { name: "30s" }));
-    await userEvent.selectOptions(screen.getByLabelText("Legenda"), "karaoke");
+    await userEvent.click(within(screen.getByRole("radiogroup", { name: "Legenda" })).getByRole("radio", { name: "Karaokê" }));
     await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
     const post = calls.find((c) => c.init?.method === "POST");
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({ assunto: "Diagnóstico antes do anúncio", objetivo: "anuncio", duracao: 30, tom: "criador", legenda: "karaoke" });
     expect(await screen.findByText(/Escrevendo o roteiro/)).toBeInTheDocument();
+  });
+
+  it("shows every caption model as a looping preview tile in the Legenda group", async () => {
+    stubApi((url) => (url === "/api/state" ? project(true) : { videos: [] }));
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    const group = screen.getByRole("radiogroup", { name: "Legenda" });
+    expect(within(group).getAllByRole("radio")).toHaveLength(7);
+    expect(within(group).getByRole("radio", { name: "Do vídeo (sob medida)" })).toBeChecked();
+    for (const [modelo, nome] of [["simples", "Simples"], ["karaoke", "Karaokê"], ["pop", "Pop (palavra por vez)"], ["destaque", "Destaque"], ["caixa", "Caixa"]]) {
+      const video = within(group).getByRole("radio", { name: nome }).closest("label")?.querySelector("video");
+      expect(video?.getAttribute("src")).toBe(`/video-legendas/${modelo}.mp4`);
+    }
+  });
+
+  it("fills the subject when a suggestion chip is clicked", async () => {
+    stubApi((url) => (url === "/api/state" ? project(true) : { videos: [] }));
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Encarte da semana" }));
+    expect(screen.getByLabelText("Assunto")).toHaveValue("Encarte da semana");
+  });
+
+  it("plays a voice sample without changing the selected tone", async () => {
+    const play = vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    const pause = vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    stubApi((url) => (url === "/api/state" ? project(true) : { videos: [] }));
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("button", { name: "Ouvir amostra: Vendedor de bairro" }));
+    expect(play).toHaveBeenCalled();
+    expect(screen.getByRole("radio", { name: "Criador de conteúdo" })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Vendedor de bairro" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Pausar amostra: Vendedor de bairro" })).toBeInTheDocument();
+    cleanup(); // unmount pauses the sample, so keep the stubs until then
+    play.mockRestore();
+    pause.mockRestore();
   });
 
   it("shows the script as editable scene cards with the time bar, saves and approves", async () => {
