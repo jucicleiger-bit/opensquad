@@ -3088,6 +3088,10 @@ export async function generateCarousel(projectId, options = {}, targetDir = proc
       carouselId,
       projectId: project.projectId,
       briefing,
+      // Re-read from the project when the plan is built (findCarouselOffer),
+      // so a price edited in Ofertas before planning is honored.
+      offerId: String(options.offerId || '').trim() || null,
+      carouselStyle: 'clean',
       format: '',
       slideCount,
       // Standalone carousels plan first: nothing generates until the
@@ -3141,7 +3145,7 @@ export function carouselBriefingFromContentTopic(topic) {
   return [topic.offerName || topic.label, topic.objective, topic.items].filter(Boolean).join(' — ');
 }
 
-function buildCarouselSlideContentTopic({ project, order, slideCount, slideText }) {
+function buildCarouselSlideContentTopic({ project, order, slideCount, slideText, offer = null, carouselStyle = '' }) {
   return {
     id: `carousel-slide-${order}`,
     type: 'institutional',
@@ -3167,6 +3171,19 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText 
     // decide whether this slide gets the "swipe for more" arrow — every
     // slide except the last one, which is where the sequence actually ends.
     isLastCarouselSlide: order === slideCount,
+    // Only the photos travel with each slide. offerName/price would become
+    // every slide's "Título exato" and exact price in
+    // buildChatGptFinalCardPrompt; they reach the slides through the roteiro
+    // instead. type stays 'institutional' — an offer type would demand a
+    // registered offer template and attach the single-product structure.
+    ...(offer ? {
+      offerId: offer.id,
+      photoReferenceIds: Array.isArray(offer.photoReferenceIds) ? offer.photoReferenceIds : [],
+      productTreatment: offer.productTreatment || '',
+    } : {}),
+    // Read by buildCreativeSpec and buildChatGptFinalCardPrompt. Only the
+    // standalone tab sets it, so the calendar carousel keeps its look.
+    ...(carouselStyle ? { carouselStyle } : {}),
   };
 }
 
@@ -3220,6 +3237,11 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
   await writeJson(carousel.filePath, carousel);
 }
 
+function findCarouselOffer(project, offerId) {
+  if (!offerId) return null;
+  return normalizeProjectOffers(project.contentStrategy?.offers || []).find((offer) => offer.id === offerId) || null;
+}
+
 // Roteiro half: asks the outline generator for one text per slide and fills
 // slideText/role/contentTopic in place. Returns false — leaving the slides
 // untouched — when the outline is missing or the wrong size, so each caller
@@ -3239,6 +3261,7 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
   // Only a replan adds keys to the generator payload — the batch path and a
   // first plan send exactly { project, briefing, slideCount }, as before.
   const replanning = Boolean(overrides.currentPlan);
+  const offer = findCarouselOffer(project, carousel.offerId);
   let outline = null;
   if (typeof options.outlineGenerator === 'function') {
     try {
@@ -3246,6 +3269,8 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
         project,
         briefing,
         slideCount,
+        ...(offer ? { offer: { name: offer.name, price: offerPriceLabel(offer), items: offer.items || '' } } : {}),
+        ...(carousel.carouselStyle ? { carouselStyle: carousel.carouselStyle } : {}),
         ...(replanning ? { currentPlan: overrides.currentPlan, request: overrides.request } : {}),
       });
     } catch (err) {
@@ -3274,6 +3299,8 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
       order: slide.order,
       slideCount: size,
       slideText: slide.slideText,
+      offer,
+      carouselStyle: carousel.carouselStyle || '',
     });
   });
   return true;
@@ -8224,11 +8251,14 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
   // (goal/authority/institutional, special-date, carousel, ad-creative) still
   // has no UI to turn it off and keeps the free background regardless of what
   // topic.backgroundStyle happens to contain.
+  const cleanCarousel = topic.source === 'carousel' && topic.carouselStyle === 'clean';
   const backgroundStyle = topic.source === 'offer'
     ? normalizeBackgroundStyle(topic.backgroundStyle)
     : topic.source === 'flyer' && topic.backgroundStyle
       ? normalizeBackgroundStyle(topic.backgroundStyle)
-      : 'elaborate';
+      : cleanCarousel
+        ? 'simple_brand'
+        : 'elaborate';
   return {
     schemaVersion: 1,
     project: {
@@ -8274,7 +8304,7 @@ export function buildCreativeSpec(content = {}, project = {}, channel, selectedR
     // The clean title is an offer-form opt-in; every other source has no UI
     // for it and keeps the free, drawn title.
     title: {
-      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : 'lettering',
+      style: topic.source === 'offer' ? normalizeTitleStyle(topic.titleStyle) : cleanCarousel ? 'clean' : 'lettering',
     },
     references: selectedReferences.map((reference) => ({
       id: reference.id || '',
@@ -8479,6 +8509,15 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         'Uma das imagens anexadas é o slide 1, já gerado, deste MESMO carrossel.',
         'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — mesma identidade visual, não apenas inspiração livre.',
         'A composição/disposição dos elementos deste slide pode ser diferente da do slide 1 (ex.: título maior de um lado, bloco de texto do outro, lista de bullets) — o que precisa ser idêntico é a identidade visual, não o layout exato.',
+      ])
+      : '',
+    topic.source === 'carousel' && topic.carouselStyle === 'clean'
+      ? section('ESTILO CARROSSEL CLEAN', [
+        'Visual clean de carrossel de Instagram: fundo liso ou com degradê suave nas cores da marca, sem texturas, ondas, faixas ou grafismos carregados.',
+        'Um título grande e no máximo 1 ou 2 linhas curtas de apoio — nada de parágrafo.',
+        'Muito espaço vazio e margens generosas; poucos elementos por slide.',
+        'Logo pequena, sempre no mesmo canto em todos os slides.',
+        'Se houver foto real do produto anexada, ela é o foco visual: recorte limpo, sem colagem nem vários produtos misturados.',
       ])
       : '',
     section('OBJETIVO DO CRIATIVO', [

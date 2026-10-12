@@ -10656,6 +10656,119 @@ test('reconcileInterruptedGenerations turns a carousel stuck in planning into pl
   });
 });
 
+test('a carousel pulled from an offer sends the offer to the roteiro and puts its photos (not its name/price) on every slide', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-oferta', name: 'Boss Pizzaria' }, dir);
+    const { offer } = await saveProjectOffer('carrossel-oferta', {
+      name: 'Pizza Calabresa',
+      type: 'offer',
+      price: 'R$ 49,90',
+      items: 'Borda recheada',
+      photoReferenceIds: ['ref-foto-calabresa'],
+      productTreatment: 'faithful_enhance',
+    }, dir);
+    const carousel = await generateCarousel('carrossel-oferta', { briefing: 'Pizza Calabresa — Borda recheada', slideCount: 2, offerId: offer.id }, dir);
+    assert.equal(carousel.offerId, offer.id);
+    assert.equal(carousel.carouselStyle, 'clean');
+
+    let received;
+    enqueueCarouselPlanning('carrossel-oferta', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Calabresa por R$ 49,90', 'Peça já']); },
+    }, dir);
+    const planned = await waitForCarousel('carrossel-oferta', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    assert.deepEqual(received.offer, { name: 'Pizza Calabresa', price: 'R$ 49,90', items: 'Borda recheada' });
+    assert.equal(received.carouselStyle, 'clean');
+    planned.slides.forEach((slide) => {
+      assert.equal(slide.contentTopic.offerId, offer.id);
+      assert.deepEqual(slide.contentTopic.photoReferenceIds, ['ref-foto-calabresa']);
+      assert.equal(slide.contentTopic.productTreatment, 'faithful_enhance');
+      assert.equal(slide.contentTopic.carouselStyle, 'clean');
+      assert.equal(slide.contentTopic.type, 'institutional', 'never the offer type — that would demand an offer template');
+      assert.equal(slide.contentTopic.offerName, undefined, 'offerName would become every slide\'s exact title');
+      assert.equal(slide.contentTopic.price, '', 'price would be stamped on every slide');
+    });
+  });
+});
+
+test('an offerId that no longer exists falls back to a plain briefing carousel', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-oferta-sumiu', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-oferta-sumiu', { briefing: 'teste', slideCount: 2, offerId: 'nao-existe' }, dir);
+    let received;
+    enqueueCarouselPlanning('carrossel-oferta-sumiu', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Capa', 'CTA']); },
+    }, dir);
+    const planned = await waitForCarousel('carrossel-oferta-sumiu', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(received.offer, undefined);
+    assert.equal(planned.planError, null);
+    assert.equal(planned.slides[0].contentTopic.offerId, undefined);
+  });
+});
+
+test('a standalone carousel slide is built clean: simple brand background, clean title, clean carousel block in the prompt', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-clean', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-clean', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-clean', carousel.carouselId, { outlineGenerator: async () => fakeOutline(['Capa', 'CTA']) }, dir);
+    await waitForCarousel('carrossel-clean', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    await startCarouselImageGeneration('carrossel-clean', carousel.carouselId, dir);
+
+    const seen = [];
+    enqueueCarouselImageGeneration('carrossel-clean', carousel.carouselId, {
+      imageGenerator: async (payload) => {
+        seen.push({ prompt: payload.content.image.prompt, spec: payload.content.creativeSpec });
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    await waitForCarousel('carrossel-clean', carousel.carouselId, dir, (c) => c.status === 'ready');
+
+    assert.equal(seen.length, 2);
+    seen.forEach(({ prompt, spec }) => {
+      assert.equal(spec.background.style, 'simple_brand');
+      assert.equal(spec.title.style, 'clean');
+      assert.match(prompt, /ESTILO CARROSSEL CLEAN/);
+    });
+  });
+});
+
+test('the automatic calendar carousel keeps today\'s look and outline payload: no clean block, no offer, no style', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-lote-intacto', name: 'Boss Pizzaria' }, dir);
+    const batch = await generateContentSchedulePlan('carrossel-lote-intacto', {
+      days: 2,
+      startDate: '2026-08-24',
+      formats: [{ channel: 'instagram_feed', postsPerDay: 1, everyDays: 1, startTime: '09:00', intervalMinutes: 0 }],
+      carouselsPerWeek: 1,
+      maxCarouselSlides: 2,
+    }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-lote-intacto');
+    const project = await loadProjectForTest('carrossel-lote-intacto', dir);
+    const outlinePayloads = [];
+    const seen = [];
+
+    await enrichBatchItemsWithRealImages(batch, project, 'carrossel-lote-intacto', {
+      imageGenerator: async (payload) => {
+        if (payload.content.contentTopic?.source === 'carousel') seen.push({ prompt: payload.content.image.prompt, spec: payload.content.creativeSpec });
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+      carouselOutlineGenerator: async (payload) => {
+        outlinePayloads.push(payload);
+        return fakeOutline(Array.from({ length: payload.slideCount }, (_, i) => `Slide ${i + 1}`));
+      },
+    }, paths);
+
+    assert.equal(outlinePayloads.length, 1);
+    assert.deepEqual(Object.keys(outlinePayloads[0]).sort(), ['briefing', 'project', 'slideCount']);
+    assert.ok(seen.length > 0);
+    seen.forEach(({ prompt, spec }) => {
+      assert.doesNotMatch(prompt, /ESTILO CARROSSEL CLEAN/);
+      assert.equal(spec.background.style, 'elaborate');
+      assert.equal(spec.title.style, 'lettering');
+    });
+  });
+});
+
 test('carouselWeekdaysForRange distributes evenly within each 7-day window using a fixed step', () => {
   assert.deepEqual(carouselWeekdaysForRange(7, 0), new Set());
   assert.deepEqual(carouselWeekdaysForRange(7, 1), new Set([0]));
