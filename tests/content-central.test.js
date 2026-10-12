@@ -7486,6 +7486,43 @@ test('runDuePublishSweep only publishes the earliest overdue (date, time) slot p
   });
 });
 
+// Same bug the gaveta had on 2026-10-11 (Carvalho 10:00 IG story refused,
+// 11:00 slot never went): a failed slot stayed the earliest and was retried
+// every sweep instead of the next slot being published.
+test('runDuePublishSweep does not let a failed slot block the next due slot', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'publish-blocked', name: 'Publish Blocked', handle: '@publishblocked', approvalEmail: 'aprovacao@example.com' }, dir);
+    const batch = await generateContentBatch('publish-blocked', { days: 2, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    await approveContent('publish-blocked', batch.items[0].contentId, dir, batch.batchId);
+    await approveContent('publish-blocked', batch.items[1].contentId, dir, batch.batchId);
+    await runDuePublishSweep(dir, { now: new Date('2026-07-20T12:00:00'), metaPublisher: async () => { throw new Error('caption too long'); } });
+
+    const calls = [];
+    await runDuePublishSweep(dir, {
+      now: new Date('2026-07-21T09:00:00'),
+      metaPublisher: async (payload) => { calls.push(payload.content.contentId); throw new Error('still failing'); },
+    });
+    assert.deepEqual(calls, [batch.items[1].contentId]);
+  });
+});
+
+// Carvalho 2026-10-11: the copy agent came back empty, the briefing skeleton
+// ("Gancho: [criar chamada...]", 2596 chars) was approved as the caption and
+// Meta refused the story.
+test('approveContent refuses a card whose caption is still the unrevised skeleton', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'approve-skeleton', name: 'Approve Skeleton', handle: '@approveskeleton', approvalEmail: 'aprovacao@example.com' }, dir);
+    const batch = await generateContentBatch('approve-skeleton', { days: 1, startDate: '2026-07-20' }, dir);
+    const item = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    item.captionGenerationError = 'O redator de IA não retornou uma legenda (resposta vazia).';
+    await writeFile(batch.items[0].filePath, JSON.stringify(item));
+
+    await assert.rejects(approveContent('approve-skeleton', item.contentId, dir, batch.batchId), /legenda/);
+    const raw = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    assert.notEqual(raw.status, 'aprovado');
+  });
+});
+
 test('runDuePublishSweep with a channels filter only sees content on those channels, leaving other due items on other channels completely untouched', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({
