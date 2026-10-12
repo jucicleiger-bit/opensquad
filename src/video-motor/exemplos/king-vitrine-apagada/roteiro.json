@@ -1,0 +1,53 @@
+{
+  "marca": {
+    "nome": "King",
+    "subtitulo": "Assessoria MKT",
+    "logo": "../_motor/marcas/king.png",
+    "whatsapp": "65 98108-6707",
+    "instagram": "@king.assessoriamkt"
+  },
+  "voz": "pt-BR-AntonioNeural",
+  "velocidade": "+6%",
+  "estilo_imagens": "Clean premium studio product photography, soft white key light from the top left, crisp realistic materials, subtle warm yellow (#FFD100) rim light only on the edges, high contrast, single object centered and fully visible with generous empty margin, vertical 2:3 portrait.",
+  "objetos": {
+    "caixa": "A closed brown cardboard shipping box with packing tape across the top, slightly worn corners, seen at a three-quarter angle.",
+    "vitrine": "A tall store display wall with five shelves completely full of varied products from many kinds of businesses: sneakers, cosmetic bottles, canned groceries, tools, toys, headphones, coffee bags, a potted plant, seen straight from the front.",
+    "relogio": "A classic round wall clock with a thin black frame, white face and black hands, seen straight from the front.",
+    "tenis": "A single modern white and yellow sneaker in side view."
+  },
+  "cenas": [
+    {
+      "tipo": "chegada",
+      "fala": "Todo dia chega produto novo na sua loja."
+    },
+    {
+      "tipo": "silencio",
+      "fala": "Mas no Instagram... silêncio."
+    },
+    {
+      "tipo": "lanterna",
+      "fala": "Quantos produtos seus clientes nem sabem que você vende?"
+    },
+    {
+      "tipo": "relogio",
+      "fala": "Não é falta de vontade. É que o dia não para."
+    },
+    {
+      "tipo": "depois",
+      "fala": "E o Instagram fica pra depois. E depois. E depois."
+    },
+    {
+      "tipo": "esquece",
+      "fala": "Enquanto isso, o cliente esquece o que não vê."
+    },
+    {
+      "tipo": "acende",
+      "fala": "Sua empresa tem muitos produtos, mas divulga pouco? Dá pra acender essa vitrine.",
+      "segura": 1.0
+    },
+    {
+      "tipo": "contato",
+      "fala": "Se essa é a sua rotina, chama a King no WhatsApp."
+    }
+  ]
+}

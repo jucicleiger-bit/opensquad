@@ -1,4 +1,6 @@
 import { exec, execFile, spawn } from 'node:child_process';
+import { createReadStream, statSync } from 'node:fs';
+import { pipeline } from 'node:stream';
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -152,6 +154,10 @@ import {
   productPhotoLimitFor,
   productPhotoLabelFor,
 } from './content-central.js';
+import {
+  STATUS as VIDEO_STATUS, requireVideoProject, createVideo, listVideos, readVideoState, readVideo, updateVideo, saveRoteiroCenas, deleteVideo, reconcileInterruptedVideos, videoDir,
+} from './content-central-video.js';
+import { createVideoJobs } from './content-central-video-jobs.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem, syncQueue } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
 import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
@@ -424,9 +430,11 @@ export async function startContentCentralServer({
   prospectScreenshotAnalyzer = null,
   bioImprover = null,
   brainRunner = null,
+  videoJobs = null,
 } = {}) {
   await loadContentCentralEnv(targetDir);
   await reconcileInterruptedGenerations(targetDir).catch((err) => console.error('[content-central] reconcile interrupted generations failed:', err.message));
+  await reconcileInterruptedVideos(targetDir).catch((err) => console.error('[content-central] reconcile interrupted videos failed:', err.message));
   const context = {
     catalogImageComposer: (payload) => composeCatalogImage({ ...payload, targetDir }),
     imageGenerator: imageGenerator || (enableAiImages ? (payload) => generateAiImageForActiveProvider({ ...payload, targetDir }) : null),
@@ -449,6 +457,7 @@ export async function startContentCentralServer({
     prospectScreenshotAnalyzer: prospectScreenshotAnalyzer || (enableAiImages ? analyzeProspectScreenshotWithHermes : null),
     bioImprover: bioImprover || (enableAiImages ? improveProspectBioWithAi : null),
     brainRunner: brainRunner || runClaudeTurn,
+    videoJobs: videoJobs || createVideoJobs({ targetDir }),
   };
   const server = createServer((req, res) => {
     handleRequest(req, res, targetDir, context).catch((err) => sendJson(res, 500, {
@@ -519,7 +528,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
   // React Router match it client-side.
   if (method === 'GET' && route === '/classic') return sendHtml(res, renderApp());
   if (method === 'GET' && !route.startsWith('/api/')) {
-    return sendReactApp(res, route === '/' ? '' : route);
+    return sendReactApp(req, res, route === '/' ? '' : route);
   }
   if (method === 'GET' && route === '/api/state') {
     const projects = await listCentralProjects(targetDir);
@@ -905,6 +914,66 @@ async function handleRequest(req, res, targetDir, context = {}) {
       return sendJson(res, 404, { error: 'Not found' });
     } catch (err) {
       return sendJson(res, err.status || 400, { error: err.message, ...(err.chat ? { chat: err.chat } : {}) });
+    }
+  }
+
+  // Vídeo animado (content-central-video*.js). Errors come back as JSON
+  // with their status so the tab can show them.
+  if (parts[3] === 'videos') {
+    try {
+      await requireVideoProject(projectId, targetDir);
+      const jobs = context.videoJobs;
+      const vid = parts[4];
+      if (method === 'GET' && parts.length === 4) return sendJson(res, 200, { videos: await listVideos(projectId, targetDir) });
+      if (method === 'POST' && parts.length === 4) {
+        const video = await createVideo(projectId, await readBody(req), targetDir);
+        await jobs.enqueue(projectId, video.id, 'roteiro', {});
+        return sendJson(res, 201, { video });
+      }
+      if (method === 'GET' && parts.length === 5) return sendJson(res, 200, { ...await readVideoState(projectId, vid, targetDir), ocupado: jobs.isBusy(projectId, vid) });
+      if (method === 'GET' && parts[5] === 'arquivo') return sendVideoFile(req, res, videoDir(targetDir, projectId, vid), parts.slice(6).join('/'));
+      if (method === 'POST' && parts.length === 6) {
+        const body = await readBody(req);
+        // Check and reserve with no await in between, so a double click cannot queue twice.
+        const key = `${projectId}/${vid}`;
+        if (jobs.isBusy(projectId, vid) || videoReservas.has(key)) throw Object.assign(new Error('O vídeo já está sendo gerado.'), { status: 409 });
+        videoReservas.add(key);
+        try {
+          const video = await readVideo(projectId, vid, targetDir);
+          const exige = (status) => { if (video.status !== status) throw Object.assign(new Error('Ação indisponível nesta etapa.'), { status: 409 }); };
+          const iniciar = async (status, etapa, opts = {}) => {
+            // An ajuste is kept on the video until its stage succeeds, so a retry can pass it back.
+            const next = await updateVideo(projectId, vid, { status, ...(opts.ajuste && { ajustePendente: { etapa, pedido: opts.ajuste } }) }, targetDir);
+            await jobs.enqueue(projectId, vid, etapa, opts);
+            return sendJson(res, 200, { video: next });
+          };
+          if (parts[5] === 'roteiro') return sendJson(res, 200, { roteiro: await saveRoteiroCenas(projectId, vid, body.cenas, targetDir) });
+          if (parts[5] === 'ajuste') {
+            const pedido = String(body.pedido || '').trim();
+            if (!pedido) throw Object.assign(new Error('Escreva o ajuste.'), { status: 400 });
+            if (body.etapa === 'roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.ROTEIRO_GERANDO, 'roteiro', { ajuste: pedido }); }
+            if (body.etapa === 'producao') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao', { ajuste: pedido }); }
+            throw Object.assign(new Error('Etapa de ajuste inválida.'), { status: 400 });
+          }
+          if (parts[5] === 'aprovar-roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao'); }
+          if (parts[5] === 'aprovar-previa') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.RENDER_GERANDO, 'render'); }
+          if (parts[5] === 'retomar') {
+            if (![VIDEO_STATUS.ERRO, VIDEO_STATUS.INTERROMPIDO, VIDEO_STATUS.AGUARDANDO_LIMITE].includes(video.status)) throw Object.assign(new Error('Nada para retomar.'), { status: 409 });
+            // The field matching the current status wins; the other one is only a fallback for older video.json files.
+            const interrompida = { roteiro_gerando: 'roteiro', producao_gerando: 'producao', render_gerando: 'render' }[video.etapaInterrompida];
+            const etapa = (video.status === VIDEO_STATUS.INTERROMPIDO ? interrompida || video.etapaComErro : video.etapaComErro || interrompida) || 'roteiro';
+            const status = { roteiro: VIDEO_STATUS.ROTEIRO_GERANDO, producao: VIDEO_STATUS.PRODUCAO_GERANDO, render: VIDEO_STATUS.RENDER_GERANDO }[etapa];
+            const opts = {};
+            if (video.ajustePendente?.etapa === etapa) opts.ajuste = video.ajustePendente.pedido;
+            if (video.status === VIDEO_STATUS.ERRO && video.erro) opts.erroAnterior = video.erro;
+            return await iniciar(status, etapa, opts);
+          }
+          if (parts[5] === 'excluir') { await deleteVideo(projectId, vid, targetDir); return sendJson(res, 200, { ok: true }); }
+        } finally { videoReservas.delete(key); }
+      }
+      return sendJson(res, 404, { error: 'Not found' });
+    } catch (err) {
+      return sendJson(res, err.status || 400, { error: err.message });
     }
   }
 
@@ -1853,6 +1922,7 @@ function assetContentType(filePath) {
   if (ext === '.webp') return 'image/webp';
   if (ext === '.gif') return 'image/gif';
   if (ext === '.mp4') return 'video/mp4';
+  if (ext === '.mp3') return 'audio/mpeg';
   if (ext === '.pdf') return 'application/pdf';
   if (ext === '.txt' || ext === '.md') return 'text/plain; charset=utf-8';
   return 'application/octet-stream';
@@ -1876,11 +1946,16 @@ function reactAppContentType(filePath) {
   return assetContentType(filePath);
 }
 
-async function sendReactApp(res, subPath) {
+async function sendReactApp(req, res, subPath) {
   const cleanRelative = String(subPath || '').replace(/\\/g, '/').replace(/^\/+/, '');
   const isAssetRequest = cleanRelative && extname(cleanRelative) && !cleanRelative.includes('..');
   const filePath = isAssetRequest ? resolve(REACT_APP_DIST_ROOT, cleanRelative) : resolve(REACT_APP_DIST_ROOT, 'index.html');
   if (!filePath.startsWith(REACT_APP_DIST_ROOT)) return sendJson(res, 400, { error: 'Caminho inválido' });
+  // Caption previews and voice samples keep fixed names, so they get a short cache, and Range for Safari.
+  if (/\.(mp4|mp3)$/i.test(filePath)) {
+    const cache = /^video-(legendas|vozes)\//.test(cleanRelative) ? 'public, max-age=3600' : 'public, max-age=31536000, immutable';
+    return sendFileRange(req, res, filePath, assetContentType(filePath), { 'cache-control': cache });
+  }
   try {
     const body = await readFile(filePath);
     // index.html has no hash in its URL and references the current build's
@@ -6051,6 +6126,41 @@ function sendCarouselError(res, err) {
 function sendJson(res, status, body) {
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+const videoReservas = new Set(); // `${projectId}/${vid}` with a mutation in flight
+const VIDEO_FILES = /^(video\.mp4|trecho\.mp4|voz\/narracao\.(mp3|txt)|legenda-post\.txt|NOTAS\.md|stills\/t[\d.]+\.jpg)$/;
+const VIDEO_MIME = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.jpg': 'image/jpeg' };
+
+// Whitelisted files of a video folder; MP4/MP3 honour Range so the player can seek.
+function sendVideoFile(req, res, dir, name) {
+  const decoded = decodeURIComponent(name);
+  if (!VIDEO_FILES.test(decoded)) return sendJson(res, 404, { error: 'Arquivo não encontrado.' });
+  const file = join(dir, ...decoded.split('/'));
+  // The final MP4 saves under the video id instead of "video.mp4".
+  const extra = decoded === 'video.mp4' ? { 'Content-Disposition': `inline; filename="${basename(dir)}.mp4"` } : {};
+  return sendFileRange(req, res, file, VIDEO_MIME[extname(file)] || 'application/octet-stream', extra);
+}
+
+// Range support for media: players seek with it and Safari/iOS will not play MP4/MP3 without it.
+function sendFileRange(req, res, file, type, extraHeaders = {}) {
+  let size;
+  try { size = statSync(file).size; } catch { return sendJson(res, 404, { error: 'Arquivo não encontrado.' }); }
+  const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  if (range) {
+    const [, a, b] = range;
+    // "-N" is the last N bytes; otherwise start..end, end open or clamped to the file.
+    const start = a ? Number(a) : Math.max(0, size - Number(b));
+    const end = a && b ? Math.min(Number(b), size - 1) : size - 1;
+    if ((!a && !b) || start >= size || start > end) {
+      res.writeHead(416, { 'Content-Range': `bytes */${size}` });
+      return res.end();
+    }
+    res.writeHead(206, { ...extraHeaders, 'Content-Type': type, 'Content-Range': `bytes ${start}-${end}/${size}`, 'Accept-Ranges': 'bytes', 'Content-Length': end - start + 1 });
+    return pipeline(createReadStream(file, { start, end }), res, () => {});
+  }
+  res.writeHead(200, { ...extraHeaders, 'Content-Type': type, 'Content-Length': size, 'Accept-Ranges': 'bytes' });
+  return pipeline(createReadStream(file), res, () => {});
 }
 
 function sendHtml(res, html) {

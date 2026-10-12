@@ -1,0 +1,43 @@
+{
+  "marca": {
+    "nome": "King",
+    "subtitulo": "Assessoria MKT",
+    "logo": "../_motor/marcas/king.png",
+    "whatsapp": "65 98108-6707",
+    "instagram": "@king.assessoriamkt"
+  },
+  "voz": "pt-BR-AntonioNeural",
+  "velocidade": "+6%",
+  "cenas": [
+    {
+      "tipo": "galeria",
+      "fala": "Essa é a foto que você tem do seu produto."
+    },
+    {
+      "tipo": "marcacoes",
+      "fala": "Tirada no balcão, na correria, do jeito que deu."
+    },
+    {
+      "tipo": "montagem",
+      "fala": "Agora olha o que dá pra fazer com ela."
+    },
+    {
+      "tipo": "regua",
+      "fala": "Mesmo produto. Outra presença.",
+      "segura": 1.2
+    },
+    {
+      "tipo": "cubo",
+      "fala": "E funciona com qualquer produto: frios, bebidas, mercearia."
+    },
+    {
+      "tipo": "fluxo",
+      "fala": "Você manda a foto e as informações. A gente devolve o Story pronto pra postar.",
+      "segura": 1.0
+    },
+    {
+      "tipo": "adesivo",
+      "fala": "Quer ver com o seu produto? Manda uma foto pra King no WhatsApp."
+    }
+  ]
+}

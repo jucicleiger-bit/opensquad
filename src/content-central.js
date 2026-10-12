@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { Jimp, intToRGBA } from 'jimp';
 import { CONTENT_GOAL_LABELS } from './content-central-goals.js';
 import { normalizeContractedPlan, validateContractedPlan } from './content-central-contract.js';
+import { normalizeVideoAnimado } from './content-central-video.js';
 import { isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, validateBusinessHours } from './content-central-business-hours.js';
 export { CONTENT_GOAL_LABELS };
 
@@ -6739,6 +6740,7 @@ async function toProjectSummary(project) {
     timezone: project.timezone,
     businessHours: normalizeBusinessHours(project.businessHours),
     contractedPlan: normalizeContractedPlan(project.contractedPlan),
+    videoAnimado: normalizeVideoAnimado(project.videoAnimado, project.projectId),
     instagram: project.instagram,
     companyProfile: normalizeCompanyProfile(project.companyProfile),
     brandInput: normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name)),

@@ -57,3 +57,5 @@ content-central-app/test-output.txt
 content-central-app/src/assets/king-portfolio-*.png
 # Supabase CLI local cache (linked project ref, CLI version)
 supabase/.temp/
+# Video motor: sound effects synthesized at render time
+src/video-motor/sfx/

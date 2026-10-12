@@ -1,0 +1,36 @@
+{
+  "marca": {
+    "nome": "King",
+    "subtitulo": "Assessoria MKT",
+    "logo": "../_motor/marcas/king.png",
+    "whatsapp": "65 98108-6707",
+    "instagram": "@king.assessoriamkt"
+  },
+  "voz": "gemini:Puck",
+  "velocidade": "+6%",
+  "objetivo": "anuncio",
+  "direcao": "Leia em português do Brasil, como um vendedor simpático e confiante, próximo, caloroso e natural, sem exagero, com ritmo de anúncio de Instagram. Leia exatamente o texto abaixo, sem acrescentar nada:",
+  "cenas": [
+    {
+      "tipo": "pergunta",
+      "fala": "Antes de colocar dinheiro em anúncio, responde rápido."
+    },
+    {
+      "tipo": "scan",
+      "fala": "Sua oferta tá clara? Você sabe quem quer atingir? Quando a pessoa clica, encontra o quê? E a mensagem convence, ou só enfeita?"
+    },
+    {
+      "tipo": "escuro",
+      "fala": "Anunciar sem saber isso é colocar dinheiro no escuro.",
+      "segura": 0.4
+    },
+    {
+      "tipo": "ordem",
+      "fala": "Na King, a gente começa pelo diagnóstico. Depois, o anúncio."
+    },
+    {
+      "tipo": "cta",
+      "fala": "Chama a King no WhatsApp e vamos olhar o seu negócio juntos!"
+    }
+  ]
+}

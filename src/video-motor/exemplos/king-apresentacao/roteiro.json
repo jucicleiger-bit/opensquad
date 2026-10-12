@@ -1,0 +1,46 @@
+{
+  "marca": {
+    "nome": "King",
+    "subtitulo": "Assessoria MKT",
+    "logo": "../_motor/marcas/king.png",
+    "whatsapp": "65 98108-6707",
+    "instagram": "@king.assessoriamkt"
+  },
+  "objetivo": "anuncio",
+  "voz": "gemini:Puck",
+  "velocidade": "+6%",
+  "cenas": [
+    {
+      "tipo": "abertura",
+      "fala": "Ó... você cuida da loja. E a gente faz ela aparecer!"
+    },
+    {
+      "tipo": "raiox",
+      "fala": "Primeiro? A gente conhece o seu negócio: seus produtos, suas ofertas, o jeito que você fala com o seu cliente."
+    },
+    {
+      "tipo": "esteira",
+      "fala": "Aí, todo santo dia, tem Story novo no seu perfil!"
+    },
+    {
+      "tipo": "encarte",
+      "fala": "Toda semana? Encarte com até doze produtos, prontinho pro Instagram e pro Status do WhatsApp!"
+    },
+    {
+      "tipo": "leque",
+      "fala": "Data especial, post que mostra quem é a sua loja... tudo isso!"
+    },
+    {
+      "tipo": "publica",
+      "fala": "Você só aprova. E a gente publica na hora certa, sem você largar o balcão."
+    },
+    {
+      "tipo": "anuncios",
+      "fala": "E quando bater aquela vontade de crescer? Anúncio pra ganhar seguidor, ou trazer cliente direto pro seu WhatsApp!"
+    },
+    {
+      "tipo": "fecho",
+      "fala": "Bora ver isso funcionando na sua loja? Chama a King no WhatsApp!"
+    }
+  ]
+}

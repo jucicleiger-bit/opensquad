@@ -1,0 +1,39 @@
+{
+  "marca": {
+    "nome": "King",
+    "subtitulo": "Assessoria MKT",
+    "logo": "../_motor/marcas/king.png",
+    "whatsapp": "65 98108-6707",
+    "instagram": "@king.assessoriamkt"
+  },
+  "voz": "gemini:Puck",
+  "velocidade": "+6%",
+  "objetivo": "alcance",
+  "cenas": [
+    {
+      "tipo": "olhar",
+      "fala": "Quem chega no seu perfil olha a bio antes de tudo."
+    },
+    {
+      "tipo": "ruim",
+      "fala": "E se ela diz só: bem-vindos à nossa loja... a pessoa vai embora."
+    },
+    {
+      "tipo": "anota",
+      "fala": "Anota os cinco itens!"
+    },
+    {
+      "tipo": "itens",
+      "fala": "Um: o que você vende. Dois: pra quem. Três: onde você atende. Quatro: por que você, e não o vizinho. Cinco: como falar com você, com link pro WhatsApp."
+    },
+    {
+      "tipo": "pronta",
+      "fala": "Pronto. Agora sim, é uma bio que trabalha por você.",
+      "segura": 0.5
+    },
+    {
+      "tipo": "enquete",
+      "fala": "E a sua? Tem os cinco? Comenta quantos ela tem, e segue a King pra mais dicas assim!"
+    }
+  ]
+}

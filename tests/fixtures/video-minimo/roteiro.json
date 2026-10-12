@@ -1,0 +1,8 @@
+{
+  "marca": { "nome": "Teste", "logo": "fotos/logo.png", "whatsapp": "65 0000-0000", "instagram": "@teste" },
+  "voz": "gemini:Puck",
+  "cenas": [
+    { "tipo": "um", "fala": "Olá mundo bonito.", "descricao": "Título" },
+    { "tipo": "dois", "fala": "Segunda cena aqui.", "descricao": "Texto" }
+  ]
+}
