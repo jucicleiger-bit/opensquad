@@ -398,7 +398,10 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
   const escala = Math.max(meta * 1.3, total * 1.05);
   const desvio = total < meta * 0.85 ? "curto" : total > meta * 1.15 ? "longo" : null;
   const move = (i: number, d: number) => setCenas((cs) => { const next = [...cs]; const [c] = next.splice(i, 1); next.splice(i + d, 0, c); return next; });
-  const falhou = !state.roteiro ? 0 : state.stills.length ? 2 : 1;
+  // Same choice as the server's retry: the field recorded for the current status.
+  const falhou = Math.max(0, video.status === "interrompido"
+    ? etapaDoStatus(video.etapaInterrompida || "")
+    : ["roteiro", "producao", "render"].indexOf(video.etapaComErro || ""));
   async function copiarLegenda() {
     setError(null);
     try {
@@ -527,7 +530,7 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
           <div className={styles.finalActions}>
             <h4 className={styles.stageTitle}>Vídeo pronto</h4>
             <p className={styles.panelText}>Baixe o MP4 e poste com a legenda pronta.</p>
-            <a className={styles.primaryLink} href={file("video.mp4")} download><Icon name="download" />Baixar MP4</a>
+            <a className={styles.primaryLink} href={file("video.mp4")} download={`${video.id}.mp4`}><Icon name="download" />Baixar MP4</a>
             {state.arquivos.legendaPost ? (
               <div className={styles.linkRow}>
                 <a className={styles.link} href={file("legenda-post.txt")} target="_blank" rel="noreferrer"><Icon name="doc" size={15} />Legenda do post</a>

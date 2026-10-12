@@ -14,6 +14,7 @@ export const STATUS = {
   ERRO: 'erro', AGUARDANDO_LIMITE: 'aguardando_limite', INTERROMPIDO: 'interrompido',
 };
 export const ESTADOS_GERANDO = new Set([STATUS.ROTEIRO_GERANDO, STATUS.PRODUCAO_GERANDO, STATUS.RENDER_GERANDO]);
+const ESTADOS_FALHA = new Set([STATUS.ERRO, STATUS.AGUARDANDO_LIMITE, STATUS.INTERROMPIDO]);
 const OBJETIVOS = new Set(['alcance', 'anuncio']);
 const DURACOES = new Set([15, 30, 45, 60]);
 const TONS = new Set(['criador', 'vendedor']);
@@ -86,11 +87,17 @@ export async function updateVideo(projectId, videoId, patch, targetDir) {
   const next = { ...video, ...patch, atualizadoEm: agora };
   if (patch.status && patch.status !== video.status) next.historico = [...(video.historico || []), { em: agora, status: patch.status }];
   if (patch.status && patch.status !== STATUS.ERRO && patch.status !== STATUS.AGUARDANDO_LIMITE && !('erro' in patch)) next.erro = null;
+  // A stage starting or succeeding makes the recorded failure stale; it must not steer a later retry.
+  if (patch.status && !ESTADOS_FALHA.has(patch.status)) { delete next.etapaComErro; delete next.etapaInterrompida; }
   await writeJson(join(videoDir(targetDir, projectId, videoId), 'video.json'), next);
   return next;
 }
 
-export function estimateSeconds(cenas = []) {
+// roteiro.json is written by Claude or by hand: anything but a list of objects is ignored.
+const cenasValidas = (cenas) => (Array.isArray(cenas) ? cenas : []).filter((c) => c && typeof c === 'object');
+
+export function estimateSeconds(lista) {
+  const cenas = cenasValidas(lista);
   const palavras = cenas.reduce((n, c) => n + (String(c.fala || '').match(/[\p{L}\d]+/gu) || []).length, 0);
   const segura = cenas.reduce((n, c) => n + (Number(c.segura) || 0), 0);
   return Math.round((palavras / PALAVRAS_POR_SEGUNDO + segura) * 10) / 10;
@@ -99,7 +106,7 @@ export function estimateSeconds(cenas = []) {
 export function validateRoteiro(roteiro, briefing) {
   const erros = [];
   const avisos = [];
-  const cenas = Array.isArray(roteiro?.cenas) ? roteiro.cenas : [];
+  const cenas = cenasValidas(roteiro?.cenas);
   if (!cenas.length) erros.push('O roteiro não tem cenas.');
   cenas.forEach((c, i) => {
     if (!String(c.tipo || '').trim()) erros.push(`Cena ${i + 1} sem tipo.`);
@@ -135,7 +142,8 @@ export async function saveRoteiroCenas(projectId, videoId, cenas, targetDir) {
 export async function readVideoState(projectId, videoId, targetDir) {
   const video = await readVideo(projectId, videoId, targetDir);
   const dir = videoDir(targetDir, projectId, videoId);
-  const roteiro = await readJson(join(dir, 'roteiro.json'), null);
+  const lido = await readJson(join(dir, 'roteiro.json'), null);
+  const roteiro = lido && typeof lido === 'object' ? { ...lido, cenas: cenasValidas(lido.cenas) } : null;
   const { avisos } = roteiro ? validateRoteiro(roteiro, video.briefing) : { avisos: [] };
   const stills = existsSync(join(dir, 'stills')) ? (await readdir(join(dir, 'stills'))).filter((n) => n.endsWith('.jpg')).sort((a, b) => parseFloat(a.slice(1)) - parseFloat(b.slice(1))) : [];
   const has = (name) => existsSync(join(dir, name));

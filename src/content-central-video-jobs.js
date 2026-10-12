@@ -98,13 +98,14 @@ const LEGENDA_TEXTO = {
   'do-video': 'Legendas na tela: as falas do próprio vídeo.',
 };
 
-function stagePrompt(nome, video, temLogo) {
+function stagePrompt(nome, video, temLogo, erroAnterior) {
   const b = video.briefing;
   return [
     `Leia e siga ${MOTOR_PROMPT}/${nome}. Onde ele diz <MOTOR>, use: ${MOTOR_PROMPT}`,
     `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${b.duracao}s.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
     LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
     temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
+    ...(erroAnterior ? [`A tentativa anterior falhou com: ${erroAnterior}`] : []),
   ].join('\n');
 }
 
@@ -134,13 +135,13 @@ export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = 
   const busy = new Set();
   let running = null;
 
-  async function etapaRoteiro(projectId, video, dir, { ajuste, inicio }) {
+  async function etapaRoteiro(projectId, video, dir, { ajuste, erroAnterior, inicio }) {
     const project = await requireVideoProject(projectId, targetDir);
     const { marca, settings, temLogo } = await prepareFolder(project, video, dir, targetDir);
     await writeAjuste(dir, ajuste);
     const addDirs = [MOTOR_DIR, ...settings.projetosDeMaterial.map((id) => getCentralPaths(targetDir, id).assetsDir)];
     await runner({ prompt: `# Etapa 1
-${stagePrompt('PEDIDO-roteiro.md', video, temLogo)}`, cwd: dir, addDirs });
+${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs });
     if (!await escritoDepois(join(dir, 'roteiro.json'), inicio)) throw new Error('O Claude não escreveu o roteiro.json.');
     const roteiro = await readJson(join(dir, 'roteiro.json'), null);
     if (!roteiro) throw new Error('O Claude não escreveu o roteiro.json.');
@@ -151,13 +152,13 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo)}`, cwd: dir, addDirs });
     return STATUS.ROTEIRO_PRONTO;
   }
 
-  async function etapaProducao(projectId, video, dir, { ajuste, inicio }) {
+  async function etapaProducao(projectId, video, dir, { ajuste, erroAnterior, inicio }) {
     const aprovado = await readJson(join(dir, 'roteiro.json'), null);
     if (!aprovado) throw new Error('Não há roteiro aprovado para produzir.');
     await writeAjuste(dir, ajuste);
     const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
     await runner({ prompt: `# Etapa 2
-${stagePrompt('PEDIDO-producao.md', video, temLogo)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs: [MOTOR_DIR] });
     // An adjustment may reuse the existing voice (saves quota): tempos.json then only has to exist.
     if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
     const temposPath = join(dir, 'voz', 'tempos.json');
@@ -169,6 +170,8 @@ ${stagePrompt('PEDIDO-producao.md', video, temLogo)}`, cwd: dir, addDirs: [MOTOR
     // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
     const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
     const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
+    // Claude's own check renders and older rounds must not show up in the preview grid.
+    await rm(join(dir, 'stills'), { recursive: true, force: true });
     await renderer({ videoDir: dir, stills: marcas });
     return STATUS.PREVIA_PRONTA;
   }
@@ -191,7 +194,7 @@ ${stagePrompt('PEDIDO-producao.md', video, temLogo)}`, cwd: dir, addDirs: [MOTOR
       const video = await readVideo(projectId, videoId, targetDir);
       const dir = videoDir(targetDir, projectId, videoId);
       const status = await ETAPAS[etapa](projectId, video, dir, { ...opts, inicio });
-      await updateVideo(projectId, videoId, { status }, targetDir);
+      await updateVideo(projectId, videoId, { status, ajustePendente: null }, targetDir);
     } catch (err) {
       await updateVideo(projectId, videoId, { status: err.limite ? STATUS.AGUARDANDO_LIMITE : STATUS.ERRO, erro: String(err.message || err).slice(0, 800), etapaComErro: etapa }, targetDir).catch(() => {});
     } finally {

@@ -1,16 +1,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { startContentCentralServer } from '../src/content-central-server.js';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
-import { STATUS, updateVideo, videoDir } from '../src/content-central-video.js';
+import { STATUS, readVideo, updateVideo, videoDir } from '../src/content-central-video.js';
+import { createVideoJobs } from '../src/content-central-video-jobs.js';
 
 const realFetch = globalThis.fetch;
 const briefing = { assunto: 'Bio', objetivo: 'alcance', duracao: 15, tom: 'criador', legenda: 'pop' };
 
-async function withServer(fn, { ativo = true, busy = false } = {}) {
+async function withServer(fn, { ativo = true, busy = false, jobs = null } = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-video-server-'));
   await createCentralProject({ projectId: 'king', name: 'King' }, dir);
   const path = getCentralPaths(dir, 'king').projectPath;
@@ -18,9 +21,9 @@ async function withServer(fn, { ativo = true, busy = false } = {}) {
   project.videoAnimado = { ativo, projetosDeMaterial: [] };
   await writeFile(path, JSON.stringify(project));
   const enqueued = [];
-  const videoJobs = { enqueue: async (...args) => { enqueued.push(args); }, isBusy: () => busy, idle: async () => {} };
+  const videoJobs = jobs ? jobs(dir) : { enqueue: async (...args) => { enqueued.push(args); }, isBusy: () => busy, idle: async () => {} };
   const server = await startContentCentralServer({ targetDir: dir, port: 0, openBrowser: false, videoJobs });
-  try { return await fn(dir, server, enqueued); } finally {
+  try { return await fn(dir, server, enqueued, videoJobs); } finally {
     await server.close();
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
@@ -141,5 +144,83 @@ test('files are served from a whitelist, the MP4 honours Range', async () => {
     assert.equal((await realFetch(`${base}/stills/t0.05.jpg`)).status, 200);
     assert.equal((await realFetch(`${base}/video.json`)).status, 404);
     assert.equal((await realFetch(`${base}/..%2F..%2Fproject.json`)).status, 404);
+  });
+});
+
+test('retomar reruns the stage recorded for the current status, never a stale one', async () => {
+  await withServer(async (dir, server, enqueued) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    // Interrupted once in the script stage, later failed in production (legacy video.json with both recorded).
+    await updateVideo('king', id, { status: STATUS.INTERROMPIDO, etapaInterrompida: STATUS.ROTEIRO_GERANDO }, dir);
+    await updateVideo('king', id, { status: STATUS.ERRO, etapaComErro: 'producao', erro: 'cena quebrada' }, dir);
+    const again = await call(server, `/api/projects/king/videos/${id}/retomar`, {});
+    assert.equal(again.body.video.status, STATUS.PRODUCAO_GERANDO);
+    assert.deepEqual(enqueued.at(-1), ['king', id, 'producao', { erroAnterior: 'cena quebrada' }]);
+    assert.equal(again.body.video.etapaInterrompida, undefined);
+    assert.equal(again.body.video.etapaComErro, undefined);
+    await updateVideo('king', id, { status: STATUS.INTERROMPIDO, etapaInterrompida: STATUS.RENDER_GERANDO, etapaComErro: 'roteiro' }, dir);
+    const render = await call(server, `/api/projects/king/videos/${id}/retomar`, {});
+    assert.equal(render.body.video.status, STATUS.RENDER_GERANDO);
+    assert.deepEqual(enqueued.at(-1), ['king', id, 'render', {}]);
+  });
+});
+
+test('an ajuste in production that hits the usage limit is not lost on retomar', async () => {
+  const vistos = [];
+  let falhar = false;
+  const runner = async ({ prompt, cwd }) => {
+    if (/Etapa 1/.test(prompt)) {
+      await writeFile(join(cwd, 'roteiro.json'), JSON.stringify({ cenas: [{ tipo: 'a', fala: 'Sua bio convence?', descricao: 'x' }] }));
+      return { text: '' };
+    }
+    vistos.push(existsSync(join(cwd, 'ajuste.txt')) ? await readFile(join(cwd, 'ajuste.txt'), 'utf8') : null);
+    if (falhar) { falhar = false; throw Object.assign(new Error("You've hit your limit"), { limite: true }); }
+    await writeFile(join(cwd, 'cenas.js'), 'window.VIDEO = {};');
+    await mkdir(join(cwd, 'voz'), { recursive: true });
+    await writeFile(join(cwd, 'voz', 'tempos.json'), JSON.stringify({ cenas: [] }));
+    return { text: '' };
+  };
+  await withServer(async (dir, server, _enqueued, jobs) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    await jobs.idle();
+    await call(server, `/api/projects/king/videos/${id}/aprovar-roteiro`, {});
+    await jobs.idle();
+    assert.equal((await readVideo('king', id, dir)).status, STATUS.PREVIA_PRONTA);
+    falhar = true;
+    await call(server, `/api/projects/king/videos/${id}/ajuste`, { etapa: 'producao', pedido: 'troque as cores' });
+    await jobs.idle();
+    assert.equal((await readVideo('king', id, dir)).status, STATUS.AGUARDANDO_LIMITE);
+    assert.equal((await call(server, `/api/projects/king/videos/${id}/retomar`, {})).status, 200);
+    await jobs.idle();
+    assert.deepEqual(vistos, [null, 'troque as cores', 'troque as cores']);
+    const v = await readVideo('king', id, dir);
+    assert.equal(v.status, STATUS.PREVIA_PRONTA);
+    assert.equal(v.ajustePendente, null);
+  }, { jobs: (dir) => createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) }) });
+});
+
+test('the final MP4 downloads under the video id', async () => {
+  await withServer(async (dir, server) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    await writeFile(join(videoDir(dir, 'king', body.video.id), 'video.mp4'), '0123');
+    const res = await realFetch(`${server.url}/api/projects/king/videos/${body.video.id}/arquivo/video.mp4`);
+    assert.equal(res.headers.get('content-disposition'), `inline; filename="${body.video.id}.mp4"`);
+  });
+});
+
+const DIST = fileURLToPath(new URL('../content-central-app/dist/', import.meta.url));
+test('caption previews and voice samples from the app build play on Safari (type, Range, short cache)', { skip: !existsSync(join(DIST, 'video-vozes', 'criador.mp3')) && 'app not built' }, async () => {
+  await withServer(async (_dir, server) => {
+    const voz = await realFetch(`${server.url}/video-vozes/criador.mp3`);
+    assert.equal(voz.status, 200);
+    assert.equal(voz.headers.get('content-type'), 'audio/mpeg');
+    assert.equal(voz.headers.get('cache-control'), 'public, max-age=3600');
+    await voz.arrayBuffer();
+    const trecho = await realFetch(`${server.url}/video-legendas/simples.mp4`, { headers: { range: 'bytes=0-9' } });
+    assert.equal(trecho.status, 206);
+    assert.equal(trecho.headers.get('content-type'), 'video/mp4');
+    assert.equal((await trecho.arrayBuffer()).byteLength, 10);
   });
 });

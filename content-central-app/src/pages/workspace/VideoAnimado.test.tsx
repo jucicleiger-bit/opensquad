@@ -124,8 +124,28 @@ describe("Vídeo animado", () => {
     });
     renderAt("/projects/king/video?v=v1");
     expect(await screen.findByRole("link", { name: "Baixar MP4" })).toHaveAttribute("href", "/api/projects/king/videos/v1/arquivo/video.mp4");
+    expect(screen.getByRole("link", { name: "Baixar MP4" })).toHaveAttribute("download", "v1.mp4");
     expect(screen.getByRole("link", { name: "Texto da narração" })).toHaveAttribute("href", "/api/projects/king/videos/v1/arquivo/voz/narracao.txt");
     expect(screen.getByRole("link", { name: "Legenda do post" })).toBeInTheDocument();
+  });
+
+  it("marks the step that failed from the recorded stage, not from leftover stills", async () => {
+    const falha = (video: object, stills: string[]) => () => stubApi((url) => {
+      if (url === "/api/state") return project(true);
+      if (url.endsWith("/videos")) return { videos: [] };
+      return { ...roteiroPronto, stills, video: { ...roteiroPronto.video, ...video } };
+    });
+    const marcada = async () => {
+      const passos = await screen.findAllByRole("listitem");
+      return passos.filter((li) => li.getAttribute("data-estado") === "falhou").map((li) => li.textContent);
+    };
+    falha({ status: "erro", erro: "quebrou", etapaComErro: "render" }, ["t0.05.jpg"])();
+    renderAt("/projects/king/video?v=v1");
+    expect(await marcada()).toEqual(["3Vídeo final"]);
+    cleanup();
+    falha({ status: "interrompido", erro: "reiniciou", etapaInterrompida: "producao_gerando", etapaComErro: "roteiro" }, ["t0.05.jpg"])();
+    renderAt("/projects/king/video?v=v1");
+    expect(await marcada()).toEqual(["2Prévia"]);
   });
 
   it("shows the sidebar link when the project has it on", async () => {

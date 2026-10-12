@@ -143,3 +143,35 @@ test('reconcileInterruptedVideos turns running statuses into interrompido', asyn
     assert.deepEqual(await listVideos('king', dir), []);
   });
 });
+
+test('a malformed roteiro.json (cenas null or null items) does not break the state, the estimate or validation', async () => {
+  assert.equal(estimateSeconds(null), 0);
+  assert.ok(validateRoteiro({ cenas: null }, briefing).erros.length > 0);
+  assert.deepEqual(validateRoteiro({ cenas: [null, { tipo: 'a', fala: 'Chama no WhatsApp!' }] }, briefing).erros, []);
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await enable(dir, 'king');
+    const video = await createVideo('king', briefing, dir);
+    const path = join(videoDir(dir, 'king', video.id), 'roteiro.json');
+    await writeFile(path, JSON.stringify({ cenas: null }));
+    assert.deepEqual((await readVideoState('king', video.id, dir)).roteiro.cenas, []);
+    await writeFile(path, JSON.stringify({ cenas: [null, 'x', { tipo: 'a', fala: 'Oi.' }] }));
+    const state = await readVideoState('king', video.id, dir);
+    assert.deepEqual(state.roteiro.cenas, [{ tipo: 'a', fala: 'Oi.' }]);
+    assert.equal(typeof state.estimativa, 'number');
+  });
+});
+
+test('updateVideo clears the recorded failed/interrupted stage once a stage starts or succeeds', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await enable(dir, 'king');
+    const video = await createVideo('king', briefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.INTERROMPIDO, etapaInterrompida: STATUS.ROTEIRO_GERANDO }, dir);
+    const erro = await updateVideo('king', video.id, { status: STATUS.ERRO, etapaComErro: 'producao', erro: 'x' }, dir);
+    assert.equal(erro.etapaInterrompida, STATUS.ROTEIRO_GERANDO, 'a failure keeps what was recorded');
+    const next = await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    assert.equal(next.etapaComErro, undefined);
+    assert.equal(next.etapaInterrompida, undefined);
+  });
+});

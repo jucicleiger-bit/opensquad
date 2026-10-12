@@ -310,3 +310,45 @@ test('stage 2 without an ajuste still requires a fresh voz/tempos.json', async (
     assert.match(v.erro, /tempos\.json/);
   });
 });
+
+test('stage 2 empties stills/ before the mechanical check, so old stills do not reach the preview', async () => {
+  await withProject(async (dir) => {
+    let antigoNaHora = null;
+    const renderer = async ({ videoDir: vd, stills }) => {
+      if (!stills) return {};
+      antigoNaHora = existsSync(join(vd, 'stills', 'old.jpg'));
+      await mkdir(join(vd, 'stills'), { recursive: true });
+      await writeFile(join(vd, 'stills', 't0.05.jpg'), 'jpg');
+      return {};
+    };
+    const base = fakeRunner([]);
+    const runner = async (input) => {
+      await mkdir(join(input.cwd, 'stills'), { recursive: true });
+      await writeFile(join(input.cwd, 'stills', 'old.jpg'), 'velho');
+      return base(input);
+    };
+    const { video, vdir } = await runStage2(dir, runner, renderer);
+    assert.equal(video.status, STATUS.PREVIA_PRONTA);
+    assert.equal(antigoNaHora, false);
+    assert.equal(existsSync(join(vdir, 'stills', 'old.jpg')), false);
+    assert.equal(existsSync(join(vdir, 'stills', 't0.05.jpg')), true);
+  });
+});
+
+test('a retry after an error tells Claude what failed before; a success clears the pending ajuste', async () => {
+  await withProject(async (dir) => {
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: fakeRunner(calls), renderer: async () => ({}) });
+    const video = await createVideo('king', briefing, dir);
+    await updateVideo('king', video.id, { ajustePendente: { etapa: 'roteiro', pedido: 'mais curto' } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro', { ajuste: 'mais curto', erroAnterior: 'O Claude não escreveu o roteiro.json.' });
+    await jobs.idle();
+    assert.match(calls[0].prompt, /A tentativa anterior falhou com: O Claude não escreveu o roteiro\.json\./);
+    const v = await readVideo('king', video.id, dir);
+    assert.equal(v.status, STATUS.ROTEIRO_PRONTO);
+    assert.equal(v.ajustePendente, null);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    assert.doesNotMatch(calls[1].prompt, /tentativa anterior/);
+  });
+});

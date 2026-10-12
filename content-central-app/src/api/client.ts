@@ -1846,7 +1846,7 @@ export type VideoStatus = "roteiro_gerando" | "roteiro_pronto" | "producao_geran
 export interface VideoBriefing { assunto: string; objetivo: "alcance" | "anuncio"; duracao: 15 | 30 | 45 | 60; tom: "criador" | "vendedor"; legenda: "simples" | "karaoke" | "pop" | "destaque" | "caixa" | "do-video" | "sem"; observacao?: string }
 export interface VideoCena { tipo: string; fala: string; descricao: string; segura?: number }
 export interface VideoSummary { id: string; assunto: string; objetivo: string; duracao: number; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; temVideo: boolean }
-export interface VideoRecord { id: string; projectId: string; briefing: VideoBriefing; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string }
+export interface VideoRecord { id: string; projectId: string; briefing: VideoBriefing; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; etapaComErro?: "roteiro" | "producao" | "render"; etapaInterrompida?: VideoStatus }
 export interface VideoState {
   video: VideoRecord; roteiro: { cenas: VideoCena[] } | null; estimativa: number | null; avisos: string[]; stills: string[];
   arquivos: { video: boolean; narracaoMp3: boolean; narracaoTxt: boolean; legendaPost: boolean; notas: boolean }; vozUsada: string | null; ocupado: boolean;
