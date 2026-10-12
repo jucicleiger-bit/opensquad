@@ -6940,7 +6940,7 @@ function selectedTopicIdeaGoalKeys(project = {}) {
     .filter((goalKey) => TOPIC_IDEA_GOALS.has(goalKey) && GOAL_TOPIC_TEMPLATES[goalKey]);
 }
 
-function projectTopicIdeaContext(project = {}) {
+export function projectTopicIdeaContext(project = {}) {
   const brandInput = project.brandInput || {};
   const companyProfile = project.companyProfile || {};
   const xray = project.brandXray?.status === 'approved' ? project.brandXray.blocks || {} : {};

@@ -77,7 +77,13 @@ import {
   generateAdCreative,
   regenerateAdCreative,
   deleteCarousel,
-  enqueueCarouselGeneration,
+  enqueueCarouselPlanning,
+  requestCarouselReplan,
+  startCarouselImageGeneration,
+  enqueueCarouselImageGeneration,
+  scheduleCarousel,
+  draftCarouselCaption,
+  projectTopicIdeaContext,
   enqueueCarouselSlideRegeneration,
   enqueueContentCarouselSlideRegeneration,
   generateCarousel,
@@ -408,6 +414,7 @@ export async function startContentCentralServer({
   siteAnalyzer = null,
   webResearcher = null,
   topicIdeaGenerator = null,
+  carouselTopicIdeaGenerator = null,
   learningImageAnalyzer = null,
   offerDirectionSuggester = null,
   productImageSearcher = null,
@@ -432,6 +439,7 @@ export async function startContentCentralServer({
     siteAnalyzer: siteAnalyzer || (enableAiImages ? analyzeSiteWithAi : null),
     webResearcher: webResearcher || (enableAiImages ? researchOnlineVisualTrendsWithHermes : null),
     topicIdeaGenerator: topicIdeaGenerator || (enableAiImages ? generateTopicIdeasWithAiAndWeb : null),
+    carouselTopicIdeaGenerator: carouselTopicIdeaGenerator || (enableAiImages ? generateCarouselTopicIdeasWithAiAndWeb : null),
     learningImageAnalyzer: learningImageAnalyzer || (enableAiImages ? analyzeLearningImageWithCodexAgent : null),
     offerDirectionSuggester: offerDirectionSuggester || (enableAiImages ? suggestOfferDirectionWithCodexAgent : null),
     productImageSearcher: productImageSearcher || searchProductImages,
@@ -461,6 +469,7 @@ export async function startContentCentralServer({
   if (openBrowser) openUrl(url);
   const publishSchedulerTimer = startPublishScheduler(targetDir);
   const whatsappPublishSchedulerTimer = startWhatsAppPublishScheduler(targetDir);
+  const carouselPublishSchedulerTimer = startCarouselPublishScheduler(targetDir);
   const cloudWhatsAppPublishSchedulerTimer = startCloudWhatsAppPublishScheduler(targetDir);
   const cloudArtGenerationSchedulerTimer = startCloudArtGenerationScheduler(targetDir, context);
   const alertEmailSchedulerTimer = startAlertEmailScheduler(targetDir);
@@ -475,6 +484,7 @@ export async function startContentCentralServer({
     close: () => new Promise((resolve, reject) => {
       if (publishSchedulerTimer) clearInterval(publishSchedulerTimer);
       if (whatsappPublishSchedulerTimer) clearInterval(whatsappPublishSchedulerTimer);
+      if (carouselPublishSchedulerTimer) clearInterval(carouselPublishSchedulerTimer);
       if (cloudWhatsAppPublishSchedulerTimer) clearInterval(cloudWhatsAppPublishSchedulerTimer);
       if (cloudArtGenerationSchedulerTimer) clearInterval(cloudArtGenerationSchedulerTimer);
       if (alertEmailSchedulerTimer) clearInterval(alertEmailSchedulerTimer);
@@ -1398,28 +1408,74 @@ async function handleRequest(req, res, targetDir, context = {}) {
     return sendJson(res, 200, { adCreative });
   }
 
-  // Carrossel avulso — separate from every organic/ad-creative route above:
-  // no scheduledDate, no approval, no calendar, no publish. 1 briefing + N
-  // slide count in, N independently-regenerable slides out.
+  // Carrossel avulso: plan first (roteiro only), adjust by message, then
+  // "Gerar imagens"; a finished carousel can be scheduled as an approved post.
   if (parts.length === 4 && parts[3] === 'carousels') {
     const body = await readBody(req);
     const briefing = String(body.briefing || '').trim();
     if (!briefing) return sendJson(res, 400, { error: 'Informe o briefing do carrossel.' });
-    const carousel = await generateCarousel(projectId, { briefing, slideCount: body.slideCount }, targetDir);
-    enqueueCarouselGeneration(projectId, carousel, {
-      imageGenerator: context.imageGenerator,
-      imageReviewer: context.imageReviewer,
-      outlineGenerator: context.carouselOutlineGenerator,
-      // Real cross-slide consistency: resolves slide 1's own generated file
-      // on disk (reusing the same URL->path resolution the targeted-edit
-      // "regenerate with a note" flow already relies on) so every other
-      // slide gets it as an actual attached reference image, not just a
-      // prompt instruction. Returns null (no-op) for anything not a real
-      // local file — a missing key, an unconfigured provider, slide 1
-      // itself failing.
-      resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
-    }, targetDir);
+    const carousel = await generateCarousel(projectId, { briefing, slideCount: body.slideCount, offerId: body.offerId }, targetDir);
+    enqueueCarouselPlanning(projectId, carousel.carouselId, { outlineGenerator: context.carouselOutlineGenerator }, targetDir);
     return sendJson(res, 201, { carousel });
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-replan') {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const { carousel, request } = await requestCarouselReplan(projectId, parts[4], body.message, targetDir);
+      enqueueCarouselPlanning(projectId, carousel.carouselId, { outlineGenerator: context.carouselOutlineGenerator }, targetDir, { request });
+      return sendJson(res, 200, { carousel });
+    } catch (err) {
+      return sendCarouselError(res, err);
+    }
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-generate') {
+    try {
+      const carousel = await startCarouselImageGeneration(projectId, parts[4], targetDir);
+      enqueueCarouselImageGeneration(projectId, carousel.carouselId, {
+        imageGenerator: context.imageGenerator,
+        imageReviewer: context.imageReviewer,
+        // Real cross-slide consistency: slide 1's own generated file becomes
+        // an attached reference for the rest (null for anything not local).
+        resolveCarouselStyleReference: (slideContent) => resolveExistingGeneratedImagePath(slideContent, projectId, targetDir),
+      }, targetDir);
+      return sendJson(res, 200, { carousel });
+    } catch (err) {
+      return sendCarouselError(res, err);
+    }
+  }
+
+  if (parts.length === 4 && parts[3] === 'carousels-topic-ideas') {
+    if (typeof context.carouselTopicIdeaGenerator !== 'function') {
+      return sendJson(res, 400, { error: 'IA não configurada para pesquisar assuntos.' });
+    }
+    try {
+      const project = await loadProject(getCentralPaths(targetDir, projectId));
+      const ideas = await context.carouselTopicIdeaGenerator({ project });
+      return sendJson(res, 200, { ideas });
+    } catch (err) {
+      return sendJson(res, 502, { error: err.message });
+    }
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-caption') {
+    try {
+      const caption = await draftCarouselCaption(projectId, parts[4], { captionGenerator: context.captionGenerator }, targetDir);
+      return sendJson(res, 200, { caption });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
+  }
+
+  if (parts.length === 5 && parts[3] === 'carousels-schedule') {
+    const body = await readBody(req).catch(() => ({}));
+    try {
+      const { item, carousel } = await scheduleCarousel(projectId, parts[4], { date: body.date, time: body.time, caption: body.caption }, targetDir);
+      return sendJson(res, 200, { item, carousel });
+    } catch (err) {
+      return sendJson(res, 400, { error: err.message });
+    }
   }
 
   if (parts.length === 5 && parts[3] === 'carousels-delete') {
@@ -4493,6 +4549,54 @@ async function generateTopicIdeasWithAiAndWeb({ project, goals, goalKeys, ideasP
   return parsed;
 }
 
+function buildCarouselTopicIdeasPrompt({ project, raioX, evidence = [] }) {
+  return [
+    'Você é um agente editorial do Content Central. Sugira assuntos para um CARROSSEL de Instagram (vários slides lidos em sequência).',
+    '',
+    'RAIO-X DA MARCA',
+    `Empresa: ${project.name}`,
+    `Segmento: ${raioX.segment}`,
+    `Produtos/serviços: ${raioX.productsOrServices}`,
+    `Público: ${raioX.audience}`,
+    '',
+    evidence.length ? 'PESQUISA ONLINE RECENTE / EVIDÊNCIA COLETADA' : '',
+    evidence.length ? formatOnlineResearchEvidence(evidence) : '',
+    '',
+    'REGRAS',
+    '- Exatamente 5 assuntos, cada um rendendo de 4 a 8 slides (lista, passo a passo, mito x verdade, antes e depois, perguntas frequentes).',
+    '- Assuntos que o público desse segmento está buscando ou comentando agora; concretos e específicos, nada genérico.',
+    '- Não inventar números, provas, cases, prêmios, garantias, preço ou resultado financeiro.',
+    '- Pode usar a pesquisa online só como inspiração de dúvidas/tendências; não copiar títulos, marcas nem concorrentes.',
+    '',
+    'Responda APENAS com JSON válido neste formato:',
+    '{"ideas":[{"title":"","angle":""}]}',
+  ].filter(Boolean).join('\n');
+}
+
+// "Assuntos em alta do segmento" on the Carrossel tab — on demand, nothing
+// stored. Same web evidence the topic-idea bank uses.
+async function generateCarouselTopicIdeasWithAiAndWeb({ project }) {
+  const raioX = projectTopicIdeaContext(project);
+  const evidence = await collectOnlineTopicResearchEvidence({
+    segment: raioX.segment,
+    productsOrServices: raioX.productsOrServices,
+    audience: raioX.audience,
+  });
+  const raw = await callAiText(buildCarouselTopicIdeasPrompt({ project, raioX, evidence }), 'OPENSQUAD_TOPIC_IDEAS_TIMEOUT_MS');
+  let parsed = null;
+  try {
+    parsed = extractFirstJsonObject(raw);
+  } catch {
+    parsed = null;
+  }
+  const ideas = (Array.isArray(parsed?.ideas) ? parsed.ideas : [])
+    .map((idea) => ({ title: String(idea?.title || '').trim(), angle: String(idea?.angle || '').trim() }))
+    .filter((idea) => idea.title)
+    .slice(0, 5);
+  if (!ideas.length) throw new Error('A pesquisa não trouxe assuntos agora. Tente de novo em instantes.');
+  return ideas;
+}
+
 function buildOnlineVisualResearchPrompt({ segment, productsOrServices, evidence = [] }) {
   return [
     'Você vai transformar evidências reais de busca/navegação em direções visuais para uma IA de imagem.',
@@ -4672,7 +4776,9 @@ async function readCarouselFormatsReference(targetDir) {
   }
 }
 
-export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }) {
+export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference, offer, carouselStyle, currentPlan, request }) {
+  // Every optional block below is '' when its input is absent (dropped by
+  // filter(Boolean)), so the calendar carousel's prompt is unchanged.
   return [
     contentCentralPersonaLine('sofia'),
     contentCentralPersonaResponsibilityLine('sofia'),
@@ -4687,19 +4793,33 @@ export function buildCarouselOutlinePrompt({ project, briefing, slideCount, form
     '',
     'BRIEFING DO OPERADOR',
     briefing,
+    offer ? 'OFERTA/ASSUNTO CADASTRADO (única fonte de nome, preço e detalhes — usar exatamente assim)' : '',
+    offer ? `- Nome: ${offer.name}` : '',
+    offer?.price ? `- Preço: ${offer.price}` : '',
+    offer?.items ? `- Detalhes: ${offer.items}` : '',
+    currentPlan ? `PLANO ATUAL (formato: ${currentPlan.format || 'livre'})` : '',
+    ...(currentPlan ? currentPlan.slides.map((slide, index) => `${index + 1}. [${slide.role}] ${slide.slideText}`) : []),
+    currentPlan ? 'AJUSTE PEDIDO PELO OPERADOR' : '',
+    currentPlan ? request : '',
+    currentPlan ? 'Refaça o plano aplicando só esse ajuste: mantenha tudo que o pedido não mencionar.' : '',
     '',
-    `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
+    currentPlan
+      ? 'Mantenha a mesma quantidade de slides do plano atual, a não ser que o ajuste peça outra quantidade (mínimo 2, máximo 10). O plano continua com capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta").'
+      : `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
     'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
+    carouselStyle === 'clean' ? '- Estilo clean: cada slide com um título de no máximo ~8 palavras e no máximo 1 linha curta de apoio. Nada de parágrafo.' : '',
     '- Nunca inventar preço, promoção, prazo, estoque, depoimento ou dado que não foi passado no briefing.',
     '',
     'Responda APENAS com um JSON válido, sem markdown e sem texto fora do JSON, neste formato exato:',
-    `{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`,
+    currentPlan
+      ? '{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" na ordem de exibição'
+      : `{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`,
   ].filter(Boolean).join('\n');
 }
 
-async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir }) {
+async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir, offer, carouselStyle, currentPlan, request }) {
   const formatsReference = await readCarouselFormatsReference(targetDir);
-  const raw = await callAiText(buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference }), 'OPENSQUAD_COPY_TIMEOUT_MS');
+  const raw = await callAiText(buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference, offer, carouselStyle, currentPlan, request }), 'OPENSQUAD_COPY_TIMEOUT_MS');
   if (!raw) return null;
   const jsonText = raw.match(/\{[\s\S]*\}/)?.[0];
   if (!jsonText) return null;
@@ -4716,7 +4836,9 @@ async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, t
       slideText: String(entry?.slideText || '').trim(),
     }))
     .filter((entry) => entry.slideText);
-  if (slides.length !== slideCount) return null;
+  // A replan may change the count; the engine (applyCarouselOutline) checks
+  // the 2-10 range itself.
+  if (!currentPlan && slides.length !== slideCount) return null;
   return { format: String(parsed.format || '').trim(), slides };
 }
 
@@ -5442,6 +5564,31 @@ export function startWhatsAppPublishScheduler(targetDir) {
   return timer;
 }
 
+// Carousels only. gaveta skips them (isGavetaItem in startGavetaSyncScheduler)
+// and production runs with OPENSQUAD_AUTO_PUBLISH_SCHEDULER=false, so without
+// this an approved carousel only went out through "Publicar agora". Starts
+// only while the general sweep is off — that sweep already publishes
+// carousels, and two sweeps on the same item could post it twice.
+export function startCarouselPublishScheduler(targetDir) {
+  if (process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING !== 'true') return null;
+  if (process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER !== 'false') return null;
+  const intervalMs = Number(process.env.OPENSQUAD_PUBLISH_CHECK_INTERVAL_MS || 180000);
+  // Same overlap guard as the other publish sweeps.
+  let running = false;
+  const sweep = () => {
+    if (running) return;
+    running = true;
+    runDuePublishSweep(targetDir, {
+      metaPublisher: (payload) => publishContentToInstagram(payload, targetDir),
+      itemFilter: (item) => item.format === 'carousel',
+    }).catch((err) => console.error('[content-central] carousel publish sweep failed:', err.message))
+      .finally(() => { running = false; });
+  };
+  const timer = setInterval(sweep, intervalMs);
+  sweep();
+  return timer;
+}
+
 // Cloud-aware counterpart to startWhatsAppPublishScheduler: that one only
 // ever sees local project.json content/schedules. Content approved from
 // the cloud panel (Approval.tsx) lives in Supabase instead, and nothing
@@ -5802,6 +5949,10 @@ async function readBody(req) {
   const raw = Buffer.concat(chunks).toString('utf-8');
   if (!raw) return {};
   return JSON.parse(raw);
+}
+
+function sendCarouselError(res, err) {
+  return sendJson(res, err.code === 'CAROUSEL_CONFLICT' ? 409 : 400, { error: err.message });
 }
 
 function sendJson(res, status, body) {

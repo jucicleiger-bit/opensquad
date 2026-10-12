@@ -38,6 +38,7 @@ import {
   startContentCentralServer,
   startPublishScheduler,
   startWhatsAppPublishScheduler,
+  startCarouselPublishScheduler,
   startGavetaSyncScheduler,
   startSocialSellingRadarScheduler,
   startSocialSellingEngagementScheduler,
@@ -4776,7 +4777,7 @@ test('POST generate-flyer creates encarte drafts for the selected products', asy
   });
 });
 
-test('POST carousels creates a placeholder immediately and the background pipeline fills in the roteiro + real images', async () => {
+test('POST carousels plans first; carousels-generate then fills in real images', async () => {
   await withServer(
     async (_dir, server) => {
       await request(server, '/api/projects', {
@@ -4790,18 +4791,28 @@ test('POST carousels creates a placeholder immediately and the background pipeli
       });
       assert.equal(generated.response.status, 201);
       assert.equal(generated.body.carousel.slideCount, 3);
-      assert.equal(generated.body.carousel.status, 'generating');
+      assert.equal(generated.body.carousel.status, 'planning');
 
       const carouselId = generated.body.carousel.carouselId;
-      let finalCarousel;
-      for (let i = 0; i < 50; i += 1) {
-        const { body } = await request(server, '/api/projects/carrossel-http/carousels');
-        finalCarousel = body.carousels.find((entry) => entry.carouselId === carouselId);
-        if (finalCarousel?.status === 'ready') break;
-        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
-      }
+      const waitFor = async (done) => {
+        let found;
+        for (let i = 0; i < 100; i += 1) {
+          const { body } = await request(server, '/api/projects/carrossel-http/carousels');
+          found = body.carousels.find((entry) => entry.carouselId === carouselId);
+          if (found && done(found)) return found;
+          await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+        }
+        return found;
+      };
 
-      assert.equal(finalCarousel.status, 'ready');
+      const planned = await waitFor((c) => c.status === 'plan_ready');
+      assert.equal(planned.slides[0].slideText, 'Slide 1');
+      assert.ok(planned.slides.every((slide) => !slide.image.url), 'no image before "Gerar imagens"');
+
+      const started = await request(server, `/api/projects/carrossel-http/carousels-generate/${carouselId}`, { method: 'POST' });
+      assert.equal(started.response.status, 200);
+
+      const finalCarousel = await waitFor((c) => c.status === 'ready');
       assert.equal(finalCarousel.format, 'listicle');
       assert.equal(finalCarousel.slides.length, 3);
       finalCarousel.slides.forEach((slide) => {
@@ -4835,13 +4846,19 @@ test('carousels-delete removes it from the listing, and carousels-regenerate-sli
       });
       const carouselId = generated.body.carousel.carouselId;
 
-      let ready;
-      for (let i = 0; i < 50; i += 1) {
-        const { body } = await request(server, '/api/projects/carrossel-http-2/carousels');
-        ready = body.carousels.find((entry) => entry.carouselId === carouselId);
-        if (ready?.status === 'ready') break;
-        await new Promise((resolveWait) => setTimeout(resolveWait, 20));
-      }
+      const waitFor = async (done) => {
+        let found;
+        for (let i = 0; i < 100; i += 1) {
+          const { body } = await request(server, '/api/projects/carrossel-http-2/carousels');
+          found = body.carousels.find((entry) => entry.carouselId === carouselId);
+          if (found && done(found)) return found;
+          await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+        }
+        return found;
+      };
+      await waitFor((c) => c.status === 'plan_ready');
+      await request(server, `/api/projects/carrossel-http-2/carousels-generate/${carouselId}`, { method: 'POST' });
+      const ready = await waitFor((c) => c.status === 'ready');
       const targetSlideId = ready.slides[0].slideId;
       const otherSlideId = ready.slides[1].slideId;
 
@@ -4892,6 +4909,167 @@ test('carousels-delete removes it from the listing, and carousels-regenerate-sli
       }),
     },
   );
+});
+
+test('carousels-replan adjusts a planned carousel and is refused (409) once images are being generated', async () => {
+  const outlineCalls = [];
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId: 'carrossel-replan-http', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'a@example.com' }) });
+      const { body } = await request(server, '/api/projects/carrossel-replan-http/carousels', { method: 'POST', body: JSON.stringify({ briefing: 'teste', slideCount: 2 }) });
+      const carouselId = body.carousel.carouselId;
+      const waitFor = async (done) => {
+        let found;
+        for (let i = 0; i < 100; i += 1) {
+          const list = await request(server, '/api/projects/carrossel-replan-http/carousels');
+          found = list.body.carousels.find((entry) => entry.carouselId === carouselId);
+          if (found && done(found)) return found;
+          await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+        }
+        return found;
+      };
+      await waitFor((c) => c.status === 'plan_ready');
+
+      const replan = await request(server, `/api/projects/carrossel-replan-http/carousels-replan/${carouselId}`, { method: 'POST', body: JSON.stringify({ message: 'fala da entrega' }) });
+      assert.equal(replan.response.status, 200);
+      const replanned = await waitFor((c) => c.status === 'plan_ready' && c.planMessages.length === 1);
+      assert.equal(outlineCalls.at(-1).request, 'fala da entrega');
+      assert.equal(replanned.slides[1].slideText, 'Ajustado 2');
+
+      await request(server, `/api/projects/carrossel-replan-http/carousels-generate/${carouselId}`, { method: 'POST' });
+      const refused = await request(server, `/api/projects/carrossel-replan-http/carousels-replan/${carouselId}`, { method: 'POST', body: JSON.stringify({ message: 'muda' }) });
+      assert.equal(refused.response.status, 409);
+    },
+    {
+      imageGenerator: async () => ({ url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }),
+      carouselOutlineGenerator: async (payload) => {
+        outlineCalls.push(payload);
+        const prefix = payload.request ? 'Ajustado' : 'Slide';
+        return { format: 'listicle', slides: [1, 2].map((n) => ({ role: 'content', slideText: `${prefix} ${n}` })) };
+      },
+    },
+  );
+});
+
+test('carousels-topic-ideas returns the injected ideas, 400 without AI, 502 when the research fails', async () => {
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId: 'carrossel-ideias', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'a@example.com' }) });
+      const ok = await request(server, '/api/projects/carrossel-ideias/carousels-topic-ideas', { method: 'POST' });
+      assert.equal(ok.response.status, 200);
+      assert.deepEqual(ok.body.ideas, [{ title: '5 erros ao pedir pizza', angle: 'lista' }]);
+    },
+    { carouselTopicIdeaGenerator: async ({ project }) => { assert.equal(project.projectId, 'carrossel-ideias'); return [{ title: '5 erros ao pedir pizza', angle: 'lista' }]; } },
+  );
+  await withServer(async (_dir, server) => {
+    await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId: 'carrossel-ideias-sem-ia', name: 'Boss', handle: '@boss', approvalEmail: 'a@example.com' }) });
+    const noAi = await request(server, '/api/projects/carrossel-ideias-sem-ia/carousels-topic-ideas', { method: 'POST' });
+    assert.equal(noAi.response.status, 400);
+  });
+  await withServer(
+    async (_dir, server) => {
+      await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId: 'carrossel-ideias-falha', name: 'Boss', handle: '@boss', approvalEmail: 'a@example.com' }) });
+      const failed = await request(server, '/api/projects/carrossel-ideias-falha/carousels-topic-ideas', { method: 'POST' });
+      assert.equal(failed.response.status, 502);
+      assert.match(failed.body.error, /sem resultado/);
+    },
+    { carouselTopicIdeaGenerator: async () => { throw new Error('sem resultado'); } },
+  );
+});
+
+test('carousels-caption drafts a caption and carousels-schedule turns the finished carousel into an approved calendar post', async () => {
+  await withServer(
+    async (dir, server) => {
+      await request(server, '/api/projects', { method: 'POST', body: JSON.stringify({ projectId: 'carrossel-agendar-http', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'a@example.com' }) });
+      const { body } = await request(server, '/api/projects/carrossel-agendar-http/carousels', { method: 'POST', body: JSON.stringify({ briefing: 'teste', slideCount: 2 }) });
+      const carouselId = body.carousel.carouselId;
+      const waitFor = async (done) => {
+        let found;
+        for (let i = 0; i < 100; i += 1) {
+          const list = await request(server, '/api/projects/carrossel-agendar-http/carousels');
+          found = list.body.carousels.find((entry) => entry.carouselId === carouselId);
+          if (found && done(found)) return found;
+          await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+        }
+        return found;
+      };
+      await waitFor((c) => c.status === 'plan_ready');
+      await request(server, `/api/projects/carrossel-agendar-http/carousels-generate/${carouselId}`, { method: 'POST' });
+      await waitFor((c) => c.status === 'ready');
+
+      const caption = await request(server, `/api/projects/carrossel-agendar-http/carousels-caption/${carouselId}`, { method: 'POST' });
+      assert.equal(caption.response.status, 200);
+      assert.equal(caption.body.caption, 'Legenda do carrossel');
+
+      const bad = await request(server, `/api/projects/carrossel-agendar-http/carousels-schedule/${carouselId}`, { method: 'POST', body: JSON.stringify({ date: 'amanhã', time: '09:00', caption: 'x' }) });
+      assert.equal(bad.response.status, 400);
+      assert.match(bad.body.error, /Data inválida/);
+
+      const scheduled = await request(server, `/api/projects/carrossel-agendar-http/carousels-schedule/${carouselId}`, { method: 'POST', body: JSON.stringify({ date: '2026-10-10', time: '18:30', caption: 'Legenda final' }) });
+      assert.equal(scheduled.response.status, 200);
+      assert.equal(scheduled.body.item.status, 'aprovado');
+      assert.equal(scheduled.body.item.format, 'carousel');
+      assert.equal(scheduled.body.carousel.schedules.length, 1);
+    },
+    {
+      imageGenerator: (() => {
+        let n = 0;
+        return async () => { n += 1; return { url: `https://cdn.example.com/s${n}.png`, mimeType: 'image/png' }; };
+      })(),
+      captionGenerator: async () => 'Legenda do carrossel',
+      carouselOutlineGenerator: async () => ({ format: 'listicle', slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }] }),
+    },
+  );
+});
+
+test('buildCarouselOutlinePrompt adds the offer, the clean rule and the replan block only when given, and is unchanged otherwise', () => {
+  const base = { project: { name: 'Boss Pizzaria', brandInput: { segment: 'Pizzaria' } }, briefing: 'Pizza de sexta', slideCount: 3, formatsReference: 'REF' };
+  const plain = buildCarouselOutlinePrompt(base);
+  assert.equal(buildCarouselOutlinePrompt({ ...base, offer: undefined, carouselStyle: undefined, currentPlan: undefined, request: undefined }), plain);
+  assert.doesNotMatch(plain, /Estilo clean|PLANO ATUAL|OFERTA\/ASSUNTO/);
+
+  const rich = buildCarouselOutlinePrompt({
+    ...base,
+    offer: { name: 'Pizza Calabresa', price: 'R$ 49,90', items: 'Borda recheada' },
+    carouselStyle: 'clean',
+    currentPlan: { format: 'listicle', slides: [{ role: 'cover', slideText: 'Capa antiga' }, { role: 'cta', slideText: 'CTA antigo' }] },
+    request: 'troca a capa',
+  });
+  assert.match(rich, /Pizza Calabresa/);
+  assert.match(rich, /R\$ 49,90/);
+  assert.match(rich, /Estilo clean/);
+  assert.match(rich, /PLANO ATUAL/);
+  assert.match(rich, /1\. \[cover\] Capa antiga/);
+  assert.match(rich, /troca a capa/);
+  assert.doesNotMatch(rich, /exatamente 3 slides/, 'a replan may change the count');
+});
+
+test('startCarouselPublishScheduler only starts while real publishing is on and the general scheduler is off', async () => {
+  delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  assert.equal(startCarouselPublishScheduler(process.cwd()), null);
+
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
+  try {
+    assert.equal(startCarouselPublishScheduler(process.cwd()), null, 'general sweep on: it already publishes carousels, never run both');
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+  }
+
+  process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING = 'true';
+  process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER = 'false';
+  // Real publishing is on here: never point it at process.cwd() (the main
+  // checkout holds live client projects) — same rule as the tests above.
+  const dir = await mkdtemp(join(tmpdir(), 'opensquad-content-server-'));
+  try {
+    const timer = startCarouselPublishScheduler(dir);
+    assert.notEqual(timer, null);
+    clearInterval(timer);
+  } finally {
+    delete process.env.OPENSQUAD_ENABLE_REAL_PUBLISHING;
+    delete process.env.OPENSQUAD_AUTO_PUBLISH_SCHEDULER;
+    await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 });
 
 test('carousel-regenerate-slide on a batch-item carousel regenerates only the target slide', async () => {
