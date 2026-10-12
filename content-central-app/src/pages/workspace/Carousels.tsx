@@ -38,6 +38,13 @@ const LAYOUT_LABELS: Record<string, string> = {
   texto_central: "Só texto, centralizado",
 };
 
+// Mirrors CAROUSEL_BACKGROUNDS in src/content-central.js.
+const BACKGROUND_LABELS: Record<string, string> = {
+  claro: "fundo claro",
+  marca: "fundo na cor da marca",
+  escuro: "fundo escuro",
+};
+
 function slideSource(slide: CarouselSlide): string | null {
   return slide.image.url || slide.image.previewUrl || null;
 }
@@ -380,6 +387,7 @@ export function Carousels() {
                             {slide.slideContent ? (
                               <div className={styles.planHint}>
                                 {LAYOUT_LABELS[slide.slideContent.layout] || slide.slideContent.layout}
+                                {slide.slideContent.background ? `, ${BACKGROUND_LABELS[slide.slideContent.background] || slide.slideContent.background}` : ""}
                                 {slide.slideContent.visual ? ` · Imagem: ${slide.slideContent.visual}` : ""}
                                 {slide.slideContent.bridge ? ` · Rodapé: ${slide.slideContent.bridge} →` : ""}
                               </div>

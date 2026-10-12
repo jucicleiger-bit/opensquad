@@ -3047,6 +3047,16 @@ export const CAROUSEL_LAYOUTS = {
   texto_central: 'Só texto, centralizado, com o destaque em evidência — para capa ou CTA.',
 };
 
+// The background each standalone slide gets from the roteiro. All-black
+// King slides (2026-10-12) read flat next to the V4 reference, which
+// alternates white, brand colour and dark; slide 1 is attached as a style
+// reference, so without a per-slide background every slide copied its own.
+export const CAROUSEL_BACKGROUNDS = {
+  claro: 'claro — branco ou off-white, texto escuro, destaques na cor da marca.',
+  marca: 'liso na cor principal da marca, texto em branco ou na cor de contraste da marca.',
+  escuro: 'escuro (preto ou grafite), texto claro, destaques na cor da marca.',
+};
+
 const CAROUSEL_SLIDE_COUNT_MIN = 2;
 const CAROUSEL_SLIDE_COUNT_MAX = 10;
 
@@ -8697,6 +8707,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       topic.source === 'carousel' && !topic.isLastCarouselSlide
         ? 'Adicionar um pequeno indicador visual de "arraste para o lado" no canto inferior direito do slide (ex.: seta/chevron simples, discreto, na cor de acento da marca) — sinaliza que o carrossel continua no próximo slide.'
         : '',
+      // Leaving the line out wasn't enough: King's last slide (2026-10-12)
+      // copied the arrow from slide 1, attached as its style reference.
+      topic.source === 'carousel' && topic.isLastCarouselSlide
+        ? 'Este é o último slide do carrossel: NÃO desenhar seta, chevron nem indicador de "arraste", mesmo que o slide 1 anexado tenha um.'
+        : '',
     ]),
     // Only present when runCarouselGeneration/enqueueCarouselSlideRegeneration
     // resolved slide 1's own generated file — see generateAiImageWithReviewLoop,
@@ -8706,29 +8721,37 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         'Uma das imagens anexadas é o slide 1, já gerado, deste MESMO carrossel.',
         'Copiar dessa imagem: paleta de cores, tipografia, moldura/elementos gráficos fixos e posição da logo — mesma identidade visual, não apenas inspiração livre.',
         'A composição/disposição dos elementos deste slide pode ser diferente da do slide 1 (ex.: título maior de um lado, bloco de texto do outro, lista de bullets) — o que precisa ser idêntico é a identidade visual, não o layout exato.',
+        slideContent?.background ? 'A cor de fundo deste slide é a indicada em "Fundo" (CONTEÚDO E LAYOUT DESTE SLIDE), mesmo que seja diferente da do slide 1.' : '',
       ])
       : '',
     editorialCarousel
       ? section('ESTILO CARROSSEL EDITORIAL', [
         'Carrossel de leitura, estilo editorial de Instagram: cada slide entrega uma informação completa, que a pessoa lê e então arrasta para o próximo — não é um letreiro com uma frase gigante.',
-        'Fundo claro/branco ou liso na cor da marca, alternando entre os slides; sem texturas, ondas ou grafismos carregados.',
+        slideContent?.background
+          ? 'O fundo muda de slide para slide (claro, cor da marca, escuro) conforme indicado em "Fundo"; o que se repete entre os slides são a tipografia, as cores de destaque e a logo. Sem texturas, ondas ou grafismos carregados.'
+          : 'Fundo claro/branco ou liso na cor da marca, alternando entre os slides; sem texturas, ondas ou grafismos carregados.',
         'Tipografia: uma fonte forte e condensada para título e destaque, e uma fonte limpa para o texto de apoio — as mesmas em todos os slides.',
         'Palavras marcadas com **asteriscos** no texto vão em negrito (sem mostrar os asteriscos).',
         'Logo pequena, sempre no mesmo canto em todos os slides.',
         'Se houver foto real do produto anexada, ela é a imagem do slide: recorte limpo, sem colagem nem vários produtos misturados.',
-        'Nenhuma imagem mostra marca, logo, produto ou tela de outra empresa, nem pessoas famosas ou reconhecíveis.',
+        // A generated sneaker came out with what reads as a Nike swoosh.
+        'Nenhuma imagem mostra marca, logo, produto ou tela de outra empresa, nem pessoas famosas ou reconhecíveis. Objetos do dia a dia (tênis, roupas, celulares, notebooks, embalagens) aparecem lisos, sem logotipo, símbolo ou nome de marca.',
+        content.role === 'cta' ? 'Se a imagem deste slide for um mockup do perfil da marca, a foto de perfil é a logo anexada; não inventar @, número de seguidores nem posts.' : '',
       ])
       : '',
     slideContent
       ? section('CONTEÚDO E LAYOUT DESTE SLIDE', [
         `Layout: ${CAROUSEL_LAYOUTS[slideContent.layout] || CAROUSEL_LAYOUTS.texto_imagem}`,
+        CAROUSEL_BACKGROUNDS[slideContent.background] ? `Fundo (nas áreas sem imagem): ${CAROUSEL_BACKGROUNDS[slideContent.background]}` : '',
         slideContent.title ? `Título (escrever exatamente): ${slideContent.title}` : '',
         slideContent.body ? `Texto de apoio (escrever exatamente, com os negritos indicados): ${slideContent.body}` : '',
         slideContent.highlight ? `Destaque grande (escrever exatamente, em caixa alta, na cor de destaque da marca): ${slideContent.highlight}` : '',
         slideContent.bullets?.length ? `Lista (escrever cada item exatamente, um por linha ou cartão): ${slideContent.bullets.map((item) => `• ${item}`).join(' ')}` : '',
         slideContent.visual && slideContent.layout !== 'texto_central' ? `Imagem: ${slideContent.visual}` : '',
         slideContent.bridge ? `Rodapé: a frase de continuação "${slideContent.bridge}" numa pílula discreta com uma seta →, puxando para o próximo slide.` : '',
-        'Não acrescentar nenhum outro texto além destes, da logo e da seta de arraste.',
+        topic.isLastCarouselSlide
+          ? 'Não acrescentar nenhum outro texto além destes e da logo.'
+          : 'Não acrescentar nenhum outro texto além destes, da logo e da seta de arraste.',
         'Margem interna generosa em todos os lados: nenhum texto, imagem ou logo pode tocar ou ser cortado pela borda.',
       ])
       : '',

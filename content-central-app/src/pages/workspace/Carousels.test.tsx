@@ -113,7 +113,7 @@ describe("Carousels", () => {
       ...slide,
       image: { generating: false },
       slideContent: index === 1
-        ? { title: "Salve esse post", body: "", highlight: "", bullets: [], visual: "motoboy entregando pizza", layout: "lista", bridge: "Veja como" }
+        ? { title: "Salve esse post", body: "", highlight: "", bullets: [], visual: "motoboy entregando pizza", layout: "lista", background: "claro", bridge: "Veja como" }
         : null,
     })),
   };
@@ -165,7 +165,7 @@ describe("Carousels", () => {
 
     expect(await screen.findByText("fala da entrega")).toBeInTheDocument();
     expect(screen.getByText("Salve esse post")).toBeInTheDocument();
-    expect(screen.getByText("Lista em cartões · Imagem: motoboy entregando pizza · Rodapé: Veja como →")).toBeInTheDocument();
+    expect(screen.getByText("Lista em cartões, fundo claro · Imagem: motoboy entregando pizza · Rodapé: Veja como →")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("O que mudar?"), "troca a capa");
     await userEvent.click(screen.getByRole("button", { name: "Ajustar" }));
 

@@ -40,6 +40,7 @@ import {
   startWhatsAppPublishScheduler,
   startCarouselPublishScheduler,
   parseCarouselOutlineSlide,
+  balanceCarouselOutlineSlides,
   startGavetaSyncScheduler,
   startSocialSellingRadarScheduler,
   startSocialSellingEngagementScheduler,
@@ -5027,10 +5028,10 @@ test('carousels-caption drafts a caption and carousels-schedule turns the finish
 });
 
 test('buildCarouselOutlinePrompt adds the offer, the clean rule and the replan block only when given, and is unchanged otherwise', () => {
-  const base = { project: { name: 'Boss Pizzaria', brandInput: { segment: 'Pizzaria' } }, briefing: 'Pizza de sexta', slideCount: 3, formatsReference: 'REF' };
+  const base = { project: { name: 'Boss Pizzaria', brandInput: { segment: 'Pizzaria' }, companyProfile: { differentiators: 'Massa de fermentação natural', websiteOrInstagram: '@bosspizzaria' } }, briefing: 'Pizza de sexta', slideCount: 3, formatsReference: 'REF' };
   const plain = buildCarouselOutlinePrompt(base);
   assert.equal(buildCarouselOutlinePrompt({ ...base, offer: undefined, carouselStyle: undefined, currentPlan: undefined, request: undefined }), plain);
-  assert.doesNotMatch(plain, /ROTEIRO DE LEITURA|PLANO ATUAL|OFERTA\/ASSUNTO/);
+  assert.doesNotMatch(plain, /ROTEIRO DE LEITURA|PLANO ATUAL|OFERTA\/ASSUNTO|Massa de fermentação natural|@bosspizzaria/);
 
   const rich = buildCarouselOutlinePrompt({
     ...base,
@@ -5043,6 +5044,10 @@ test('buildCarouselOutlinePrompt adds the offer, the clean rule and the replan b
   assert.match(rich, /R\$ 49,90/);
   assert.match(rich, /ROTEIRO DE LEITURA/);
   assert.match(rich, /texto_imagem/);
+  assert.match(rich, /"background": um destes — claro, marca, escuro/);
+  assert.match(rich, /PROVA: pelo menos um slide/);
+  assert.match(rich, /Diferencial cadastrado da empresa: Massa de fermentação natural/);
+  assert.match(rich, /mockup de celular mostrando o perfil da própria marca \(com a logo\), perfil @bosspizzaria/);
   assert.match(rich, /PLANO ATUAL/);
   assert.match(rich, /1\. \[cover\] Capa antiga/);
   assert.match(rich, /troca a capa/);
@@ -5064,8 +5069,34 @@ test('parseCarouselOutlineSlide keeps a structured slide\'s layout and composes 
   assert.equal(structured.content.bullets.length, 5);
   assert.equal(structured.slideText, 'Três cuidados na entrega\nA gente usa bolsa térmica.\n• Bolsa térmica\n• Rota curta\n• Saída\n• Embalagem\n• Extra 1');
 
+  assert.equal(structured.content.background, '', 'unknown background is left for balancing');
+  assert.equal(parseCarouselOutlineSlide({ title: 'T', background: 'marca' }).content.background, 'marca');
   assert.deepEqual(parseCarouselOutlineSlide({ role: 'cta', slideText: '  Peça já  ' }), { role: 'cta', slideText: 'Peça já' });
   assert.equal(parseCarouselOutlineSlide({ role: 'x', title: 'T' }).role, 'content');
+});
+
+// King, 2026-10-12: highlights on 4 of 7 slides, bridges on 3, all slides black.
+test('balanceCarouselOutlineSlides caps highlights and bridges and never repeats a background', () => {
+  const slide = (role, highlight, bridge, background) => parseCarouselOutlineSlide({ role, title: `T ${role}`, highlight, bridge, background });
+  const balanced = balanceCarouselOutlineSlides([
+    slide('cover', 'GANCHO', 'Veja', 'escuro'),
+    slide('content', 'MUITO', 'Continua', 'escuro'),
+    slide('content', 'R$ 0,99', 'Mais', ''),
+    slide('content', 'OUTRO', '', 'claro'),
+    slide('content', '', '', 'claro'),
+    slide('content', 'MAIS UM', '', 'marca'),
+    slide('cta', 'COMENTE', 'Fim', 'marca'),
+  ]);
+  assert.deepEqual(balanced.map((entry) => entry.content.highlight), ['GANCHO', '', 'R$ 0,99', '', '', '', ''], '1 in 3: cover, then the number');
+  assert.deepEqual(balanced.map((entry) => Boolean(entry.content.bridge)), [true, true, false, false, false, false, false]);
+  const backgrounds = balanced.map((entry) => entry.content.background);
+  backgrounds.forEach((background, index) => {
+    assert.ok(background);
+    if (index) assert.notEqual(background, backgrounds[index - 1]);
+  });
+  assert.equal(balanced[1].slideText, 'T content', 'slideText drops the removed highlight');
+  const plain = [{ role: 'cover', slideText: 'Capa' }];
+  assert.equal(balanceCarouselOutlineSlides(plain), plain);
 });
 
 test('startCarouselPublishScheduler only starts while real publishing is on and the general scheduler is off', async () => {

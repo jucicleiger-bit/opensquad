@@ -85,6 +85,7 @@ import {
   draftCarouselCaption,
   projectTopicIdeaContext,
   CAROUSEL_LAYOUTS,
+  CAROUSEL_BACKGROUNDS,
   enqueueCarouselSlideRegeneration,
   enqueueContentCarouselSlideRegeneration,
   generateCarousel,
@@ -4810,7 +4811,7 @@ export function buildCarouselOutlinePrompt({ project, briefing, slideCount, form
     currentPlan
       ? 'Mantenha a mesma quantidade de slides do plano atual, a não ser que o ajuste peça outra quantidade (mínimo 2, máximo 10). O plano continua com capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta").'
       : `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
-    ...(editorial ? editorialCarouselOutlineRules(offer) : [
+    ...(editorial ? editorialCarouselOutlineRules(offer, project) : [
       'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
     ]),
     '- Nunca inventar preço, promoção, prazo, estoque, depoimento ou dado que não foi passado no briefing.',
@@ -4820,12 +4821,14 @@ export function buildCarouselOutlinePrompt({ project, briefing, slideCount, form
   ].filter(Boolean).join('\n');
 }
 
-const EDITORIAL_OUTLINE_JSON_EXAMPLE = '{"format":"listicle","slides":[{"role":"cover","title":"","body":"","highlight":"","bullets":[],"visual":"","layout":"texto_central","bridge":""}]}';
+const EDITORIAL_OUTLINE_JSON_EXAMPLE = '{"format":"listicle","slides":[{"role":"cover","title":"","body":"","highlight":"","bullets":[],"visual":"","layout":"imagem_cheia","background":"escuro","bridge":""}]}';
 
 // The standalone tab's "reading carousel" (operator feedback 2026-10-12, V4
 // reference): every slide carries a complete piece of information plus what
 // to show and how to lay it out, instead of one giant phrase per slide.
-function editorialCarouselOutlineRules(offer) {
+function editorialCarouselOutlineRules(offer, project) {
+  const differential = project.companyProfile?.differentiators || project.brandInput?.mainDifferential || '';
+  const profile = project.companyProfile?.websiteOrInstagram || '';
   return [
     'ROTEIRO DE LEITURA: cada slide entrega uma informação completa e o carrossel se lê como uma sequência — não como letreiros soltos com uma frase gigante.',
     '- "title": título do slide, de 3 a 9 palavras.',
@@ -4835,9 +4838,16 @@ function editorialCarouselOutlineRules(offer) {
     '- "visual": o que a imagem do slide mostra, de forma concreta (ex.: "celular mostrando uma agenda de posts", "dono de loja organizando a prateleira"). Vazio quando o layout for texto_central.',
     offer?.hasPhotos ? '- Este assunto tem foto real do produto cadastrada: nos slides com imagem, "visual" é a foto real do produto (com um contexto simples, se fizer sentido).' : '',
     `- "layout": um destes — ${Object.entries(CAROUSEL_LAYOUTS).map(([key, description]) => `${key} (${description})`).join('; ')}`,
-    '- Alternar os layouts: nunca o mesmo layout em dois slides seguidos. Capa e CTA podem usar texto_central ou imagem_cheia.',
+    '- Alternar os layouts: nunca o mesmo layout em dois slides seguidos.',
+    `- "background": um destes — ${Object.keys(CAROUSEL_BACKGROUNDS).join(', ')}. Alternar: nunca o mesmo fundo em dois slides seguidos.`,
     '- "bridge": opcional — frase curta de rodapé que puxa para o próximo slide (ex.: "Veja como resolver"); usar em 1 ou 2 slides, nunca no último.',
-    '- Nunca citar nem mostrar marca, logo ou tela de outra empresa, nem pessoa famosa.',
+    '- Capa: layout imagem_cheia, com um "visual" forte e concreto ligado ao gancho e o título-gancho por cima. texto_central só se nenhuma imagem fizer sentido para o assunto.',
+    // V4 holds attention with a concrete fact (R$ 0,99, a coupon screen);
+    // ours gave generic advice. Only registered data, never an invented one.
+    '- PROVA: pelo menos um slide do meio traz um dado concreto que já está aqui (preço, produto ou detalhe da oferta, ou o diferencial da empresa), com o dado no "highlight". Sem dado assim, usar um exemplo prático e específico do dia a dia do segmento — nunca inventar número, porcentagem, preço, cliente ou resultado.',
+    differential ? `- Diferencial cadastrado da empresa: ${differential}` : '',
+    `- Último slide (CTA): uma única ação concreta — "Comente PALAVRA" (com a PALAVRA curta no "highlight") ou visitar o perfil da marca. Nesse caso, "visual" é um mockup de celular mostrando o perfil da própria marca (com a logo)${profile ? `, perfil ${profile}` : ', sem inventar @'}, e o layout é texto_imagem ou dividido.`,
+    '- Nunca citar nem mostrar marca, logo ou tela de outra empresa, nem pessoa famosa. Em "visual", objetos aparecem sem marca (ex.: "tênis branco liso", nunca "tênis Nike").',
   ].filter(Boolean);
 }
 
@@ -4854,12 +4864,46 @@ export function parseCarouselOutlineSlide(entry) {
     bullets: (Array.isArray(entry?.bullets) ? entry.bullets : []).map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5),
     visual: String(entry?.visual || '').trim(),
     layout: Object.hasOwn(CAROUSEL_LAYOUTS, entry?.layout) ? entry.layout : 'texto_imagem',
+    background: Object.hasOwn(CAROUSEL_BACKGROUNDS, entry?.background) ? entry.background : '',
     bridge: String(entry?.bridge || '').trim(),
   };
-  const slideText = [content.title, content.highlight, content.body.replace(/\*\*/g, ''), ...content.bullets.map((item) => `• ${item}`)]
+  return { role, slideText: carouselOutlineSlideText(content), content };
+}
+
+function carouselOutlineSlideText(content) {
+  return [content.title, content.highlight, content.body.replace(/\*\*/g, ''), ...content.bullets.map((item) => `• ${item}`)]
     .filter(Boolean)
     .join('\n');
-  return { role, slideText, content };
+}
+
+// The roteiro asks for these limits but the King roteiro (2026-10-12) still
+// put a giant highlight on 4 of 7 slides and a bridge on 3, so they are
+// enforced here. Highlights kept: the cover, then the ones carrying a number
+// (the proof slide), then the CTA, then the rest in order, up to 1 in 3.
+// Backgrounds never repeat on two slides in a row.
+export function balanceCarouselOutlineSlides(slides) {
+  const structured = slides.filter((slide) => slide.content);
+  if (!structured.length) return slides;
+  const highlightLimit = Math.max(1, Math.floor(slides.length / 3));
+  const rank = (slide) => (slide.role === 'cover' ? 0 : /\d/.test(slide.content.highlight) ? 1 : slide.role === 'cta' ? 2 : 3);
+  const keptHighlights = new Set(structured
+    .filter((slide) => slide.content.highlight)
+    .sort((a, b) => rank(a) - rank(b))
+    .slice(0, highlightLimit));
+  let bridges = 0;
+  let previousBackground = '';
+  return slides.map((slide, index) => {
+    if (!slide.content) return slide;
+    const content = { ...slide.content };
+    if (!keptHighlights.has(slide)) content.highlight = '';
+    if (content.bridge && (index === slides.length - 1 || bridges >= 2)) content.bridge = '';
+    if (content.bridge) bridges += 1;
+    if (!content.background || content.background === previousBackground) {
+      content.background = Object.keys(CAROUSEL_BACKGROUNDS).find((key) => key !== previousBackground);
+    }
+    previousBackground = content.background;
+    return { ...slide, slideText: carouselOutlineSlideText(content), content };
+  });
 }
 
 async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir, offer, carouselStyle, currentPlan, request }) {
@@ -4875,9 +4919,9 @@ async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, t
     return null;
   }
   if (!parsed || !Array.isArray(parsed.slides)) return null;
-  const slides = parsed.slides
+  const slides = balanceCarouselOutlineSlides(parsed.slides
     .map(parseCarouselOutlineSlide)
-    .filter((entry) => entry.slideText);
+    .filter((entry) => entry.slideText));
   // A replan may change the count; the engine (applyCarouselOutline) checks
   // the 2-10 range itself.
   if (!currentPlan && slides.length !== slideCount) return null;

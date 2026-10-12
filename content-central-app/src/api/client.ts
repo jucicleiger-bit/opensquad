@@ -915,6 +915,7 @@ export interface CarouselSlide {
     bullets: string[];
     visual: string;
     layout: string;
+    background?: string;
     bridge: string;
   } | null;
   image: {

@@ -10760,6 +10760,7 @@ test('a structured roteiro slide reaches the image prompt as its exact texts, im
               bullets: ['Bolsa térmica', 'Rota curta', 'Saída na hora'],
               visual: 'motoboy entregando uma caixa de pizza',
               layout: 'lista',
+              background: 'claro',
               bridge: '',
             },
           },
@@ -10786,6 +10787,15 @@ test('a structured roteiro slide reaches the image prompt as its exact texts, im
     assert.match(cta, /\*\*bolsa térmica\*\*/);
     assert.match(cta, /• Bolsa térmica • Rota curta • Saída na hora/);
     assert.match(cta, /Imagem: motoboy entregando uma caixa de pizza/);
+    assert.match(cta, /Fundo \(nas áreas sem imagem\): claro — branco/);
+    assert.match(cta, /O fundo muda de slide para slide/);
+    assert.match(cta, /último slide do carrossel: NÃO desenhar seta/);
+    assert.doesNotMatch(cta, /arraste para o lado/);
+    assert.doesNotMatch(cta, /da logo e da seta de arraste/);
+    assert.match(cta, /sem logotipo, símbolo ou nome de marca/);
+    assert.match(cta, /mockup do perfil da marca, a foto de perfil é a logo anexada/);
+    assert.doesNotMatch(prompts.cover, /Fundo \(nas áreas sem imagem\)|último slide do carrossel/, 'the cover has no background set and is not last');
+    assert.match(prompts.cover, /arraste para o lado/);
     assert.match(cta, /Hierarquia de leitura de carrossel/);
     assert.doesNotMatch(cta, /20-30% da altura|até ~35% da altura/);
     assert.doesNotMatch(cta, /ESTRUTURA FEED OBRIGATÓRIA/, 'the slide layout replaces the fixed feed zones');
