@@ -3216,17 +3216,14 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
   await writeJson(carousel.filePath, carousel);
 }
 
-// Full pipeline for a freshly created carousel: roteiro first (decides
-// slideText/role/format for every slide), then 1 real image per slide in
-// bounded parallel. All 3 workers below share the same in-memory `carousel`
-// object (mutating different slides[i]) — every writeJson call serializes
-// the current full object, so concurrent writes are safe (no partial file,
-// last write always reflects the freshest combined state; Node has no
-// thread-level race on the same in-memory object).
-async function runCarouselGeneration(carousel, project, projectId, options, paths, overrides = {}) {
+// Roteiro half: asks the outline generator for one text per slide and fills
+// slideText/role/contentTopic in place. Returns false — leaving the slides
+// untouched — when the outline is missing or the wrong size, so each caller
+// decides what a failure means: the one-shot pipeline marks every slide
+// errored, the standalone planning step keeps the previous plan.
+async function applyCarouselOutline(carousel, project, options, overrides = {}) {
   const briefing = overrides.briefing ?? carousel.briefing;
   const slideCount = overrides.slideCount ?? carousel.slideCount;
-  const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
   // A standalone Carousel's own .format field IS the roteiro's visual style.
   // A batch item overloads that same field name as its 'carousel' vs
   // 'single' discriminator (reconcile, approval rendering and publish all
@@ -3243,20 +3240,7 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
       carousel.outlineGenerationError = err.message;
     }
   }
-  const validOutline = outline && Array.isArray(outline.slides) && outline.slides.length === slideCount;
-  if (!validOutline) {
-    if (!carousel.outlineGenerationError) {
-      carousel.outlineGenerationError = 'O roteirista de IA não retornou um roteiro válido para este carrossel (resposta vazia ou incompleta). Apague e gere de novo para tentar outra vez.';
-    }
-    for (const slide of carousel.slides) {
-      slide.image.generating = false;
-      slide.imageGenerationError = carousel.outlineGenerationError;
-    }
-    markReady(carousel);
-    carousel.updatedAt = new Date().toISOString();
-    await writeJson(carousel.filePath, carousel);
-    return;
-  }
+  if (!(outline && Array.isArray(outline.slides) && outline.slides.length === slideCount)) return false;
 
   setFormat(carousel, outline.format || '');
   carousel.slides.forEach((slide, index) => {
@@ -3270,18 +3254,19 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
       slideText: slide.slideText,
     });
   });
-  carousel.updatedAt = new Date().toISOString();
-  await writeJson(carousel.filePath, carousel);
+  return true;
+}
 
-  // Slide 1 goes first, alone — every other slide then gets its finished
-  // image as a real reference file (not just a prompt instruction), so the
-  // template/palette/typography actually repeats instead of each slide
-  // being its own independent roll of the dice. options.resolveCarouselStyleReference
-  // is optional and best-effort: no AI images configured, provider doesn't
-  // expose a local file, or slide 1 itself failed all resolve to null and
-  // the rest of the carousel still generates fine, just back to
-  // prompt-only consistency (see the "MESMO template" line in
-  // buildCarouselSlideContentTopic).
+// Image half. Slide 1 goes first, alone — every other slide then gets its
+// finished image as a real reference file (not just a prompt instruction),
+// so the template/palette/typography actually repeats instead of each slide
+// being its own independent roll of the dice. options.resolveCarouselStyleReference
+// is optional and best-effort: no AI images configured, provider doesn't
+// expose a local file, or slide 1 itself failed all resolve to null and
+// the rest of the carousel still generates fine, just back to
+// prompt-only consistency (see the "MESMO template" line in
+// buildCarouselSlideContentTopic).
+async function generateCarouselSlideImages(carousel, project, projectId, options, paths) {
   const [firstSlide, ...restSlides] = carousel.slides;
   if (firstSlide) {
     await enrichCarouselSlideWithRealImage(carousel, firstSlide, project, projectId, paths, options);
@@ -3293,6 +3278,34 @@ async function runCarouselGeneration(carousel, project, projectId, options, path
   await mapWithConcurrency(restSlides, BATCH_IMAGE_CONCURRENCY, (slide) => (
     enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath)
   ));
+}
+
+// Full one-shot pipeline (automatic calendar carousel, and the legacy
+// enqueueCarouselGeneration): roteiro, then 1 real image per slide. All
+// workers share the same in-memory `carousel` object (mutating different
+// slides[i]) — every writeJson call serializes the current full object, so
+// concurrent writes are safe (no partial file, last write always reflects
+// the freshest combined state).
+async function runCarouselGeneration(carousel, project, projectId, options, paths, overrides = {}) {
+  const markReady = overrides.markReady || ((c) => { c.status = 'ready'; });
+  const outlineOk = await applyCarouselOutline(carousel, project, options, overrides);
+  if (!outlineOk) {
+    if (!carousel.outlineGenerationError) {
+      carousel.outlineGenerationError = 'O roteirista de IA não retornou um roteiro válido para este carrossel (resposta vazia ou incompleta). Apague e gere de novo para tentar outra vez.';
+    }
+    for (const slide of carousel.slides) {
+      slide.image.generating = false;
+      slide.imageGenerationError = carousel.outlineGenerationError;
+    }
+    markReady(carousel);
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return;
+  }
+  carousel.updatedAt = new Date().toISOString();
+  await writeJson(carousel.filePath, carousel);
+
+  await generateCarouselSlideImages(carousel, project, projectId, options, paths);
 
   markReady(carousel);
   carousel.updatedAt = new Date().toISOString();
