@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import {
   STATUS, normalizeBriefing, createVideo, updateVideo, readVideoState, listVideos, saveRoteiroCenas, deleteVideo,
-  estimateSeconds, validateRoteiro, buildMarca, buildMaterialInventory, reconcileInterruptedVideos, requireVideoProject, videoDir,
+  estimateSeconds, validateRoteiro, buildMarca, buildMaterialInventory, reconcileInterruptedVideos, requireVideoProject, videoDir, normalizeVideoAnimado,
 } from '../src/content-central-video.js';
 
 async function withDir(fn) {
@@ -23,12 +23,20 @@ async function enable(dir, projectId, extra = {}) {
 
 const briefing = { assunto: 'Diagnóstico antes do anúncio', objetivo: 'anuncio', duracao: 30, tom: 'vendedor', legenda: 'karaoke', observacao: '' };
 
-test('a project without videoAnimado.ativo is a 404 for every video call', async () => {
+test('video is on by default; only videoAnimado.ativo false is a 404', async () => {
   await withDir(async (dir) => {
     await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await requireVideoProject('king', dir);
+    await enable(dir, 'king', { ativo: false });
     await assert.rejects(requireVideoProject('king', dir), (err) => err.status === 404);
     await assert.rejects(createVideo('king', briefing, dir), (err) => err.status === 404);
   });
+});
+
+test('without a configured material list, a project uses its own material', () => {
+  assert.deepEqual(normalizeVideoAnimado(undefined, 'frios').projetosDeMaterial, ['frios']);
+  assert.equal(normalizeVideoAnimado(undefined, 'frios').ativo, true);
+  assert.deepEqual(normalizeVideoAnimado({ projetosDeMaterial: ['mercado'] }, 'king').projetosDeMaterial, ['mercado']);
 });
 
 test('briefing is validated and normalized', () => {

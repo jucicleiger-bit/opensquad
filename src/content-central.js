@@ -6339,7 +6339,7 @@ async function toProjectSummary(project) {
     timezone: project.timezone,
     businessHours: normalizeBusinessHours(project.businessHours),
     contractedPlan: normalizeContractedPlan(project.contractedPlan),
-    videoAnimado: normalizeVideoAnimado(project.videoAnimado),
+    videoAnimado: normalizeVideoAnimado(project.videoAnimado, project.projectId),
     instagram: project.instagram,
     companyProfile: normalizeCompanyProfile(project.companyProfile),
     brandInput: normalizeBrandInput(project.brandInput || companyProfileToBrandInput(project.companyProfile, project.name)),

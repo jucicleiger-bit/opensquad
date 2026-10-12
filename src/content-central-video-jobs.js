@@ -69,7 +69,7 @@ export function runClaudeCode({ prompt, cwd, addDirs = [], timeoutMs = CLAUDE_TI
 const defaultRenderer = async (opts) => (await import('./video-motor/render.mjs')).renderVideo(opts);
 
 async function prepareFolder(project, video, dir, targetDir) {
-  const settings = normalizeVideoAnimado(project.videoAnimado);
+  const settings = normalizeVideoAnimado(project.videoAnimado, project.projectId);
   const marca = buildMarca(project, settings);
   const logo = project.brand?.logoPath ? join(getCentralPaths(targetDir, project.projectId).projectDir, project.brand.logoPath) : null;
   const temLogo = Boolean(logo && existsSync(logo));

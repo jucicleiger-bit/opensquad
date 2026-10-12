@@ -27,10 +27,13 @@ function httpError(status, message) {
   return err;
 }
 
-export function normalizeVideoAnimado(value) {
+// On for every project unless explicitly turned off. Without a configured
+// list, a project's real material is its own.
+export function normalizeVideoAnimado(value, projectId = '') {
+  const materiais = Array.isArray(value?.projetosDeMaterial) ? value.projetosDeMaterial.filter((id) => typeof id === 'string' && id) : [];
   return {
-    ativo: value?.ativo === true,
-    projetosDeMaterial: Array.isArray(value?.projetosDeMaterial) ? value.projetosDeMaterial.filter((id) => typeof id === 'string' && id) : [],
+    ativo: value?.ativo !== false,
+    projetosDeMaterial: materiais.length || !projectId ? materiais : [projectId],
     whatsapp: typeof value?.whatsapp === 'string' ? value.whatsapp : '',
   };
 }
