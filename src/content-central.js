@@ -5677,6 +5677,16 @@ async function loadGlobalRules(paths) {
 const MAX_LEARNING_ENTRIES = 20;
 const MAX_SEGMENT_LEARNING_ENTRIES = 40;
 
+// Every approved/rejected post adds an automatic note to its segment node.
+// Capping the whole node let a busy approval day push the operator's
+// registered creative structures out (Mercado Carvalho lost all 11 on
+// 2026-10-06 and generation stopped). Only automatic notes count toward the
+// cap; anything the operator registered stays until they delete it.
+function capSegmentLearningEntries(entries) {
+  let autoCount = 0;
+  return entries.filter((entry) => entry.source !== 'auto' || ++autoCount <= MAX_SEGMENT_LEARNING_ENTRIES);
+}
+
 // segment-learnings.json/offer-type-learnings.json are GLOBAL stores shared
 // across every project — a lock keyed on whichever projectId happens to be
 // making the request lets two different projects' concurrent writes take
@@ -6135,7 +6145,9 @@ export async function saveLearningEntry(input, targetDir = process.cwd(), now = 
       if (!matched) throw new Error('Entrada não encontrada para edição.');
     } else {
       const entry = normalizeSegmentLearningEntry(entryInput);
-      node.entries = [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+      node.entries = scope === 'segment'
+        ? capSegmentLearningEntries([entry, ...node.entries])
+        : [entry, ...node.entries].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
     }
     store[nodesKey] = { ...store[nodesKey], [groupKey]: node };
     store.schemaVersion = scope === 'segment' ? 2 : 1;
@@ -6190,7 +6202,7 @@ export async function importCreativeStructures(input, targetDir = process.cwd(),
       existingKeys.add(duplicateKey);
     }
 
-    targetNode.entries = [...imported, ...(targetNode.entries || []).map(normalizeSegmentLearningEntry)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+    targetNode.entries = capSegmentLearningEntries([...imported, ...(targetNode.entries || []).map(normalizeSegmentLearningEntry)]);
     store.nodes = { ...store.nodes, [targetGroupKey]: targetNode };
     store.schemaVersion = 2;
     await writeLearningStore(paths, 'segment', store);
@@ -6282,7 +6294,7 @@ async function addSegmentLearning(paths, project, bucket, line, targetDir) {
       const deepestPath = nodePaths[nodePaths.length - 1];
       const node = store.nodes[deepestPath] || { label: segmentNodeLabel(project, SEGMENT_LEVELS[nodePaths.length - 1]), entries: [] };
       const entry = normalizeSegmentLearningEntry({ bucket, kind: 'text', text, source: 'auto' });
-      node.entries = [entry, ...node.entries.filter((existing) => existing.text !== text)].slice(0, MAX_SEGMENT_LEARNING_ENTRIES);
+      node.entries = capSegmentLearningEntries([entry, ...node.entries.filter((existing) => existing.text !== text)]);
       store.nodes = { ...store.nodes, [deepestPath]: node };
     } else {
       const legacyKey = projectSegmentKey(project);

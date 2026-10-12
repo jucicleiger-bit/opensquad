@@ -1367,6 +1367,39 @@ test('saveLearningEntry throws instead of silently no-op succeeding when entryId
   });
 });
 
+test('automatic approve/reject notes never push a registered creative structure out of the segment node', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'mercado-cap', name: 'Mercado Cap', handle: '@mercadocap', approvalEmail: 'a@example.com' }, dir);
+    await updateProjectBrandInput('mercado-cap', {
+      brandName: 'Mercado Cap',
+      segmentGroup: 'Negócios locais e lojas',
+      segmentCategory: 'Mercado / Mercearia',
+      productsOrServices: 'mercearia',
+    }, dir);
+    const paths = getCentralPaths(dir, 'mercado-cap');
+    const project = await loadProjectForTest('mercado-cap', dir);
+    const groupKey = (await loadSegmentLearningNodes(paths, project)).at(-1).path;
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+    const analyzed = await analyzeLearningImage({ scope: 'segment', groupKey, dataUrl, filename: 'oferta.png' }, dir, new Date(), { learningImageAnalyzer: async () => 'Oferta direta' });
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'approved', kind: 'image', title: 'OFERTA DIRETA', text: 'Oferta direta', imagePath: analyzed.imagePath, purpose: 'creative', postType: 'offer' }, dir, new Date());
+
+    // A busy approval day: 40 automatic "aprovado" notes already in the node
+    // (the real Mercado Carvalho state on 2026-10-06), then one more decision.
+    const store = JSON.parse(await readFile(paths.segmentLearningsPath, 'utf-8'));
+    const autoNotes = Array.from({ length: 40 }, (_, i) => ({ id: `auto-${i}`, bucket: 'approved', kind: 'text', text: `post ${i}: aprovado.`, source: 'auto', createdAt: '2026-10-06T00:00:00.000Z' }));
+    store.nodes[groupKey].entries = [...autoNotes, ...store.nodes[groupKey].entries];
+    await writeFile(paths.segmentLearningsPath, JSON.stringify(store, null, 2));
+
+    const batch = await generateContentBatch('mercado-cap', { days: 1, startDate: '2026-07-20' }, dir);
+    await deleteProjectContent('mercado-cap', batch.items[0].contentId, dir, batch.batchId, 'mais um motivo');
+    await saveLearningEntry({ scope: 'segment', groupKey, bucket: 'technical', kind: 'text', text: 'regra nova' }, dir, new Date());
+
+    const entries = (await loadSegmentLearningNodes(paths, project)).at(-1).entries;
+    assert.ok(entries.some((entry) => entry.title === 'OFERTA DIRETA'), 'the registered structure must survive the cap');
+    assert.ok(entries.filter((entry) => entry.source === 'auto').length <= 40, 'automatic notes stay capped');
+  });
+});
+
 test('buildSegmentLayoutReferences returns every approved creative image, newest first, skips avoid/text entries', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'pizzaria-layout', name: 'Pizzaria Layout', handle: '@pizzarialayout', approvalEmail: 'a@example.com' }, dir);
