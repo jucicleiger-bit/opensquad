@@ -4790,6 +4790,13 @@ export async function approveContent(projectId, contentId, targetDir = process.c
   const content = await readJson(contentPath);
   const now = new Date().toISOString();
 
+  // The caption is still the briefing skeleton (copy agent failed or came
+  // back empty) — approving it ships internal notes and, on 2026-10-11, got a
+  // Carvalho story refused by Meta for length.
+  if (content.captionGenerationError) {
+    throw new Error(`Legenda não finalizada: ${content.captionGenerationError}`);
+  }
+
   content.status = 'aprovado';
   content.approval.approvedAt = now;
   content.approval.approvalSource = 'operator_panel';
@@ -4946,7 +4953,10 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
         return true;
       });
 
-    const earliestSlotKey = due.length ? due[0].scheduledDate + due[0].scheduledTime : null;
+    // A slot that already failed goes behind every untried one, or it stays
+    // the earliest slot and blocks the rest (gaveta, Carvalho 2026-10-11).
+    const nextItem = due.find((item) => !item.publish?.error) || due[0];
+    const earliestSlotKey = nextItem ? nextItem.scheduledDate + nextItem.scheduledTime : null;
     const dueInEarliestSlot = due.filter((item) => item.scheduledDate + item.scheduledTime === earliestSlotKey);
 
     for (const item of dueInEarliestSlot) {
