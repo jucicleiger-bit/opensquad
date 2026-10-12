@@ -48,6 +48,10 @@ import {
   enqueueCarouselGeneration,
   regenerateCarouselSlide,
   enqueueCarouselSlideRegeneration,
+  enqueueCarouselPlanning,
+  requestCarouselReplan,
+  startCarouselImageGeneration,
+  enqueueCarouselImageGeneration,
   generateCatalogSchedulePlan,
   chooseCreativeCta,
   creativeShapeGroupForChannel,
@@ -9577,7 +9581,7 @@ test('listAdCreatives returns an empty list for a project that never generated a
   });
 });
 
-test('generateCarousel creates a placeholder carousel with N generating slides, no image/roteiro yet', async () => {
+test('generateCarousel creates a carousel waiting for its plan: N empty slides, nothing generating yet', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-base', name: 'Boss Pizzaria' }, dir);
 
@@ -9585,13 +9589,15 @@ test('generateCarousel creates a placeholder carousel with N generating slides, 
 
     assert.equal(carousel.slideCount, 5);
     assert.equal(carousel.slides.length, 5);
-    assert.equal(carousel.status, 'generating');
+    assert.equal(carousel.status, 'planning');
     assert.equal(carousel.format, '');
     assert.equal(carousel.outlineGenerationError, null);
+    assert.equal(carousel.planError, null);
+    assert.deepEqual(carousel.planMessages, []);
     carousel.slides.forEach((slide, index) => {
       assert.equal(slide.order, index + 1);
       assert.equal(slide.channel, 'instagram_feed');
-      assert.equal(slide.image.generating, true);
+      assert.equal(slide.image.generating, false);
       assert.deepEqual(slide.image.dimensions, { width: 1080, height: 1350 });
       assert.equal(slide.contentTopic, null);
       assert.equal(slide.slideText, '');
@@ -10473,6 +10479,180 @@ test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only 
     const untouchedSlide = reloaded.slides.find((s) => s.slideId !== targetSlideId);
     assert.equal(changedSlide.image.url, 'https://cdn.example.com/regenerated.png');
     assert.equal(untouchedSlide.image.url, 'https://cdn.example.com/original.png', 'the other slide must be untouched');
+  });
+});
+
+// Polls disk until `done(carousel)` holds — every planning/generation step
+// below is fire-and-forget, same as the rest of this file's carousel tests.
+async function waitForCarousel(projectId, carouselId, dir, done) {
+  let carousel;
+  for (let i = 0; i < 100; i += 1) {
+    carousel = (await listCarousels(projectId, dir)).find((entry) => entry.carouselId === carouselId);
+    if (carousel && done(carousel)) return carousel;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+  }
+  return carousel;
+}
+
+function fakeOutline(texts, format = 'listicle') {
+  return { format, slides: texts.map((slideText, index) => ({ role: index === 0 ? 'cover' : 'content', slideText })) };
+}
+
+test('enqueueCarouselPlanning fills the plan without generating any image', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-plano', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-plano', { briefing: 'Pizza de sexta', slideCount: 2 }, dir);
+    let imageCalls = 0;
+
+    enqueueCarouselPlanning('carrossel-plano', carousel.carouselId, {
+      outlineGenerator: async () => fakeOutline(['Sexta é dia de pizza', 'Peça pelo WhatsApp']),
+      imageGenerator: async () => { imageCalls += 1; return { url: 'https://cdn.example.com/x.png' }; },
+    }, dir);
+
+    const planned = await waitForCarousel('carrossel-plano', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(planned.status, 'plan_ready');
+    assert.equal(planned.format, 'listicle');
+    assert.deepEqual(planned.slides.map((s) => s.slideText), ['Sexta é dia de pizza', 'Peça pelo WhatsApp']);
+    assert.equal(planned.planError, null);
+    planned.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.image.url, undefined);
+      assert.ok(slide.contentTopic);
+    });
+    assert.equal(imageCalls, 0, 'planning must never generate an image');
+  });
+});
+
+test('requestCarouselReplan + enqueueCarouselPlanning send the current plan and the request, and can change the slide count', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-ajuste', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-ajuste', { briefing: 'Pizza de sexta', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-ajuste', carousel.carouselId, {
+      outlineGenerator: async () => fakeOutline(['Capa', 'CTA']),
+    }, dir);
+    await waitForCarousel('carrossel-ajuste', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    const { carousel: pending, request } = await requestCarouselReplan('carrossel-ajuste', carousel.carouselId, 'faz com 3 slides e fala da entrega', dir);
+    assert.equal(pending.status, 'planning');
+    assert.equal(request, 'faz com 3 slides e fala da entrega');
+    assert.equal(pending.planMessages.length, 1);
+    assert.equal(pending.planMessages[0].text, 'faz com 3 slides e fala da entrega');
+
+    let received;
+    enqueueCarouselPlanning('carrossel-ajuste', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Capa', 'Entrega em 30 min', 'CTA']); },
+    }, dir, { request });
+
+    const replanned = await waitForCarousel('carrossel-ajuste', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(received.request, 'faz com 3 slides e fala da entrega');
+    assert.deepEqual(received.currentPlan.slides.map((s) => s.slideText), ['Capa', 'CTA']);
+    assert.equal(replanned.slideCount, 3);
+    assert.deepEqual(replanned.slides.map((s) => s.slideText), ['Capa', 'Entrega em 30 min', 'CTA']);
+    assert.deepEqual(replanned.slides.map((s) => s.order), [1, 2, 3]);
+  });
+});
+
+test('a failed replan keeps the previous plan and sets planError', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-ajuste-falho', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-ajuste-falho', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-ajuste-falho', carousel.carouselId, {
+      outlineGenerator: async () => fakeOutline(['Capa', 'CTA']),
+    }, dir);
+    await waitForCarousel('carrossel-ajuste-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    const { request } = await requestCarouselReplan('carrossel-ajuste-falho', carousel.carouselId, 'muda tudo', dir);
+    enqueueCarouselPlanning('carrossel-ajuste-falho', carousel.carouselId, {
+      outlineGenerator: async () => { throw new Error('timeout'); },
+    }, dir, { request });
+
+    const after = await waitForCarousel('carrossel-ajuste-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.deepEqual(after.slides.map((s) => s.slideText), ['Capa', 'CTA']);
+    assert.equal(after.planError, 'Não consegui ajustar o plano, tente de novo.');
+    assert.equal(after.outlineGenerationError, null);
+  });
+});
+
+test('a failed first plan lands in plan_ready with planError and empty slides, and a retry with no message plans fresh', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-plano-falho', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-plano-falho', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-plano-falho', carousel.carouselId, { outlineGenerator: async () => null }, dir);
+    const failed = await waitForCarousel('carrossel-plano-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(failed.planError, 'Não consegui montar o plano, tente de novo.');
+    assert.ok(failed.slides.every((s) => !s.slideText));
+
+    const { request } = await requestCarouselReplan('carrossel-plano-falho', carousel.carouselId, '', dir);
+    assert.equal(request, '', 'no plan yet: a retry is a fresh plan, not an adjustment');
+    let received;
+    enqueueCarouselPlanning('carrossel-plano-falho', carousel.carouselId, {
+      outlineGenerator: async (payload) => { received = payload; return fakeOutline(['Capa', 'CTA']); },
+    }, dir, { request });
+    const planned = await waitForCarousel('carrossel-plano-falho', carousel.carouselId, dir, (c) => c.status === 'plan_ready' && !c.planError);
+    assert.equal(received.currentPlan, undefined);
+    assert.deepEqual(planned.slides.map((s) => s.slideText), ['Capa', 'CTA']);
+  });
+});
+
+test('requestCarouselReplan refuses a carousel that is not in plan_ready, and a blank message when a plan exists', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-ajuste-recusa', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-ajuste-recusa', { briefing: 'teste', slideCount: 2 }, dir);
+    await assert.rejects(
+      () => requestCarouselReplan('carrossel-ajuste-recusa', carousel.carouselId, 'muda', dir),
+      (err) => err.code === 'CAROUSEL_CONFLICT',
+    );
+    enqueueCarouselPlanning('carrossel-ajuste-recusa', carousel.carouselId, { outlineGenerator: async () => fakeOutline(['Capa', 'CTA']) }, dir);
+    await waitForCarousel('carrossel-ajuste-recusa', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    await assert.rejects(
+      () => requestCarouselReplan('carrossel-ajuste-recusa', carousel.carouselId, '   ', dir),
+      /Escreva o que mudar no plano/,
+    );
+  });
+});
+
+test('startCarouselImageGeneration + enqueueCarouselImageGeneration generate images from the approved plan', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-imagens', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-imagens', { briefing: 'teste', slideCount: 2 }, dir);
+    await assert.rejects(
+      () => startCarouselImageGeneration('carrossel-imagens', carousel.carouselId, dir),
+      (err) => err.code === 'CAROUSEL_CONFLICT',
+      'no plan yet',
+    );
+    enqueueCarouselPlanning('carrossel-imagens', carousel.carouselId, { outlineGenerator: async () => fakeOutline(['Capa do plano', 'CTA do plano']) }, dir);
+    await waitForCarousel('carrossel-imagens', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+
+    const started = await startCarouselImageGeneration('carrossel-imagens', carousel.carouselId, dir);
+    assert.equal(started.status, 'generating');
+    started.slides.forEach((slide) => assert.equal(slide.image.generating, true));
+
+    const objectives = [];
+    enqueueCarouselImageGeneration('carrossel-imagens', carousel.carouselId, {
+      imageGenerator: async (payload) => { objectives.push(payload.content.contentTopic.objective); return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' }; },
+    }, dir);
+
+    const ready = await waitForCarousel('carrossel-imagens', carousel.carouselId, dir, (c) => c.status === 'ready');
+    assert.equal(ready.status, 'ready');
+    ready.slides.forEach((slide) => {
+      assert.equal(slide.image.generating, false);
+      assert.equal(slide.image.url, 'https://cdn.example.com/x.png');
+    });
+    assert.ok(objectives.some((text) => text.includes('Capa do plano')));
+    assert.ok(objectives.some((text) => text.includes('CTA do plano')));
+  });
+});
+
+test('reconcileInterruptedGenerations turns a carousel stuck in planning into plan_ready with a retry message', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-plano-travado', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-plano-travado', { briefing: 'teste', slideCount: 2 }, dir);
+
+    await reconcileInterruptedGenerations(dir);
+
+    const reloaded = JSON.parse(await readFile(carousel.filePath, 'utf-8'));
+    assert.equal(reloaded.status, 'plan_ready');
+    assert.match(reloaded.planError, /interrompido/);
   });
 });
 

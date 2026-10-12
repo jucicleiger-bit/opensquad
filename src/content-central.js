@@ -3043,7 +3043,7 @@ function clampCarouselSlideCount(value) {
   return Math.min(CAROUSEL_SLIDE_COUNT_MAX, Math.max(CAROUSEL_SLIDE_COUNT_MIN, numeric));
 }
 
-function buildCarouselSlideSkeleton(carouselId, order) {
+function buildCarouselSlideSkeleton(carouselId, order, { generating = true } = {}) {
   return {
     slideId: `${carouselId}-slide-${order}`,
     order,
@@ -3054,7 +3054,7 @@ function buildCarouselSlideSkeleton(carouselId, order) {
     channel: 'instagram_feed',
     formatLabel: CHANNEL_LABELS.instagram_feed,
     image: {
-      generating: true,
+      generating,
       prompt: '',
       references: [],
       aspectRatio: imageAspectRatioForChannel(),
@@ -3090,9 +3090,13 @@ export async function generateCarousel(projectId, options = {}, targetDir = proc
       briefing,
       format: '',
       slideCount,
-      slides: Array.from({ length: slideCount }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1)),
+      // Standalone carousels plan first: nothing generates until the
+      // operator approves the plan (startCarouselImageGeneration).
+      slides: Array.from({ length: slideCount }, (_, index) => buildCarouselSlideSkeleton(carouselId, index + 1, { generating: false })),
+      planMessages: [],
+      planError: null,
       outlineGenerationError: null,
-      status: 'generating',
+      status: 'planning',
       createdAt,
       updatedAt: createdAt,
       filePath,
@@ -3232,15 +3236,33 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
   // would sit on disk as format:"listicle" for the whole multi-minute
   // generation window and a crash mid-run would leave it stuck forever.
   const setFormat = overrides.setFormat || ((c, style) => { c.format = style; });
+  // Only a replan adds keys to the generator payload — the batch path and a
+  // first plan send exactly { project, briefing, slideCount }, as before.
+  const replanning = Boolean(overrides.currentPlan);
   let outline = null;
   if (typeof options.outlineGenerator === 'function') {
     try {
-      outline = await options.outlineGenerator({ project, briefing, slideCount });
+      outline = await options.outlineGenerator({
+        project,
+        briefing,
+        slideCount,
+        ...(replanning ? { currentPlan: overrides.currentPlan, request: overrides.request } : {}),
+      });
     } catch (err) {
       carousel.outlineGenerationError = err.message;
     }
   }
-  if (!(outline && Array.isArray(outline.slides) && outline.slides.length === slideCount)) return false;
+  const size = Array.isArray(outline?.slides) ? outline.slides.length : 0;
+  // A replan may change the count ("faz com 6 slides"); a first plan and the
+  // batch path must return exactly what was asked.
+  const sizeOk = replanning
+    ? size >= CAROUSEL_SLIDE_COUNT_MIN && size <= CAROUSEL_SLIDE_COUNT_MAX
+    : size === slideCount;
+  if (!sizeOk) return false;
+  if (size !== carousel.slides.length) {
+    carousel.slides = Array.from({ length: size }, (_, index) => buildCarouselSlideSkeleton(carousel.carouselId, index + 1, { generating: false }));
+    carousel.slideCount = size;
+  }
 
   setFormat(carousel, outline.format || '');
   carousel.slides.forEach((slide, index) => {
@@ -3250,7 +3272,7 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
     slide.contentTopic = buildCarouselSlideContentTopic({
       project,
       order: slide.order,
-      slideCount,
+      slideCount: size,
       slideText: slide.slideText,
     });
   });
@@ -3322,6 +3344,112 @@ export function enqueueCarouselGeneration(projectId, carousel, options = {}, tar
     .then((project) => runCarouselGeneration(carousel, project, projectId, options, paths, overrides))
     .catch((err) => {
       console.error(`[content-central] background carousel generation failed for ${projectId}/${carousel.carouselId}:`, err.message);
+    });
+}
+
+const CAROUSEL_PLAN_ERROR = 'Não consegui montar o plano, tente de novo.';
+const CAROUSEL_REPLAN_ERROR = 'Não consegui ajustar o plano, tente de novo.';
+
+function carouselConflict(message) {
+  const err = new Error(message);
+  err.code = 'CAROUSEL_CONFLICT';
+  return err;
+}
+
+function carouselHasPlan(carousel) {
+  return carousel.slides.length > 0 && carousel.slides.every((slide) => slide.slideText);
+}
+
+async function readCarousel(paths, carouselId) {
+  const safeId = String(carouselId || '').replace(/[\\/]/g, '');
+  if (!safeId) throw new Error('ID do carrossel inválido.');
+  return readJson(join(paths.carouselsDir, `${safeId}.json`));
+}
+
+// Roteiro only — the standalone tab's "Planejar"/"Ajustar". A failure never
+// loses work: the previous plan stays and planError says to try again.
+async function runCarouselPlanning(carousel, project, options, overrides = {}) {
+  const previous = { slides: carousel.slides, slideCount: carousel.slideCount, format: carousel.format };
+  const planned = await applyCarouselOutline(carousel, project, options, overrides);
+  if (planned) {
+    carousel.planError = null;
+  } else {
+    Object.assign(carousel, previous);
+    carousel.planError = overrides.currentPlan ? CAROUSEL_REPLAN_ERROR : CAROUSEL_PLAN_ERROR;
+  }
+  carousel.outlineGenerationError = null;
+  carousel.status = 'plan_ready';
+  carousel.updatedAt = new Date().toISOString();
+  await writeJson(carousel.filePath, carousel);
+}
+
+// Fire-and-forget, same as enqueueCarouselGeneration. `request` non-empty
+// means "adjust the current plan"; empty means "plan from the briefing".
+export function enqueueCarouselPlanning(projectId, carouselId, options = {}, targetDir = process.cwd(), { request = '' } = {}) {
+  const paths = getCentralPaths(targetDir, projectId);
+  Promise.all([loadProject(paths), readCarousel(paths, carouselId)])
+    .then(([project, carousel]) => runCarouselPlanning(carousel, project, options, request
+      ? {
+        currentPlan: { format: carousel.format, slides: carousel.slides.map(({ role, slideText }) => ({ role, slideText })) },
+        request,
+      }
+      : {}))
+    .catch((err) => {
+      console.error(`[content-central] background carousel planning failed for ${projectId}/${carouselId}:`, err.message);
+    });
+}
+
+// "Ajustar" / "Tentar de novo". With no plan yet (a failed first plan) the
+// message is only logged and the plan is rebuilt from the briefing.
+export async function requestCarouselReplan(projectId, carouselId, message, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const carousel = await readCarousel(paths, carouselId);
+    if (carousel.status !== 'plan_ready') throw carouselConflict('O plano só pode ser ajustado antes de gerar as imagens.');
+    const text = String(message || '').trim();
+    const hasPlan = carouselHasPlan(carousel);
+    if (hasPlan && !text) throw new Error('Escreva o que mudar no plano.');
+    if (text) carousel.planMessages = [...(carousel.planMessages || []), { text, at: new Date().toISOString() }];
+    carousel.status = 'planning';
+    carousel.planError = null;
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return { carousel, request: hasPlan ? text : '' };
+  });
+}
+
+// "Gerar imagens". A planError left by a failed adjust does not block this:
+// the previous plan is intact.
+export async function startCarouselImageGeneration(projectId, carouselId, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const carousel = await readCarousel(paths, carouselId);
+    if (carousel.status !== 'plan_ready' || !carouselHasPlan(carousel)) {
+      throw carouselConflict('Monte o plano antes de gerar as imagens.');
+    }
+    carousel.status = 'generating';
+    carousel.planError = null;
+    for (const slide of carousel.slides) {
+      slide.image.generating = true;
+      slide.imageGenerationError = null;
+    }
+    carousel.updatedAt = new Date().toISOString();
+    await writeJson(carousel.filePath, carousel);
+    return carousel;
+  });
+}
+
+export function enqueueCarouselImageGeneration(projectId, carouselId, options = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  Promise.all([loadProject(paths), readCarousel(paths, carouselId)])
+    .then(async ([project, carousel]) => {
+      await generateCarouselSlideImages(carousel, project, projectId, options, paths);
+      carousel.status = 'ready';
+      carousel.updatedAt = new Date().toISOString();
+      await writeJson(carousel.filePath, carousel);
+    })
+    .catch((err) => {
+      console.error(`[content-central] background carousel image generation failed for ${projectId}/${carouselId}:`, err.message);
     });
 }
 
@@ -5474,6 +5602,11 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
         }
         if (carousel.status === 'generating') {
           carousel.status = 'ready';
+          touched = true;
+        }
+        if (carousel.status === 'planning') {
+          carousel.status = 'plan_ready';
+          carousel.planError = 'Planejamento interrompido (o servidor foi reiniciado). Tente de novo.';
           touched = true;
         }
         if (!touched) continue;
