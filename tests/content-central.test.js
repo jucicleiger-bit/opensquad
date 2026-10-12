@@ -98,6 +98,8 @@ import {
   saveProjectOffer,
   saveProjectOfferGroup,
   saveProjectPillar,
+  scheduleCarousel,
+  draftCarouselCaption,
   suggestProjectPillars,
   saveProjectAsset,
   saveProjectToken,
@@ -11990,4 +11992,130 @@ test('offer drafts are stored apart from offers and can be removed', async () =>
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// A carousel whose plan and images are already done, written straight to
+// disk — scheduling only reads the finished file, it never generates.
+async function writeReadyCarousel(projectId, dir, extra = {}) {
+  const carousel = await generateCarousel(projectId, { briefing: 'Pizza de sexta', slideCount: 2 }, dir);
+  const ready = {
+    ...carousel,
+    status: 'ready',
+    format: 'listicle',
+    slides: carousel.slides.map((slide, index) => ({
+      ...slide,
+      role: index === 0 ? 'cover' : 'cta',
+      slideText: index === 0 ? 'Sexta é dia de pizza' : 'Peça pelo WhatsApp',
+      image: { ...slide.image, generating: false, url: `/api/projects/${projectId}/assets/assets/generated/slide-${index + 1}.png` },
+      imageGenerationError: null,
+    })),
+    ...extra,
+  };
+  await writeFile(carousel.filePath, JSON.stringify(ready, null, 2), 'utf-8');
+  return ready;
+}
+
+test('scheduleCarousel writes an approved carousel item for the date/time with the given caption, reusing the slide images', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda', name: 'Boss Pizzaria' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-agenda', dir);
+
+    const { item, carousel: updated } = await scheduleCarousel('carrossel-agenda', carousel.carouselId, {
+      date: '2026-10-10', time: '18:30', caption: 'Sexta tem pizza! 🍕',
+    }, dir);
+
+    assert.equal(item.format, 'carousel');
+    assert.equal(item.channel, 'instagram_feed');
+    assert.equal(item.status, 'aprovado');
+    assert.equal(item.approval.approvalSource, 'carousel_scheduled');
+    assert.ok(item.approval.approvedAt);
+    assert.equal(item.scheduledDate, '2026-10-10');
+    assert.equal(item.scheduledTime, '18:30');
+    assert.equal(item.caption.text, 'Sexta tem pizza! 🍕');
+    assert.equal(item.carouselFormat, 'listicle');
+    assert.equal(item.sourceCarouselId, carousel.carouselId);
+    assert.deepEqual(item.slides.map((s) => s.image.url), carousel.slides.map((s) => s.image.url));
+
+    const listed = await listProjectContent('carrossel-agenda', dir);
+    assert.ok(listed.some((entry) => entry.contentId === item.contentId), 'it is a normal calendar item');
+    assert.deepEqual(updated.schedules, [{ contentId: item.contentId, batchId: item.batchId, date: '2026-10-10', time: '18:30' }]);
+
+    // Deleting the standalone carousel must not break the scheduled post.
+    await deleteCarousel('carrossel-agenda', carousel.carouselId, dir);
+    const stillThere = JSON.parse(await readFile(item.filePath, 'utf-8'));
+    assert.equal(stillThere.slides[0].image.url, carousel.slides[0].image.url);
+  });
+});
+
+test('scheduleCarousel twice on the same day creates two distinct items', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda-2x', name: 'Boss Pizzaria' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-agenda-2x', dir);
+    const first = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: '2026-10-10', time: '09:00', caption: 'a' }, dir);
+    const second = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: '2026-10-10', time: '18:00', caption: 'b' }, dir);
+    assert.notEqual(first.item.contentId, second.item.contentId);
+    assert.equal(second.carousel.schedules.length, 2);
+  });
+});
+
+test('scheduleCarousel refuses an unfinished carousel, a bad date/time and an empty caption', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda-recusa', name: 'Boss Pizzaria' }, dir);
+    const planning = await generateCarousel('carrossel-agenda-recusa', { briefing: 'teste', slideCount: 2 }, dir);
+    await assert.rejects(
+      () => scheduleCarousel('carrossel-agenda-recusa', planning.carouselId, { date: '2026-10-10', time: '09:00', caption: 'x' }, dir),
+      /Gere todos os slides antes de agendar/,
+    );
+    const failedSlide = await writeReadyCarousel('carrossel-agenda-recusa', dir);
+    failedSlide.slides[1].imageGenerationError = 'provider timeout';
+    await writeFile(failedSlide.filePath, JSON.stringify(failedSlide, null, 2), 'utf-8');
+    await assert.rejects(
+      () => scheduleCarousel('carrossel-agenda-recusa', failedSlide.carouselId, { date: '2026-10-10', time: '09:00', caption: 'x' }, dir),
+      /Gere todos os slides antes de agendar/,
+    );
+    const ready = await writeReadyCarousel('carrossel-agenda-recusa', dir);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '10/10/2026', time: '09:00', caption: 'x' }, dir), /Data inválida/);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '2026-10-10', time: '9h', caption: 'x' }, dir), /Horário inválido/);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '2026-10-10', time: '09:00', caption: '  ' }, dir), /legenda/);
+  });
+});
+
+test('draftCarouselCaption asks the caption writer about the carousel (its slides and offer) and returns the text without saving', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-legenda', name: 'Boss Pizzaria' }, dir);
+    const { offer } = await saveProjectOffer('carrossel-legenda', { name: 'Pizza Calabresa', type: 'offer', price: 'R$ 49,90' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-legenda', dir, { offerId: offer.id });
+    let received;
+    const text = await draftCarouselCaption('carrossel-legenda', carousel.carouselId, {
+      captionGenerator: async (payload) => { received = payload; return 'Legenda pronta'; },
+    }, dir);
+    assert.equal(text, 'Legenda pronta');
+    assert.equal(received.content.format, 'carousel');
+    assert.match(received.content.contentTopic.items, /Sexta é dia de pizza/);
+    assert.equal(received.content.contentTopic.offerName, 'Pizza Calabresa');
+    assert.equal(received.content.contentTopic.price, 'R$ 49,90');
+    await assert.rejects(() => draftCarouselCaption('carrossel-legenda', carousel.carouselId, {}, dir), /legenda à mão/);
+  });
+});
+
+test('runDuePublishSweep with an itemFilter publishes only the due carousel, leaving a due single-image post alone', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-varredura', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'a@example.com' }, dir);
+    const batch = await generateContentBatch('carrossel-varredura', { days: 1, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    await approveContent('carrossel-varredura', batch.items[0].contentId, dir, batch.batchId);
+    const carousel = await writeReadyCarousel('carrossel-varredura', dir);
+    const { item } = await scheduleCarousel('carrossel-varredura', carousel.carouselId, { date: '2026-07-20', time: '09:00', caption: 'x' }, dir);
+
+    const published = [];
+    const result = await runDuePublishSweep(dir, {
+      now: new Date('2026-07-20T12:00:00.000Z'),
+      metaPublisher: async ({ content }) => { published.push(content.contentId); return { mediaId: 'm-1' }; },
+      itemFilter: (entry) => entry.format === 'carousel',
+    });
+
+    assert.deepEqual(published, [item.contentId]);
+    assert.deepEqual(result.published, [item.contentId]);
+    const single = JSON.parse(await readFile(batch.items[0].filePath, 'utf-8'));
+    assert.ok(!single.publish.realPublished, 'the single-image post belongs to gaveta, not this sweep');
+  });
 });

@@ -3480,6 +3480,136 @@ export function enqueueCarouselImageGeneration(projectId, carouselId, options = 
     });
 }
 
+// The post's own topic (caption writer, calendar card). Unlike a slide's
+// topic, the offer name and price belong here — the caption may name them.
+function carouselPostTopic(carousel, project) {
+  const offer = findCarouselOffer(project, carousel.offerId);
+  return {
+    id: 'carousel-post',
+    type: 'institutional',
+    source: 'carousel',
+    label: `Carrossel — ${project.name}`,
+    offerId: offer?.id || null,
+    offerName: offer?.name || '',
+    price: offer ? offerPriceLabel(offer) : '',
+    items: carousel.slides.map((slide) => slide.slideText).filter(Boolean).join(' | '),
+    cta: offer?.cta || '',
+    autoGenerateCta: !offer?.cta,
+    notes: '',
+    objective: carousel.briefing,
+  };
+}
+
+function carouselIsFinished(carousel) {
+  return carousel.status === 'ready'
+    && carousel.slides.length > 0
+    && carousel.slides.every((slide) => slide.image?.url && !slide.image.generating && !slide.imageGenerationError);
+}
+
+// "Agendar" opens with a caption already written; nothing is saved here.
+export async function draftCarouselCaption(projectId, carouselId, options = {}, targetDir = process.cwd()) {
+  if (typeof options.captionGenerator !== 'function') throw new Error('Redator de IA não configurado — escreva a legenda à mão.');
+  const paths = getCentralPaths(targetDir, projectId);
+  const [project, carousel] = await Promise.all([loadProject(paths), readCarousel(paths, carouselId)]);
+  const item = {
+    channel: 'instagram_feed',
+    formatLabel: CHANNEL_LABELS.instagram_feed,
+    format: 'carousel',
+    briefing: carousel.briefing,
+    slides: carousel.slides,
+    contentTopic: carouselPostTopic(carousel, project),
+    caption: { text: '', version: 1 },
+  };
+  await writeAiCaptionForItem(item, project, options);
+  if (!item.caption.text) throw new Error(item.captionGenerationError || 'O redator de IA não retornou uma legenda.');
+  return item.caption.text;
+}
+
+let carouselScheduleCounter = 0;
+
+// "Agendar": the finished carousel becomes a normal calendar item, already
+// approved (the operator reviewed every slide here), in the same shape the
+// automatic calendar carousel uses — so the calendar, the approval screens and
+// publishCarouselToInstagram need nothing new. Slide images already live in
+// the project's generated assets and deleteCarousel removes only the JSON, so
+// the slides are cloned, not their files.
+export async function scheduleCarousel(projectId, carouselId, input = {}, targetDir = process.cwd()) {
+  const paths = getCentralPaths(targetDir, projectId);
+  return withProjectLock(targetDir, projectId, async () => {
+    const project = await loadProject(paths);
+    const carousel = await readCarousel(paths, carouselId);
+    if (!carouselIsFinished(carousel)) throw new Error('Gere todos os slides antes de agendar.');
+    const date = String(input.date || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Data inválida.');
+    const time = String(input.time || project.contentSettings?.defaultPostTime || DEFAULT_TIME).trim();
+    if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('Horário inválido.');
+    const caption = String(input.caption || '').trim();
+    if (!caption) throw new Error('Escreva a legenda antes de agendar.');
+
+    // Same uniqueness reasoning as flyerBatchTokenCounter.
+    const batchId = `${date}-carrossel-${Date.now()}-${carouselScheduleCounter++}`;
+    const batchDir = join(paths.draftsDir, batchId);
+    await mkdir(batchDir, { recursive: true });
+    const contentId = `${project.projectId}-${batchId}`;
+    const filePath = join(batchDir, 'day-01-instagram_feed-01.json');
+    const now = new Date().toISOString();
+    const contentTopic = carouselPostTopic(carousel, project);
+    const item = {
+      schemaVersion: 1,
+      contentId,
+      projectId: project.projectId,
+      batchId,
+      dayNumber: 1,
+      slotNumber: 1,
+      scheduledDate: date,
+      scheduledTime: time,
+      channel: 'instagram_feed',
+      formatLabel: CHANNEL_LABELS.instagram_feed,
+      contentTopic,
+      creativeGroupKey: null,
+      creativeSharedWith: null,
+      contentReview: buildContentReview({
+        channel: 'instagram_feed',
+        aspectRatio: imageAspectRatioForChannel(),
+        dimensions: imageDimensionsForChannel('instagram_feed'),
+        contentTopic,
+      }),
+      status: 'aprovado',
+      title: `Carrossel — ${project.name}`,
+      format: 'carousel',
+      briefing: carousel.briefing,
+      carouselFormat: carousel.format || '',
+      slideCount: carousel.slides.length,
+      slides: structuredClone(carousel.slides),
+      outlineGenerationError: null,
+      caption: { text: caption, version: 1 },
+      dayRules: [],
+      generationContext: { globalRules: [], projectRules: [...(project.rules?.project || [])], contentRules: [] },
+      approval: { required: false, emailSentAt: null, approvedAt: now, approvalSource: 'carousel_scheduled' },
+      publish: { publishedAt: null, metaMediaId: null, error: null },
+      sourceCarouselId: carousel.carouselId,
+      filePath,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeJson(filePath, item);
+    await writeJson(join(batchDir, 'batch.json'), {
+      batchId,
+      projectId: project.projectId,
+      createdAt: now,
+      days: 1,
+      channel: 'instagram_feed',
+      startDate: date,
+      items: [item],
+    });
+
+    carousel.schedules = [...(carousel.schedules || []), { contentId, batchId, date, time }];
+    carousel.updatedAt = now;
+    await writeJson(carousel.filePath, carousel);
+    return { item, carousel };
+  });
+}
+
 // "Regenerar esse slide" — refreshes just that slide's image references
 // (references can change if the project's reference library changed since
 // the carousel was generated, same reasoning as regenerateAdCreative).
@@ -5078,6 +5208,7 @@ export async function runDuePublishSweep(targetDir = process.cwd(), options = {}
     const projectId = projectSummary.projectId;
     let content = await listProjectContent(projectId, targetDir);
     if (options.channels) content = content.filter((item) => options.channels.has(item.channel));
+    if (options.itemFilter) content = content.filter(options.itemFilter);
     // A marker with no outcome means that attempt died mid-send (PC shut
     // down or slept) — sweeps never overlap, so it isn't still running. It
     // may already be live, so it's never auto-retried (see publishOneItem);
