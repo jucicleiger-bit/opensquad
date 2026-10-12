@@ -3057,6 +3057,21 @@ export const CAROUSEL_BACKGROUNDS = {
   escuro: 'escuro (preto ou grafite), texto claro, destaques na cor da marca.',
 };
 
+// "marca" on King (#000000, #FFFFFF, #FFD100) came out black — the same as
+// "escuro". The brand background is its first vivid colour; a palette with
+// only black/white/greys keeps the generic line.
+function carouselBrandBackgroundLine(colors) {
+  const vivid = colors.find((color) => {
+    const rgb = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(color || '').trim());
+    if (!rgb) return false;
+    const channels = rgb.slice(1).map((hex) => parseInt(hex, 16));
+    return Math.max(...channels) - Math.min(...channels) >= 48;
+  });
+  return vivid
+    ? `liso na cor ${vivid} da marca, texto em preto ou branco (o que contrastar melhor), destaques na outra cor da marca.`
+    : CAROUSEL_BACKGROUNDS.marca;
+}
+
 const CAROUSEL_SLIDE_COUNT_MIN = 2;
 const CAROUSEL_SLIDE_COUNT_MAX = 10;
 
@@ -8742,7 +8757,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
     slideContent
       ? section('CONTEÚDO E LAYOUT DESTE SLIDE', [
         `Layout: ${CAROUSEL_LAYOUTS[slideContent.layout] || CAROUSEL_LAYOUTS.texto_imagem}`,
-        CAROUSEL_BACKGROUNDS[slideContent.background] ? `Fundo (nas áreas sem imagem): ${CAROUSEL_BACKGROUNDS[slideContent.background]}` : '',
+        CAROUSEL_BACKGROUNDS[slideContent.background]
+          ? `Fundo (nas áreas sem imagem): ${slideContent.background === 'marca' ? carouselBrandBackgroundLine(brandColorsForBackground) : CAROUSEL_BACKGROUNDS[slideContent.background]}`
+          : '',
         slideContent.title ? `Título (escrever exatamente): ${slideContent.title}` : '',
         slideContent.body ? `Texto de apoio (escrever exatamente, com os negritos indicados): ${slideContent.body}` : '',
         slideContent.highlight ? `Destaque grande (escrever exatamente, em caixa alta, na cor de destaque da marca): ${slideContent.highlight}` : '',

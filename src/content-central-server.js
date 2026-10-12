@@ -4833,7 +4833,7 @@ function editorialCarouselOutlineRules(offer, project) {
     'ROTEIRO DE LEITURA: cada slide entrega uma informação completa e o carrossel se lê como uma sequência — não como letreiros soltos com uma frase gigante.',
     '- "title": título do slide, de 3 a 9 palavras.',
     '- "body": texto de apoio de 1 a 3 frases (até ~35 palavras), com **negrito** nas 2 ou 3 palavras mais importantes. Pode ficar vazio na capa.',
-    '- "highlight": opcional — uma expressão curta (até 4 palavras) que merece letra gigante; usar em no máximo 1 a cada 3 slides.',
+    '- "highlight": opcional — uma expressão curta (até 4 palavras) que merece letra gigante; usar em no máximo 1 a cada 3 slides, e nunca repetindo palavras do "title".',
     '- "bullets": opcional — de 3 a 5 itens curtos, só quando o slide for uma lista.',
     '- "visual": o que a imagem do slide mostra, de forma concreta (ex.: "celular mostrando uma agenda de posts", "dono de loja organizando a prateleira"). Vazio quando o layout for texto_central.',
     offer?.hasPhotos ? '- Este assunto tem foto real do produto cadastrada: nos slides com imagem, "visual" é a foto real do produto (com um contexto simples, se fizer sentido).' : '',
@@ -4857,10 +4857,13 @@ export function parseCarouselOutlineSlide(entry) {
   const role = ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content';
   const title = String(entry?.title || '').trim();
   if (!title) return { role, slideText: String(entry?.slideText || '').trim() };
+  const highlight = String(entry?.highlight || '').trim();
   const content = {
     title,
     body: String(entry?.body || '').trim(),
-    highlight: String(entry?.highlight || '').trim(),
+    // King's cover (2026-10-12): "Muitos produtos, pouca divulgação" over a
+    // giant "POUCA DIVULGAÇÃO" said the same thing twice.
+    highlight: carouselWords(highlight).every((word) => carouselWords(title).includes(word)) ? '' : highlight,
     bullets: (Array.isArray(entry?.bullets) ? entry.bullets : []).map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5),
     visual: String(entry?.visual || '').trim(),
     layout: Object.hasOwn(CAROUSEL_LAYOUTS, entry?.layout) ? entry.layout : 'texto_imagem',
@@ -4868,6 +4871,10 @@ export function parseCarouselOutlineSlide(entry) {
     bridge: String(entry?.bridge || '').trim(),
   };
   return { role, slideText: carouselOutlineSlideText(content), content };
+}
+
+function carouselWords(text) {
+  return text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 }
 
 function carouselOutlineSlideText(content) {

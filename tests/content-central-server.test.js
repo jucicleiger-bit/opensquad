@@ -5071,6 +5071,8 @@ test('parseCarouselOutlineSlide keeps a structured slide\'s layout and composes 
 
   assert.equal(structured.content.background, '', 'unknown background is left for balancing');
   assert.equal(parseCarouselOutlineSlide({ title: 'T', background: 'marca' }).content.background, 'marca');
+  assert.equal(parseCarouselOutlineSlide({ title: 'Muitos produtos, pouca divulgação', highlight: 'POUCA DIVULGAÇÃO' }).content.highlight, '', 'a highlight repeating the title is dropped');
+  assert.equal(parseCarouselOutlineSlide({ title: 'Quer organizar?', highlight: 'PLANEJA' }).content.highlight, 'PLANEJA');
   assert.deepEqual(parseCarouselOutlineSlide({ role: 'cta', slideText: '  Peça já  ' }), { role: 'cta', slideText: 'Peça já' });
   assert.equal(parseCarouselOutlineSlide({ role: 'x', title: 'T' }).role, 'content');
 });

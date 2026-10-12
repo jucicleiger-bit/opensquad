@@ -10740,6 +10740,10 @@ test('a standalone carousel slide is built clean: simple brand background, clean
 test('a structured roteiro slide reaches the image prompt as its exact texts, image and layout, with a reading hierarchy', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-editorial', name: 'Boss Pizzaria' }, dir);
+    const paths = getCentralPaths(dir, 'carrossel-editorial');
+    const projectJson = JSON.parse(await readFile(paths.projectPath, 'utf-8'));
+    projectJson.brandIdentity.extractedColors = ['#000000', '#FFFFFF', '#FFD100'];
+    await writeFile(paths.projectPath, JSON.stringify(projectJson, null, 2));
     const carousel = await generateCarousel('carrossel-editorial', { briefing: 'teste', slideCount: 2 }, dir);
     enqueueCarouselPlanning('carrossel-editorial', carousel.carouselId, {
       outlineGenerator: async () => ({
@@ -10748,7 +10752,7 @@ test('a structured roteiro slide reaches the image prompt as its exact texts, im
           {
             role: 'cover',
             slideText: 'Por que a pizza chega fria?',
-            content: { title: 'Por que a pizza chega fria?', body: '', highlight: 'PIZZA FRIA', bullets: [], visual: '', layout: 'texto_central', bridge: '' },
+            content: { title: 'Por que a pizza chega fria?', body: '', highlight: 'PIZZA FRIA', bullets: [], visual: '', layout: 'texto_central', background: 'marca', bridge: '' },
           },
           {
             role: 'cta',
@@ -10794,7 +10798,8 @@ test('a structured roteiro slide reaches the image prompt as its exact texts, im
     assert.doesNotMatch(cta, /da logo e da seta de arraste/);
     assert.match(cta, /sem logotipo, símbolo ou nome de marca/);
     assert.match(cta, /mockup do perfil da marca, a foto de perfil é a logo anexada/);
-    assert.doesNotMatch(prompts.cover, /Fundo \(nas áreas sem imagem\)|último slide do carrossel/, 'the cover has no background set and is not last');
+    assert.match(prompts.cover, /Fundo \(nas áreas sem imagem\): liso na cor #FFD100 da marca/, 'a black/white palette is skipped for its vivid colour');
+    assert.doesNotMatch(prompts.cover, /último slide do carrossel/);
     assert.match(prompts.cover, /arraste para o lado/);
     assert.match(cta, /Hierarquia de leitura de carrossel/);
     assert.doesNotMatch(cta, /20-30% da altura|até ~35% da altura/);
