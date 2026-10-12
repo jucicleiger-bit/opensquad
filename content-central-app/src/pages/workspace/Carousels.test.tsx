@@ -205,6 +205,47 @@ describe("Carousels", () => {
     expect(JSON.parse(scheduleCall![1].body as string)).toEqual({ date: "2026-10-10", time: "18:00", caption: "Legenda pronta" });
   });
 
+  it("invites the operator to plan the first carousel", async () => {
+    stubFetchSequence([{ body: projectState() }, { body: { carousels: [] } }]);
+    renderCarousels();
+    expect(await screen.findByText("Planeje o primeiro usando o formulário acima.")).toBeInTheDocument();
+  });
+
+  it("does not let the operator delete a carousel that is still planning", async () => {
+    stubFetchSequence([{ body: projectState() }, { body: { carousels: [{ ...PLAN_FIXTURE, status: "planning" }] } }]);
+    renderCarousels();
+    expect(await screen.findByText("Planejando…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Apagar" })).toBeDisabled();
+  });
+
+  it("blocks per-slide regeneration while the carousel is still generating", async () => {
+    stubFetchSequence([{ body: projectState() }, { body: { carousels: [{ ...CAROUSEL_FIXTURE, status: "generating" }] } }]);
+    renderCarousels();
+    const buttons = await screen.findAllByRole("button", { name: "Regenerar esse slide" });
+    buttons.forEach((button) => expect(button).toBeDisabled());
+    await userEvent.type(screen.getAllByPlaceholderText(/texto menor/)[0], "menor");
+    expect(screen.getByRole("button", { name: "Aplicar correção" })).toBeDisabled();
+  });
+
+  it("only offers Agendar when every slide has a published url (a preview alone is not enough)", async () => {
+    const previewOnly = {
+      ...CAROUSEL_FIXTURE,
+      slides: CAROUSEL_FIXTURE.slides.map((slide) => ({ ...slide, image: { previewUrl: "data:image/png;base64,AAAA", generating: false } })),
+    };
+    stubFetchSequence([{ body: projectState() }, { body: { carousels: [previewOnly] } }]);
+    renderCarousels();
+    expect(await screen.findByRole("button", { name: "Agendar" })).toBeDisabled();
+  });
+
+  it("pads an unpadded default post time in the schedule form", async () => {
+    const state = projectState();
+    state.projects[0].contentSettings.defaultPostTime = "9:00";
+    stubFetchSequence([{ body: state }, { body: { carousels: [CAROUSEL_FIXTURE] } }, { body: { caption: "Legenda" } }]);
+    renderCarousels();
+    await userEvent.click(await screen.findByRole("button", { name: "Agendar" }));
+    expect(screen.getByLabelText("Horário")).toHaveValue("09:00");
+  });
+
   it("shows every slide with its role, regenerates one slide through the real endpoint (polling until the new image renders), and deletes the carousel", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     // Right after the regenerate POST, the background job has only just

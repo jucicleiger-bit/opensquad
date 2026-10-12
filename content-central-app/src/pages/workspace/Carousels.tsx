@@ -46,6 +46,12 @@ function tomorrowIso(): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
+function paddedPostTime(value: unknown): string {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(value || "").trim());
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return "09:00";
+  return `${match[1].padStart(2, "0")}:${match[2]}`;
+}
+
 function formatScheduleLabel(date: string, time: string): string {
   return `Agendado para ${date.slice(8, 10)}/${date.slice(5, 7)} ${time}`;
 }
@@ -53,7 +59,7 @@ function formatScheduleLabel(date: string, time: string): string {
 function carouselIsFinished(carousel: Carousel): boolean {
   return carousel.status === "ready"
     && carousel.slides.length > 0
-    && carousel.slides.every((slide) => Boolean(slideSource(slide)) && !slide.image.generating && !slide.imageGenerationError);
+    && carousel.slides.every((slide) => Boolean(slide.image.url) && !slide.image.generating && !slide.imageGenerationError);
 }
 
 interface ScheduleFormState {
@@ -186,7 +192,7 @@ export function Carousels() {
     const form: ScheduleFormState = {
       carouselId,
       date: tomorrowIso(),
-      time: String(project.contentSettings?.defaultPostTime || "09:00"),
+      time: paddedPostTime(project.contentSettings?.defaultPostTime),
       caption: "",
       loadingCaption: true,
       saving: false,
@@ -316,7 +322,7 @@ export function Carousels() {
 
       {carousels.length === 0 ? (
         <div style={{ marginTop: 20 }}>
-          <EmptyState title="Nenhum carrossel ainda" description="Gere o primeiro usando o formulário acima." />
+          <EmptyState title="Nenhum carrossel ainda" description="Planeje o primeiro usando o formulário acima." />
         </div>
       ) : (
         <div className={styles.list}>
@@ -384,7 +390,7 @@ export function Carousels() {
                       </Button>
                     ) : null}
                     <div className={styles.actions}>
-                      <Button type="button" variant="ghost" disabled={deletingId === carousel.carouselId} onClick={() => handleDelete(carousel.carouselId)}>
+                      <Button type="button" variant="ghost" disabled={deletingId === carousel.carouselId || carousel.status === "planning"} onClick={() => handleDelete(carousel.carouselId)}>
                         {deletingId === carousel.carouselId ? "Apagando..." : "Apagar"}
                       </Button>
                     </div>
@@ -432,7 +438,7 @@ export function Carousels() {
                           <Button
                             type="button"
                             variant="secondary"
-                            disabled={state.busy || slide.image.generating}
+                            disabled={state.busy || slide.image.generating || carousel.status === "generating"}
                             onClick={() => handleRegenerateSlide(carousel.carouselId, slide.slideId)}
                           >
                             {state.busy ? "Regenerando..." : "Regenerar esse slide"}
@@ -441,7 +447,7 @@ export function Carousels() {
                             <Button
                               type="button"
                               variant="secondary"
-                              disabled={state.busy || slide.image.generating}
+                              disabled={state.busy || slide.image.generating || carousel.status === "generating"}
                               onClick={() => handleRegenerateSlide(carousel.carouselId, slide.slideId, note.trim())}
                             >
                               {state.busy ? "Aplicando..." : "Aplicar correção"}

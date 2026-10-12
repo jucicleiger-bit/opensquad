@@ -5001,11 +5001,14 @@ test('carousels-caption drafts a caption and carousels-schedule turns the finish
       assert.equal(caption.response.status, 200);
       assert.equal(caption.body.caption, 'Legenda do carrossel');
 
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowIso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
       const bad = await request(server, `/api/projects/carrossel-agendar-http/carousels-schedule/${carouselId}`, { method: 'POST', body: JSON.stringify({ date: 'amanhã', time: '09:00', caption: 'x' }) });
       assert.equal(bad.response.status, 400);
       assert.match(bad.body.error, /Data inválida/);
 
-      const scheduled = await request(server, `/api/projects/carrossel-agendar-http/carousels-schedule/${carouselId}`, { method: 'POST', body: JSON.stringify({ date: '2026-10-10', time: '18:30', caption: 'Legenda final' }) });
+      const scheduled = await request(server, `/api/projects/carrossel-agendar-http/carousels-schedule/${carouselId}`, { method: 'POST', body: JSON.stringify({ date: tomorrowIso, time: '18:30', caption: 'Legenda final' }) });
       assert.equal(scheduled.response.status, 200);
       assert.equal(scheduled.body.item.status, 'aprovado');
       assert.equal(scheduled.body.item.format, 'carousel');

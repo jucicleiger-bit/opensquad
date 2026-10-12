@@ -11994,6 +11994,15 @@ test('offer drafts are stored apart from offers and can be removed', async () =>
   }
 });
 
+// scheduleCarousel refuses past slots, so the tests schedule for tomorrow
+// (local time, like the app and isPublishDue).
+function localDateIso(offsetDays = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const TOMORROW = localDateIso(1);
+
 // A carousel whose plan and images are already done, written straight to
 // disk — scheduling only reads the finished file, it never generates.
 async function writeReadyCarousel(projectId, dir, extra = {}) {
@@ -12021,7 +12030,7 @@ test('scheduleCarousel writes an approved carousel item for the date/time with t
     const carousel = await writeReadyCarousel('carrossel-agenda', dir);
 
     const { item, carousel: updated } = await scheduleCarousel('carrossel-agenda', carousel.carouselId, {
-      date: '2026-10-10', time: '18:30', caption: 'Sexta tem pizza! 🍕',
+      date: TOMORROW, time: '18:30', caption: 'Sexta tem pizza! 🍕',
     }, dir);
 
     assert.equal(item.format, 'carousel');
@@ -12029,7 +12038,7 @@ test('scheduleCarousel writes an approved carousel item for the date/time with t
     assert.equal(item.status, 'aprovado');
     assert.equal(item.approval.approvalSource, 'carousel_scheduled');
     assert.ok(item.approval.approvedAt);
-    assert.equal(item.scheduledDate, '2026-10-10');
+    assert.equal(item.scheduledDate, TOMORROW);
     assert.equal(item.scheduledTime, '18:30');
     assert.equal(item.caption.text, 'Sexta tem pizza! 🍕');
     assert.equal(item.carouselFormat, 'listicle');
@@ -12038,7 +12047,7 @@ test('scheduleCarousel writes an approved carousel item for the date/time with t
 
     const listed = await listProjectContent('carrossel-agenda', dir);
     assert.ok(listed.some((entry) => entry.contentId === item.contentId), 'it is a normal calendar item');
-    assert.deepEqual(updated.schedules, [{ contentId: item.contentId, batchId: item.batchId, date: '2026-10-10', time: '18:30' }]);
+    assert.deepEqual(updated.schedules, [{ contentId: item.contentId, batchId: item.batchId, date: TOMORROW, time: '18:30' }]);
 
     // Deleting the standalone carousel must not break the scheduled post.
     await deleteCarousel('carrossel-agenda', carousel.carouselId, dir);
@@ -12051,8 +12060,8 @@ test('scheduleCarousel twice on the same day creates two distinct items', async 
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-agenda-2x', name: 'Boss Pizzaria' }, dir);
     const carousel = await writeReadyCarousel('carrossel-agenda-2x', dir);
-    const first = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: '2026-10-10', time: '09:00', caption: 'a' }, dir);
-    const second = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: '2026-10-10', time: '18:00', caption: 'b' }, dir);
+    const first = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: TOMORROW, time: '09:00', caption: 'a' }, dir);
+    const second = await scheduleCarousel('carrossel-agenda-2x', carousel.carouselId, { date: TOMORROW, time: '18:00', caption: 'b' }, dir);
     assert.notEqual(first.item.contentId, second.item.contentId);
     assert.equal(second.carousel.schedules.length, 2);
   });
@@ -12063,20 +12072,37 @@ test('scheduleCarousel refuses an unfinished carousel, a bad date/time and an em
     await createCentralProject({ projectId: 'carrossel-agenda-recusa', name: 'Boss Pizzaria' }, dir);
     const planning = await generateCarousel('carrossel-agenda-recusa', { briefing: 'teste', slideCount: 2 }, dir);
     await assert.rejects(
-      () => scheduleCarousel('carrossel-agenda-recusa', planning.carouselId, { date: '2026-10-10', time: '09:00', caption: 'x' }, dir),
+      () => scheduleCarousel('carrossel-agenda-recusa', planning.carouselId, { date: TOMORROW, time: '09:00', caption: 'x' }, dir),
       /Gere todos os slides antes de agendar/,
     );
     const failedSlide = await writeReadyCarousel('carrossel-agenda-recusa', dir);
     failedSlide.slides[1].imageGenerationError = 'provider timeout';
     await writeFile(failedSlide.filePath, JSON.stringify(failedSlide, null, 2), 'utf-8');
     await assert.rejects(
-      () => scheduleCarousel('carrossel-agenda-recusa', failedSlide.carouselId, { date: '2026-10-10', time: '09:00', caption: 'x' }, dir),
+      () => scheduleCarousel('carrossel-agenda-recusa', failedSlide.carouselId, { date: TOMORROW, time: '09:00', caption: 'x' }, dir),
       /Gere todos os slides antes de agendar/,
     );
     const ready = await writeReadyCarousel('carrossel-agenda-recusa', dir);
     await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '10/10/2026', time: '09:00', caption: 'x' }, dir), /Data inválida/);
-    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '2026-10-10', time: '9h', caption: 'x' }, dir), /Horário inválido/);
-    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: '2026-10-10', time: '09:00', caption: '  ' }, dir), /legenda/);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: TOMORROW, time: '9h', caption: 'x' }, dir), /Horário inválido/);
+    await assert.rejects(() => scheduleCarousel('carrossel-agenda-recusa', ready.carouselId, { date: TOMORROW, time: '09:00', caption: '  ' }, dir), /legenda/);
+  });
+});
+
+test('scheduleCarousel refuses a past slot, an impossible date or time and the same slot twice', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-agenda-passado', name: 'Boss Pizzaria' }, dir);
+    const carousel = await writeReadyCarousel('carrossel-agenda-passado', dir);
+    const schedule = (input) => scheduleCarousel('carrossel-agenda-passado', carousel.carouselId, { caption: 'x', ...input }, dir);
+    await assert.rejects(() => schedule({ date: localDateIso(-1), time: '09:00' }), /ainda não passaram/);
+    await assert.rejects(() => schedule({ date: '2026-02-30', time: '09:00' }), /Data inválida/);
+    await assert.rejects(() => schedule({ date: '2026-13-45', time: '09:00' }), /Data inválida/);
+    await assert.rejects(() => schedule({ date: TOMORROW, time: '99:99' }), /Horário inválido/);
+    assert.equal((await listProjectContent('carrossel-agenda-passado', dir)).length, 0, 'a refused slot leaves no item behind');
+
+    await schedule({ date: TOMORROW, time: '09:00' });
+    await assert.rejects(() => schedule({ date: TOMORROW, time: '09:00' }), /já está agendado para esse dia e horário/);
+    assert.equal((await listProjectContent('carrossel-agenda-passado', dir)).length, 1);
   });
 });
 
@@ -12101,14 +12127,14 @@ test('draftCarouselCaption asks the caption writer about the carousel (its slide
 test('runDuePublishSweep with an itemFilter publishes only the due carousel, leaving a due single-image post alone', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-varredura', name: 'Boss Pizzaria', handle: '@boss', approvalEmail: 'a@example.com' }, dir);
-    const batch = await generateContentBatch('carrossel-varredura', { days: 1, startDate: '2026-07-20', postTime: '09:00' }, dir);
+    const batch = await generateContentBatch('carrossel-varredura', { days: 1, startDate: TOMORROW, postTime: '09:00' }, dir);
     await approveContent('carrossel-varredura', batch.items[0].contentId, dir, batch.batchId);
     const carousel = await writeReadyCarousel('carrossel-varredura', dir);
-    const { item } = await scheduleCarousel('carrossel-varredura', carousel.carouselId, { date: '2026-07-20', time: '09:00', caption: 'x' }, dir);
+    const { item } = await scheduleCarousel('carrossel-varredura', carousel.carouselId, { date: TOMORROW, time: '09:00', caption: 'x' }, dir);
 
     const published = [];
     const result = await runDuePublishSweep(dir, {
-      now: new Date('2026-07-20T12:00:00.000Z'),
+      now: new Date(`${TOMORROW}T09:05:00`),
       metaPublisher: async ({ content }) => { published.push(content.contentId); return { mediaId: 'm-1' }; },
       itemFilter: (entry) => entry.format === 'carousel',
     });

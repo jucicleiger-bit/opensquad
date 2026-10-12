@@ -3543,6 +3543,17 @@ export async function scheduleCarousel(projectId, carouselId, input = {}, target
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Data inválida.');
     const time = String(input.time || project.contentSettings?.defaultPostTime || DEFAULT_TIME).trim();
     if (!/^\d{2}:\d{2}$/.test(time)) throw new Error('Horário inválido.');
+    if (Number(time.slice(0, 2)) > 23 || Number(time.slice(3)) > 59) throw new Error('Horário inválido.');
+    // Same local-time parse isPublishDue uses. The round trip catches what V8
+    // rolls over (2026-02-30 -> Mar 2) or rejects (2026-13-45).
+    const dueAt = new Date(`${date}T${time}:00`);
+    const pad = (n) => String(n).padStart(2, '0');
+    if (Number.isNaN(dueAt.getTime()) || `${dueAt.getFullYear()}-${pad(dueAt.getMonth() + 1)}-${pad(dueAt.getDate())}` !== date) throw new Error('Data inválida.');
+    // A past slot would be published by the very next sweep: irreversible.
+    if (dueAt.getTime() < Date.now() - 5 * 60 * 1000) throw new Error('Escolha uma data e horário que ainda não passaram.');
+    if ((carousel.schedules || []).some((entry) => entry.date === date && entry.time === time)) {
+      throw new Error('Este carrossel já está agendado para esse dia e horário.');
+    }
     const caption = String(input.caption || '').trim();
     if (!caption) throw new Error('Escreva a legenda antes de agendar.');
 
@@ -3592,7 +3603,9 @@ export async function scheduleCarousel(projectId, carouselId, input = {}, target
       createdAt: now,
       updatedAt: now,
     };
-    await writeJson(filePath, item);
+    // The item file is what makes the post live (listProjectContent reads the
+    // day file), so it goes last: a failure before it leaves nothing to retry
+    // into a duplicate.
     await writeJson(join(batchDir, 'batch.json'), {
       batchId,
       projectId: project.projectId,
@@ -3602,10 +3615,17 @@ export async function scheduleCarousel(projectId, carouselId, input = {}, target
       startDate: date,
       items: [item],
     });
+    await writeJson(filePath, item);
 
     carousel.schedules = [...(carousel.schedules || []), { contentId, batchId, date, time }];
     carousel.updatedAt = now;
-    await writeJson(carousel.filePath, carousel);
+    // The post exists already; failing to note it on the carousel must not
+    // make the operator retry into a second post.
+    try {
+      await writeJson(carousel.filePath, carousel);
+    } catch (error) {
+      console.error(`scheduleCarousel: could not record the schedule on ${carouselId}: ${error.message}`);
+    }
     return { item, carousel };
   });
 }
