@@ -10679,7 +10679,7 @@ test('a carousel pulled from an offer sends the offer to the roteiro and puts it
     }, dir);
     const planned = await waitForCarousel('carrossel-oferta', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
 
-    assert.deepEqual(received.offer, { name: 'Pizza Calabresa', price: 'R$ 49,90', items: 'Borda recheada' });
+    assert.deepEqual(received.offer, { name: 'Pizza Calabresa', price: 'R$ 49,90', items: 'Borda recheada', hasPhotos: true });
     assert.equal(received.carouselStyle, 'clean');
     planned.slides.forEach((slide) => {
       assert.equal(slide.contentTopic.offerId, offer.id);
@@ -10729,8 +10729,69 @@ test('a standalone carousel slide is built clean: simple brand background, clean
     seen.forEach(({ prompt, spec }) => {
       assert.equal(spec.background.style, 'simple_brand');
       assert.equal(spec.title.style, 'clean');
-      assert.match(prompt, /ESTILO CARROSSEL CLEAN/);
+      assert.match(prompt, /ESTILO CARROSSEL EDITORIAL/);
     });
+  });
+});
+
+// Operator feedback 2026-10-12 (V4 reference): our slides were one giant
+// phrase each; a reading carousel gives every slide its own texts, image and
+// layout, and the fixed logo/product/CTA zones must not override that.
+test('a structured roteiro slide reaches the image prompt as its exact texts, image and layout, with a reading hierarchy', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-editorial', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-editorial', { briefing: 'teste', slideCount: 2 }, dir);
+    enqueueCarouselPlanning('carrossel-editorial', carousel.carouselId, {
+      outlineGenerator: async () => ({
+        format: 'listicle',
+        slides: [
+          {
+            role: 'cover',
+            slideText: 'Por que a pizza chega fria?',
+            content: { title: 'Por que a pizza chega fria?', body: '', highlight: 'PIZZA FRIA', bullets: [], visual: '', layout: 'texto_central', bridge: '' },
+          },
+          {
+            role: 'cta',
+            slideText: 'Três cuidados na entrega',
+            content: {
+              title: 'Três cuidados na entrega',
+              body: 'A gente usa **bolsa térmica** em todo pedido.',
+              highlight: '',
+              bullets: ['Bolsa térmica', 'Rota curta', 'Saída na hora'],
+              visual: 'motoboy entregando uma caixa de pizza',
+              layout: 'lista',
+              bridge: '',
+            },
+          },
+        ],
+      }),
+    }, dir);
+    const planned = await waitForCarousel('carrossel-editorial', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    assert.equal(planned.slides[1].slideContent.layout, 'lista');
+    await startCarouselImageGeneration('carrossel-editorial', carousel.carouselId, dir);
+
+    const prompts = {};
+    enqueueCarouselImageGeneration('carrossel-editorial', carousel.carouselId, {
+      imageGenerator: async (payload) => {
+        prompts[payload.content.role] = payload.content.image.prompt;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    await waitForCarousel('carrossel-editorial', carousel.carouselId, dir, (c) => c.status === 'ready');
+
+    const cta = prompts.cta;
+    assert.match(cta, /CONTEÚDO E LAYOUT DESTE SLIDE/);
+    assert.match(cta, /Layout: Título no topo e os itens da lista/);
+    assert.match(cta, /Título \(escrever exatamente\): Três cuidados na entrega/);
+    assert.match(cta, /\*\*bolsa térmica\*\*/);
+    assert.match(cta, /• Bolsa térmica • Rota curta • Saída na hora/);
+    assert.match(cta, /Imagem: motoboy entregando uma caixa de pizza/);
+    assert.match(cta, /Hierarquia de leitura de carrossel/);
+    assert.doesNotMatch(cta, /20-30% da altura|até ~35% da altura/);
+    assert.doesNotMatch(cta, /ESTRUTURA FEED OBRIGATÓRIA/, 'the slide layout replaces the fixed feed zones');
+    assert.doesNotMatch(cta, /Resolver a composição com elementos gráficos conceituais: tipografia forte/);
+    assert.match(prompts.cover, /Destaque grande .*PIZZA FRIA/);
+    assert.doesNotMatch(prompts.cover, /Imagem: /, 'a texto_central slide has no image line');
   });
 });
 
@@ -10806,7 +10867,7 @@ test('the automatic calendar carousel keeps today\'s look and outline payload: n
     assert.deepEqual(Object.keys(outlinePayloads[0]).sort(), ['briefing', 'project', 'slideCount']);
     assert.ok(seen.length > 0);
     seen.forEach(({ prompt, spec }) => {
-      assert.doesNotMatch(prompt, /ESTILO CARROSSEL CLEAN/);
+      assert.doesNotMatch(prompt, /ESTILO CARROSSEL (CLEAN|EDITORIAL)|CONTEÚDO E LAYOUT DESTE SLIDE/);
       assert.equal(spec.background.style, 'elaborate');
       assert.equal(spec.title.style, 'lettering');
     });

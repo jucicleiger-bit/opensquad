@@ -906,6 +906,17 @@ export interface CarouselSlide {
   order: number;
   role: "cover" | "content" | "cta";
   slideText: string;
+  // Structured roteiro of the standalone tab (layout keys mirror
+  // CAROUSEL_LAYOUTS in src/content-central.js); null on calendar carousels.
+  slideContent?: {
+    title: string;
+    body: string;
+    highlight: string;
+    bullets: string[];
+    visual: string;
+    layout: string;
+    bridge: string;
+  } | null;
   image: {
     url?: string;
     previewUrl?: string;

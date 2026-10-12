@@ -109,7 +109,13 @@ describe("Carousels", () => {
     status: "plan_ready",
     planError: null,
     planMessages: [{ text: "fala da entrega", at: "2026-10-08T12:00:00.000Z" }],
-    slides: CAROUSEL_FIXTURE.slides.map((slide) => ({ ...slide, image: { generating: false } })),
+    slides: CAROUSEL_FIXTURE.slides.map((slide, index) => ({
+      ...slide,
+      image: { generating: false },
+      slideContent: index === 1
+        ? { title: "Salve esse post", body: "", highlight: "", bullets: [], visual: "motoboy entregando pizza", layout: "lista", bridge: "Veja como" }
+        : null,
+    })),
   };
 
   it("pulls the theme from a registered offer and sends its offerId", async () => {
@@ -128,7 +134,7 @@ describe("Carousels", () => {
 
     const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
     const planCall = calls.find(([url, options]) => url === "/api/projects/boss-pizzaria/carousels" && options?.method === "POST");
-    expect(JSON.parse(planCall![1].body as string)).toEqual({ briefing: "Pizza Calabresa — Borda recheada", slideCount: 6, offerId: "pizza-calabresa" });
+    expect(JSON.parse(planCall![1].body as string)).toEqual({ briefing: "Pizza Calabresa — Borda recheada", slideCount: 7, offerId: "pizza-calabresa" });
   });
 
   it("lists trending subjects and fills the theme with the one clicked", async () => {
@@ -159,6 +165,7 @@ describe("Carousels", () => {
 
     expect(await screen.findByText("fala da entrega")).toBeInTheDocument();
     expect(screen.getByText("Salve esse post")).toBeInTheDocument();
+    expect(screen.getByText("Lista em cartões · Imagem: motoboy entregando pizza · Rodapé: Veja como →")).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText("O que mudar?"), "troca a capa");
     await userEvent.click(screen.getByRole("button", { name: "Ajustar" }));
 

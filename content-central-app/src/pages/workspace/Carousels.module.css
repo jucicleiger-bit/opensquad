@@ -129,6 +129,16 @@
   color: var(--muted);
 }
 
+.planText {
+  white-space: pre-line;
+}
+
+.planHint {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
 .planList {
   margin: 0;
   padding-left: 20px;

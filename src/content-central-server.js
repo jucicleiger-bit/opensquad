@@ -84,6 +84,7 @@ import {
   scheduleCarousel,
   draftCarouselCaption,
   projectTopicIdeaContext,
+  CAROUSEL_LAYOUTS,
   enqueueCarouselSlideRegeneration,
   enqueueContentCarouselSlideRegeneration,
   generateCarousel,
@@ -4779,6 +4780,7 @@ async function readCarouselFormatsReference(targetDir) {
 export function buildCarouselOutlinePrompt({ project, briefing, slideCount, formatsReference, offer, carouselStyle, currentPlan, request }) {
   // Every optional block below is '' when its input is absent (dropped by
   // filter(Boolean)), so the calendar carousel's prompt is unchanged.
+  const editorial = carouselStyle === 'clean';
   return [
     contentCentralPersonaLine('sofia'),
     contentCentralPersonaResponsibilityLine('sofia'),
@@ -4798,7 +4800,9 @@ export function buildCarouselOutlinePrompt({ project, briefing, slideCount, form
     offer?.price ? `- Preço: ${offer.price}` : '',
     offer?.items ? `- Detalhes: ${offer.items}` : '',
     currentPlan ? `PLANO ATUAL (formato: ${currentPlan.format || 'livre'})` : '',
-    ...(currentPlan ? currentPlan.slides.map((slide, index) => `${index + 1}. [${slide.role}] ${slide.slideText}`) : []),
+    ...(currentPlan ? currentPlan.slides.map((slide, index) => (slide.content
+      ? `${index + 1}. [${slide.role}] ${JSON.stringify(slide.content)}`
+      : `${index + 1}. [${slide.role}] ${slide.slideText}`)) : []),
     currentPlan ? 'AJUSTE PEDIDO PELO OPERADOR' : '',
     currentPlan ? request : '',
     currentPlan ? 'Refaça o plano aplicando só esse ajuste: mantenha tudo que o pedido não mencionar.' : '',
@@ -4806,15 +4810,56 @@ export function buildCarouselOutlinePrompt({ project, briefing, slideCount, form
     currentPlan
       ? 'Mantenha a mesma quantidade de slides do plano atual, a não ser que o ajuste peça outra quantidade (mínimo 2, máximo 10). O plano continua com capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta").'
       : `Gere exatamente ${slideCount} slides, cobrindo capa (role "cover"), conteúdo (role "content") e fechamento com CTA (role "cta"), na proporção que o formato escolhido pedir.`,
-    'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
-    carouselStyle === 'clean' ? '- Estilo clean: cada slide com um título de no máximo ~8 palavras e no máximo 1 linha curta de apoio. Nada de parágrafo.' : '',
+    ...(editorial ? editorialCarouselOutlineRules(offer) : [
+      'Cada "slideText" é o texto final daquele slide (headline + texto de apoio, prontos para virar a peça visual) — nunca uma instrução ou descrição do que desenhar.',
+    ]),
     '- Nunca inventar preço, promoção, prazo, estoque, depoimento ou dado que não foi passado no briefing.',
     '',
     'Responda APENAS com um JSON válido, sem markdown e sem texto fora do JSON, neste formato exato:',
-    currentPlan
-      ? '{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" na ordem de exibição'
-      : `{"format":"listicle","slides":[{"role":"cover","slideText":""}]}  // "slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`,
+    `${editorial ? EDITORIAL_OUTLINE_JSON_EXAMPLE : '{"format":"listicle","slides":[{"role":"cover","slideText":""}]}'}  // ${currentPlan ? '"slides" na ordem de exibição' : `"slides" deve ter exatamente ${slideCount} itens, na ordem de exibição`}`,
   ].filter(Boolean).join('\n');
+}
+
+const EDITORIAL_OUTLINE_JSON_EXAMPLE = '{"format":"listicle","slides":[{"role":"cover","title":"","body":"","highlight":"","bullets":[],"visual":"","layout":"texto_central","bridge":""}]}';
+
+// The standalone tab's "reading carousel" (operator feedback 2026-10-12, V4
+// reference): every slide carries a complete piece of information plus what
+// to show and how to lay it out, instead of one giant phrase per slide.
+function editorialCarouselOutlineRules(offer) {
+  return [
+    'ROTEIRO DE LEITURA: cada slide entrega uma informação completa e o carrossel se lê como uma sequência — não como letreiros soltos com uma frase gigante.',
+    '- "title": título do slide, de 3 a 9 palavras.',
+    '- "body": texto de apoio de 1 a 3 frases (até ~35 palavras), com **negrito** nas 2 ou 3 palavras mais importantes. Pode ficar vazio na capa.',
+    '- "highlight": opcional — uma expressão curta (até 4 palavras) que merece letra gigante; usar em no máximo 1 a cada 3 slides.',
+    '- "bullets": opcional — de 3 a 5 itens curtos, só quando o slide for uma lista.',
+    '- "visual": o que a imagem do slide mostra, de forma concreta (ex.: "celular mostrando uma agenda de posts", "dono de loja organizando a prateleira"). Vazio quando o layout for texto_central.',
+    offer?.hasPhotos ? '- Este assunto tem foto real do produto cadastrada: nos slides com imagem, "visual" é a foto real do produto (com um contexto simples, se fizer sentido).' : '',
+    `- "layout": um destes — ${Object.entries(CAROUSEL_LAYOUTS).map(([key, description]) => `${key} (${description})`).join('; ')}`,
+    '- Alternar os layouts: nunca o mesmo layout em dois slides seguidos. Capa e CTA podem usar texto_central ou imagem_cheia.',
+    '- "bridge": opcional — frase curta de rodapé que puxa para o próximo slide (ex.: "Veja como resolver"); usar em 1 ou 2 slides, nunca no último.',
+    '- Nunca citar nem mostrar marca, logo ou tela de outra empresa, nem pessoa famosa.',
+  ].filter(Boolean);
+}
+
+// A structured (editorial) slide also gets a plain slideText — the plan view,
+// the caption writer, replans and the calendar card all read slideText.
+export function parseCarouselOutlineSlide(entry) {
+  const role = ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content';
+  const title = String(entry?.title || '').trim();
+  if (!title) return { role, slideText: String(entry?.slideText || '').trim() };
+  const content = {
+    title,
+    body: String(entry?.body || '').trim(),
+    highlight: String(entry?.highlight || '').trim(),
+    bullets: (Array.isArray(entry?.bullets) ? entry.bullets : []).map((item) => String(item || '').trim()).filter(Boolean).slice(0, 5),
+    visual: String(entry?.visual || '').trim(),
+    layout: Object.hasOwn(CAROUSEL_LAYOUTS, entry?.layout) ? entry.layout : 'texto_imagem',
+    bridge: String(entry?.bridge || '').trim(),
+  };
+  const slideText = [content.title, content.highlight, content.body.replace(/\*\*/g, ''), ...content.bullets.map((item) => `• ${item}`)]
+    .filter(Boolean)
+    .join('\n');
+  return { role, slideText, content };
 }
 
 async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, targetDir, offer, carouselStyle, currentPlan, request }) {
@@ -4831,10 +4876,7 @@ async function writeCarouselOutlineWithHermes({ project, briefing, slideCount, t
   }
   if (!parsed || !Array.isArray(parsed.slides)) return null;
   const slides = parsed.slides
-    .map((entry) => ({
-      role: ['cover', 'content', 'cta'].includes(entry?.role) ? entry.role : 'content',
-      slideText: String(entry?.slideText || '').trim(),
-    }))
+    .map(parseCarouselOutlineSlide)
     .filter((entry) => entry.slideText);
   // A replan may change the count; the engine (applyCarouselOutline) checks
   // the 2-10 range itself.

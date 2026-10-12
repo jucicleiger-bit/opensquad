@@ -29,6 +29,15 @@ const ROLE_LABELS: Record<CarouselSlide["role"], string> = {
   cta: "CTA",
 };
 
+// Mirrors CAROUSEL_LAYOUTS in src/content-central.js (the roteiro's layout keys).
+const LAYOUT_LABELS: Record<string, string> = {
+  texto_imagem: "Texto em cima, imagem embaixo",
+  dividido: "Metade texto, metade imagem",
+  imagem_cheia: "Imagem cheia com texto",
+  lista: "Lista em cartões",
+  texto_central: "Só texto, centralizado",
+};
+
 function slideSource(slide: CarouselSlide): string | null {
   return slide.image.url || slide.image.previewUrl || null;
 }
@@ -77,7 +86,7 @@ export function Carousels() {
   const [carousels, setCarousels] = useState<Carousel[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [briefing, setBriefing] = useState("");
-  const [slideCount, setSlideCount] = useState(6);
+  const [slideCount, setSlideCount] = useState(7);
   const [generating, setGenerating] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [slideState, setSlideState] = useState<Record<string, SlideActionState>>({});
@@ -366,7 +375,15 @@ export function Carousels() {
                       <ol className={styles.planList}>
                         {carousel.slides.map((slide) => (
                           <li key={slide.slideId}>
-                            <span className={styles.slideRole}>{ROLE_LABELS[slide.role]}</span> {slide.slideText}
+                            <span className={styles.slideRole}>{ROLE_LABELS[slide.role]}</span>{" "}
+                            <span className={styles.planText}>{slide.slideText}</span>
+                            {slide.slideContent ? (
+                              <div className={styles.planHint}>
+                                {LAYOUT_LABELS[slide.slideContent.layout] || slide.slideContent.layout}
+                                {slide.slideContent.visual ? ` · Imagem: ${slide.slideContent.visual}` : ""}
+                                {slide.slideContent.bridge ? ` · Rodapé: ${slide.slideContent.bridge} →` : ""}
+                              </div>
+                            ) : null}
                           </li>
                         ))}
                       </ol>

@@ -39,6 +39,7 @@ import {
   startPublishScheduler,
   startWhatsAppPublishScheduler,
   startCarouselPublishScheduler,
+  parseCarouselOutlineSlide,
   startGavetaSyncScheduler,
   startSocialSellingRadarScheduler,
   startSocialSellingEngagementScheduler,
@@ -5029,7 +5030,7 @@ test('buildCarouselOutlinePrompt adds the offer, the clean rule and the replan b
   const base = { project: { name: 'Boss Pizzaria', brandInput: { segment: 'Pizzaria' } }, briefing: 'Pizza de sexta', slideCount: 3, formatsReference: 'REF' };
   const plain = buildCarouselOutlinePrompt(base);
   assert.equal(buildCarouselOutlinePrompt({ ...base, offer: undefined, carouselStyle: undefined, currentPlan: undefined, request: undefined }), plain);
-  assert.doesNotMatch(plain, /Estilo clean|PLANO ATUAL|OFERTA\/ASSUNTO/);
+  assert.doesNotMatch(plain, /ROTEIRO DE LEITURA|PLANO ATUAL|OFERTA\/ASSUNTO/);
 
   const rich = buildCarouselOutlinePrompt({
     ...base,
@@ -5040,11 +5041,31 @@ test('buildCarouselOutlinePrompt adds the offer, the clean rule and the replan b
   });
   assert.match(rich, /Pizza Calabresa/);
   assert.match(rich, /R\$ 49,90/);
-  assert.match(rich, /Estilo clean/);
+  assert.match(rich, /ROTEIRO DE LEITURA/);
+  assert.match(rich, /texto_imagem/);
   assert.match(rich, /PLANO ATUAL/);
   assert.match(rich, /1\. \[cover\] Capa antiga/);
   assert.match(rich, /troca a capa/);
   assert.doesNotMatch(rich, /exatamente 3 slides/, 'a replan may change the count');
+});
+
+test('parseCarouselOutlineSlide keeps a structured slide\'s layout and composes its plain slideText; a plain slide keeps the old shape', () => {
+  const structured = parseCarouselOutlineSlide({
+    role: 'content',
+    title: 'Três cuidados na entrega',
+    body: 'A gente usa **bolsa térmica**.',
+    highlight: '',
+    bullets: ['Bolsa térmica', 'Rota curta', '', 'Saída', 'Embalagem', 'Extra 1', 'Extra 2'],
+    visual: 'motoboy',
+    layout: 'nao-existe',
+  });
+  assert.equal(structured.role, 'content');
+  assert.equal(structured.content.layout, 'texto_imagem', 'unknown layout falls back');
+  assert.equal(structured.content.bullets.length, 5);
+  assert.equal(structured.slideText, 'Três cuidados na entrega\nA gente usa bolsa térmica.\n• Bolsa térmica\n• Rota curta\n• Saída\n• Embalagem\n• Extra 1');
+
+  assert.deepEqual(parseCarouselOutlineSlide({ role: 'cta', slideText: '  Peça já  ' }), { role: 'cta', slideText: 'Peça já' });
+  assert.equal(parseCarouselOutlineSlide({ role: 'x', title: 'T' }).role, 'content');
 });
 
 test('startCarouselPublishScheduler only starts while real publishing is on and the general scheduler is off', async () => {

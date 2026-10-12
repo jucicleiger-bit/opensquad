@@ -3034,6 +3034,19 @@ export async function deleteAdCreative(projectId, adCreativeId, targetDir = proc
   });
 }
 
+// The layouts the standalone roteiro may pick per slide (and the image
+// prompt then draws). Shared with the outline prompt in
+// content-central-server.js so both describe the same set. A reading
+// carousel alternates these instead of repeating "big text on a flat
+// background" on every slide (operator feedback 2026-10-12, V4 reference).
+export const CAROUSEL_LAYOUTS = {
+  texto_imagem: 'Texto no topo (título e texto de apoio) e a imagem ocupando a metade de baixo do slide.',
+  dividido: 'Slide dividido ao meio: um lado é um bloco na cor da marca com o texto, o outro lado é a imagem.',
+  imagem_cheia: 'Imagem ocupando o slide inteiro, com o texto sobre uma área mais escura ou mais clara que garanta a leitura.',
+  lista: 'Título no topo e os itens da lista em cartões ou linhas empilhadas, cada um com um marcador; imagem pequena ou nenhuma.',
+  texto_central: 'Só texto, centralizado, com o destaque em evidência — para capa ou CTA.',
+};
+
 const CAROUSEL_SLIDE_COUNT_MIN = 2;
 const CAROUSEL_SLIDE_COUNT_MAX = 10;
 
@@ -3145,7 +3158,7 @@ export function carouselBriefingFromContentTopic(topic) {
   return [topic.offerName || topic.label, topic.objective, topic.items].filter(Boolean).join(' — ');
 }
 
-function buildCarouselSlideContentTopic({ project, order, slideCount, slideText, offer = null, carouselStyle = '' }) {
+function buildCarouselSlideContentTopic({ project, order, slideCount, slideText, offer = null, carouselStyle = '', slideContent = null }) {
   return {
     id: `carousel-slide-${order}`,
     type: 'institutional',
@@ -3166,7 +3179,11 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText,
     // message matters, not fidelity to the exact sentence shape. And "mesmo
     // template" read as "identical layout every slide", not just "same
     // brand identity" — now split those two apart explicitly.
-    objective: `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Manter fiel o sentido, a mensagem e qualquer preço/promessa/CTA mencionado — mas adaptar a FORMA para leitura visual: pode quebrar em frases curtas, virar bullets/lista, destacar uma frase principal e reduzir o resto. Nunca mudar o significado nem inventar informação que não estava no texto original. Manter a MESMA identidade visual (paleta, tipografia, moldura, grafismos, posição da logo) dos outros slides deste carrossel, mas a composição/disposição dos elementos pode variar de slide para slide dentro dessa identidade — não repetir sempre o exato mesmo layout.`,
+    // With a structured roteiro the exact texts and layout come in their own
+    // prompt section; "adapt the form, cut the rest" would undo them.
+    objective: carouselStyle && slideContent
+      ? `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Os textos exatos e o layout deste slide estão em CONTEÚDO E LAYOUT DESTE SLIDE — seguir à risca, sem resumir nem cortar. Manter a MESMA identidade visual (paleta, tipografia, posição da logo) dos outros slides deste carrossel; o layout muda de slide para slide conforme indicado.`
+      : `Slide ${order} de ${slideCount} de UM MESMO carrossel de Instagram para ${project.name} — não é uma peça avulsa. Base para este slide: "${slideText}". Manter fiel o sentido, a mensagem e qualquer preço/promessa/CTA mencionado — mas adaptar a FORMA para leitura visual: pode quebrar em frases curtas, virar bullets/lista, destacar uma frase principal e reduzir o resto. Nunca mudar o significado nem inventar informação que não estava no texto original. Manter a MESMA identidade visual (paleta, tipografia, moldura, grafismos, posição da logo) dos outros slides deste carrossel, mas a composição/disposição dos elementos pode variar de slide para slide dentro dessa identidade — não repetir sempre o exato mesmo layout.`,
     // Read by buildChatGptFinalCardPrompt's carousel FORMATO branch to
     // decide whether this slide gets the "swipe for more" arrow — every
     // slide except the last one, which is where the sequence actually ends.
@@ -3184,6 +3201,10 @@ function buildCarouselSlideContentTopic({ project, order, slideCount, slideText,
     // Read by buildCreativeSpec and buildChatGptFinalCardPrompt. Only the
     // standalone tab sets it, so the calendar carousel keeps its look.
     ...(carouselStyle ? { carouselStyle } : {}),
+    // The roteiro's per-slide layout (title/body/highlight/bullets/visual/
+    // layout/bridge) — read by buildChatGptFinalCardPrompt's CONTEÚDO E
+    // LAYOUT DO SLIDE section. Standalone tab only, like carouselStyle.
+    ...(carouselStyle && slideContent ? { slideContent } : {}),
   };
 }
 
@@ -3269,7 +3290,9 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
         project,
         briefing,
         slideCount,
-        ...(offer ? { offer: { name: offer.name, price: offerPriceLabel(offer), items: offer.items || '' } } : {}),
+        // hasPhotos lets the roteiro put the real product photo on the image
+        // slides instead of inventing a picture of it.
+        ...(offer ? { offer: { name: offer.name, price: offerPriceLabel(offer), items: offer.items || '', hasPhotos: Boolean(offer.photoReferenceIds?.length) } } : {}),
         ...(carousel.carouselStyle ? { carouselStyle: carousel.carouselStyle } : {}),
         ...(replanning ? { currentPlan: overrides.currentPlan, request: overrides.request } : {}),
       });
@@ -3294,6 +3317,9 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
     const outlineSlide = outline.slides[index];
     slide.role = outlineSlide.role || 'content';
     slide.slideText = outlineSlide.slideText || '';
+    // Structured per-slide layout from the standalone roteiro; the batch
+    // roteiro returns none and keeps the plain slideText shape.
+    slide.slideContent = outlineSlide.content || null;
     slide.contentTopic = buildCarouselSlideContentTopic({
       project,
       order: slide.order,
@@ -3301,6 +3327,7 @@ async function applyCarouselOutline(carousel, project, options, overrides = {}) 
       slideText: slide.slideText,
       offer,
       carouselStyle: carousel.carouselStyle || '',
+      slideContent: slide.slideContent,
     });
   });
   return true;
@@ -3417,7 +3444,10 @@ export function enqueueCarouselPlanning(projectId, carouselId, options = {}, tar
   Promise.all([loadProject(paths), readCarousel(paths, carouselId)])
     .then(([project, carousel]) => runCarouselPlanning(carousel, project, options, request
       ? {
-        currentPlan: { format: carousel.format, slides: carousel.slides.map(({ role, slideText }) => ({ role, slideText })) },
+        currentPlan: {
+          format: carousel.format,
+          slides: carousel.slides.map(({ role, slideText, slideContent }) => ({ role, slideText, ...(slideContent ? { content: slideContent } : {}) })),
+        },
         request,
       }
       : {}))
@@ -8544,6 +8574,10 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // A slide's title is its own roteiro text (the "Base para este slide"
   // line in the objective).
   const isCarouselSlide = topic.source === 'carousel';
+  // Standalone (tab) carousel: a reading carousel with a per-slide layout
+  // from the roteiro. The calendar carousel never sets carouselStyle.
+  const editorialCarousel = isCarouselSlide && topic.carouselStyle === 'clean';
+  const slideContent = editorialCarousel && topic.slideContent ? topic.slideContent : null;
   const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle || isOfferPair || isCarouselSlide;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
@@ -8648,7 +8682,12 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       // a middle/explanation slide needs more room for actual body text.
       // Feedback 27/08/2026: a single flat "25-30% max" ceiling ignored
       // that a slide's job changes what "too big" even means.
-      topic.source === 'carousel'
+      // A reading carousel: the King slides (2026-10-12) came out with the
+      // title over ~half the canvas on every slide, so the 20–35% budget
+      // below is replaced, not just tightened.
+      editorialCarousel
+        ? 'Hierarquia de leitura de carrossel: título em tamanho médio (no máximo 2 linhas, nunca ocupando metade do slide), texto de apoio em tamanho confortável de ler no celular, e no máximo UM destaque grande por slide — só quando o conteúdo trouxer um "Destaque". Manter respiro nas bordas.'
+        : topic.source === 'carousel'
         ? (content.role === 'cover' || content.role === 'cta'
           ? 'Manter respiro/margem nas bordas do canvas; é um slide de capa/CTA — título pode ser maior e mais impactante, ocupando até ~35% da altura, sem preencher o canvas inteiro nem cortar a margem.'
           : 'Manter respiro/margem nas bordas do canvas; título ocupando geralmente entre 20-30% da altura do slide, deixando espaço equilibrado pro corpo de texto/explicação — sem letras gigantes tomando o slide inteiro.')
@@ -8669,13 +8708,28 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         'A composição/disposição dos elementos deste slide pode ser diferente da do slide 1 (ex.: título maior de um lado, bloco de texto do outro, lista de bullets) — o que precisa ser idêntico é a identidade visual, não o layout exato.',
       ])
       : '',
-    topic.source === 'carousel' && topic.carouselStyle === 'clean'
-      ? section('ESTILO CARROSSEL CLEAN', [
-        'Visual clean de carrossel de Instagram: fundo liso ou com degradê suave nas cores da marca, sem texturas, ondas, faixas ou grafismos carregados.',
-        'Um título grande e no máximo 1 ou 2 linhas curtas de apoio — nada de parágrafo.',
-        'Muito espaço vazio e margens generosas; poucos elementos por slide.',
+    editorialCarousel
+      ? section('ESTILO CARROSSEL EDITORIAL', [
+        'Carrossel de leitura, estilo editorial de Instagram: cada slide entrega uma informação completa, que a pessoa lê e então arrasta para o próximo — não é um letreiro com uma frase gigante.',
+        'Fundo claro/branco ou liso na cor da marca, alternando entre os slides; sem texturas, ondas ou grafismos carregados.',
+        'Tipografia: uma fonte forte e condensada para título e destaque, e uma fonte limpa para o texto de apoio — as mesmas em todos os slides.',
+        'Palavras marcadas com **asteriscos** no texto vão em negrito (sem mostrar os asteriscos).',
         'Logo pequena, sempre no mesmo canto em todos os slides.',
-        'Se houver foto real do produto anexada, ela é o foco visual: recorte limpo, sem colagem nem vários produtos misturados.',
+        'Se houver foto real do produto anexada, ela é a imagem do slide: recorte limpo, sem colagem nem vários produtos misturados.',
+        'Nenhuma imagem mostra marca, logo, produto ou tela de outra empresa, nem pessoas famosas ou reconhecíveis.',
+      ])
+      : '',
+    slideContent
+      ? section('CONTEÚDO E LAYOUT DESTE SLIDE', [
+        `Layout: ${CAROUSEL_LAYOUTS[slideContent.layout] || CAROUSEL_LAYOUTS.texto_imagem}`,
+        slideContent.title ? `Título (escrever exatamente): ${slideContent.title}` : '',
+        slideContent.body ? `Texto de apoio (escrever exatamente, com os negritos indicados): ${slideContent.body}` : '',
+        slideContent.highlight ? `Destaque grande (escrever exatamente, em caixa alta, na cor de destaque da marca): ${slideContent.highlight}` : '',
+        slideContent.bullets?.length ? `Lista (escrever cada item exatamente, um por linha ou cartão): ${slideContent.bullets.map((item) => `• ${item}`).join(' ')}` : '',
+        slideContent.visual && slideContent.layout !== 'texto_central' ? `Imagem: ${slideContent.visual}` : '',
+        slideContent.bridge ? `Rodapé: a frase de continuação "${slideContent.bridge}" numa pílula discreta com uma seta →, puxando para o próximo slide.` : '',
+        'Não acrescentar nenhum outro texto além destes, da logo e da seta de arraste.',
+        'Margem interna generosa em todos os lados: nenhum texto, imagem ou logo pode tocar ou ser cortado pela borda.',
       ])
       : '',
     section('OBJETIVO DO CRIATIVO', [
@@ -8806,6 +8860,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       `${topic.source === 'flyer' ? 'Este encarte' : 'Esta peça'} está sem foto real de produto anexada, mas é uma oferta de produtos físicos com preço — não tratar como serviço nem substituir os produtos por elementos gráficos conceituais.`,
       ...productFocus.assetLines,
       ...quantityRules.assetLines,
+    ] : editorialCarousel ? [
+      // The service-business branch below ("resolver com tipografia forte")
+      // is what made every King slide plain text on black.
+      'Sem foto real de produto neste slide: criar a imagem descrita em "Imagem" (ilustração, foto realista genérica do segmento ou mockup de celular/tela com conteúdo genérico), coerente com a marca.',
+      'Nada de marca, logo, produto ou tela de outra empresa; nada de pessoas famosas ou reconhecíveis.',
     ] : hasAnyProductPhotoReference(project) ? [
       'Sem foto real selecionada nesta geração; criar produto/serviço coerente sem copiar marca de terceiros.',
       ...productFocus.assetLines,
@@ -8864,7 +8923,11 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? `Rodapé: chamada “${exactCta}” em texto pequeno, sem botão — logo/fechamento limpo domina.`
         : 'Rodapé: fechamento visual limpo (logo ou elemento decorativo), sem botão ou selo de CTA.',
       'A composição deve ter leitura clara de cima para baixo e aproveitar topo, centro e base.',
-    ]) : section('ESTRUTURA FEED OBRIGATÓRIA', [
+    ])
+    // The slide's own layout (CONTEÚDO E LAYOUT DESTE SLIDE) replaces the
+    // fixed logo/product/CTA zones — those forbid the lists, cards and
+    // side-by-side image a reading carousel is made of.
+    : slideContent ? '' : section('ESTRUTURA FEED OBRIGATÓRIA', [
       // Mirrors the Story block above with a positive zone-by-zone layout —
       // a "não faça X" ban in RESTRIÇÕES FINAIS (below) wasn't enough on its
       // own to stop the model from adding a decorative ribbon + icon row;
