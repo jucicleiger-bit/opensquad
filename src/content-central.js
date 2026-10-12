@@ -8537,7 +8537,14 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
   // Two offers side by side (buildComboOfferTopic): its offerName "A + B"
   // as the exact headline is what made the pair read as one kit.
   const isOfferPair = topic.source === 'offer' && hasProductList(topic);
-  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle || isOfferPair;
+  // Fifth case, and it broke a real piece: a carousel slide has no offerName
+  // either, so every slide was told "Título exato: <project name>" + "Não
+  // alterar título" right next to its own text. King's CTA slide
+  // (2026-10-12) obeyed and came out as the bare brand name, its CTA gone.
+  // A slide's title is its own roteiro text (the "Base para este slide"
+  // line in the objective).
+  const isCarouselSlide = topic.source === 'carousel';
+  const isFreeTitleTopic = isGoalTopic || isSpecialDateFreeTitle || isAdCreativeFreeTitle || isFlyerFreeTitle || isOfferPair || isCarouselSlide;
   const freeTitleSubject = topic.specialDateLabel
     || (isAdCreativeFreeTitle ? AD_OBJECTIVE_LABELS[topic.adObjective] : null)
     || topic.ideaTitle
@@ -8697,6 +8704,8 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? `Título: criar uma chamada curta (até 5 palavras) que apresente os produtos juntos (ex.: a categoria ou o momento de uso deles), acima dos produtos. Não juntar os nomes dos produtos num título de kit (ex.: "Produto A + Produto B"). Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Não inventar desconto, porcentagem, prazo de validade, benefício ou produto que não esteja na lista de HIERARQUIA.`
         : isSpecialDateFreeTitle
         ? `Título: criar um título curto (até 8 palavras) com tom caloroso e comemorativo sobre "${freeTitleSubject}" — é um post de celebração da data, não uma oferta nem uma peça comercial. Pode conectar de leve com o negócio/segmento da marca, mas sem soar como anúncio, pitch de venda ou gancho de captação. Não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo.`
+        : isCarouselSlide
+        ? `Título: o título deste slide vem do texto-base dele ("Base para este slide", acima) — não usar o nome "${project.name}" como título, o nome da marca já aparece na logo.`
         : isGoalTopic || isAdCreativeFreeTitle
           ? `Título: criar um título curto (até 8 palavras), chamativo, em formato de gancho ou pergunta específica sobre "${freeTitleSubject}" — não usar apenas o nome "${project.name}" como título, o nome da marca já aparece na logo. Ex. de estilo (adaptar ao assunto real, não copiar): pergunta direta que gera curiosidade, seguida de um subtítulo curto que reforça o valor.`
           : useSalesHookTitle
@@ -8719,7 +8728,13 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
         ? (useSubtleCta
           ? `CTA sutil: "${exactCta}" como texto pequeno, sem botão/selo.`
           : `CTA exato: ${exactCta}`)
-        : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte.',
+        // A carousel's CTA lives in its last slide's own text, never in
+        // topic.cta — the generic ban below erased it.
+        : isCarouselSlide && content.role === 'cta'
+          ? 'CTA: a chamada para ação deste slide é a do texto-base dele — escrever como texto, sem botão nem selo.'
+          : isCarouselSlide
+            ? 'Sem botão ou selo de CTA neste slide (é um slide do meio do carrossel) — não acrescentar chamada para ação que não esteja no texto-base.'
+            : 'Sem CTA nesta peça — não inserir nenhum botão, selo ou texto de chamada para ação (ex.: "peça agora", "chame agora", "saiba mais") na arte.',
       isOfferPair
         ? 'Tipo de publicação: produtos lado a lado, cada um com o seu próprio preço — não é combo nem kit.'
         : topic.type ? `Tipo de publicação: ${offerTypeLabel(topic.type)}.` : '',
@@ -8864,7 +8879,9 @@ function buildChatGptFinalCardPrompt(content, project, originalPrompt, channel, 
       exactPrice ? 'Base: preço em um único selo compacto e legível — não duplicar em outro selo ou faixa.' : '',
       exactCta
         ? `Rodapé: chamada “${exactCta}” em texto ou botão simples — não repetir como selo/ícone extra. Se for botão, deixar respiro visível entre ele e a borda inferior.`
-        : 'Rodapé: fechamento limpo (logo), sem botão ou selo de CTA.',
+        : isCarouselSlide && content.role === 'cta'
+          ? 'Rodapé: a chamada do texto-base deste slide em texto (sem botão nem selo), com respiro até a borda inferior.'
+          : 'Rodapé: fechamento limpo (logo), sem botão ou selo de CTA.',
       'Exatamente estes blocos: nenhum selo secundário, fileira de ícones/benefícios ou faixa de texto fora do definido aqui.',
       'Margem interna generosa em todos os lados: nenhum texto, selo, ícone, botão, @ ou logo pode tocar, ultrapassar ou ser cortado pela borda da imagem — vale pro rodapé inteiro, não só pro CTA.',
       'Se algum texto (item, @ da marca, chamada) não couber inteiro dentro da margem no tamanho de fonte legível, encurtar o texto ou reduzir a fonte — nunca deixar vazar, quebrar de forma estranha ou sair cortado da arte.',

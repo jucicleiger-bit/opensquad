@@ -10734,6 +10734,48 @@ test('a standalone carousel slide is built clean: simple brand background, clean
   });
 });
 
+// King, 2026-10-12: every slide was told "Título exato: <project name>" and
+// "Sem CTA nesta peça"; the CTA slide obeyed and came out as the bare brand
+// name with its call to action gone.
+test('carousel slide prompts take the title from the slide text, and only the CTA slide keeps its call to action', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-titulo', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-titulo', { briefing: 'teste', slideCount: 3 }, dir);
+    enqueueCarouselPlanning('carrossel-titulo', carousel.carouselId, {
+      outlineGenerator: async () => ({
+        format: 'problem-solution',
+        slides: [
+          { role: 'cover', slideText: 'Pizza fria na sexta?' },
+          { role: 'content', slideText: 'Entrega em 30 minutos' },
+          { role: 'cta', slideText: 'Comente "PIZZA" e peça a sua' },
+        ],
+      }),
+    }, dir);
+    await waitForCarousel('carrossel-titulo', carousel.carouselId, dir, (c) => c.status === 'plan_ready');
+    await startCarouselImageGeneration('carrossel-titulo', carousel.carouselId, dir);
+
+    const prompts = {};
+    enqueueCarouselImageGeneration('carrossel-titulo', carousel.carouselId, {
+      imageGenerator: async (payload) => {
+        prompts[payload.content.role] = payload.content.image.prompt;
+        return { url: 'https://cdn.example.com/x.png', mimeType: 'image/png' };
+      },
+    }, dir);
+    await waitForCarousel('carrossel-titulo', carousel.carouselId, dir, (c) => c.status === 'ready');
+
+    for (const role of ['cover', 'content', 'cta']) {
+      assert.doesNotMatch(prompts[role], /Título exato: Boss Pizzaria/, `${role}: the brand name is not the slide title`);
+      assert.doesNotMatch(prompts[role], /Não alterar título/, `${role}: nothing forbids the slide's own title`);
+      assert.match(prompts[role], /título deste slide vem do texto-base/);
+      assert.doesNotMatch(prompts[role], /Sem CTA nesta peça/);
+    }
+    assert.match(prompts.cta, /chamada para ação deste slide é a do texto-base/);
+    assert.match(prompts.cta, /Rodapé: a chamada do texto-base deste slide/);
+    assert.doesNotMatch(prompts.cta, /Rodapé: fechamento limpo/);
+    assert.match(prompts.content, /Sem botão ou selo de CTA neste slide/);
+  });
+});
+
 test('the automatic calendar carousel keeps today\'s look and outline payload: no clean block, no offer, no style', async () => {
   await withTempProject(async (dir) => {
     await createCentralProject({ projectId: 'carrossel-lote-intacto', name: 'Boss Pizzaria' }, dir);
