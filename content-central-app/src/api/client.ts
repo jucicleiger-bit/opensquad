@@ -899,9 +899,8 @@ export function deleteAdCreative(projectId: string, adCreativeId: string): Promi
   });
 }
 
-// Carrossel avulso — same "separate from organic content" shape as
-// AdCreative: no scheduledDate, no approval, no calendar. 1 carousel holds
-// N independently-regenerable slides instead of 1 image.
+// Carrossel avulso — plan first (roteiro only), adjust by message, then
+// generate images; a finished one can be scheduled as an approved post.
 export interface CarouselSlide {
   slideId: string;
   order: number;
@@ -917,15 +916,32 @@ export interface CarouselSlide {
   imageGenerationError: string | null;
 }
 
+export interface CarouselPlanMessage {
+  text: string;
+  at: string;
+}
+
+export interface CarouselSchedule {
+  contentId: string;
+  batchId: string;
+  date: string;
+  time: string;
+}
+
 export interface Carousel {
   carouselId: string;
   projectId: string;
   briefing: string;
+  offerId?: string | null;
+  carouselStyle?: string;
   format: string;
   slideCount: number;
   slides: CarouselSlide[];
   outlineGenerationError: string | null;
-  status: "generating" | "ready";
+  planMessages?: CarouselPlanMessage[];
+  planError?: string | null;
+  schedules?: CarouselSchedule[];
+  status: "planning" | "plan_ready" | "generating" | "ready";
   createdAt: string;
   updatedAt: string;
 }
@@ -937,6 +953,7 @@ export function listCarousels(projectId: string): Promise<{ carousels: Carousel[
 export interface GenerateCarouselInput {
   briefing: string;
   slideCount: number;
+  offerId?: string;
 }
 
 export function generateCarousel(
@@ -976,6 +993,51 @@ export function regenerateCarouselItemSlide(
 export function deleteCarousel(projectId: string, carouselId: string): Promise<{ deleted: boolean }> {
   return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-delete/${encodeURIComponent(carouselId)}`, {
     method: "POST",
+  });
+}
+
+export function replanCarousel(projectId: string, carouselId: string, message: string): Promise<{ carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-replan/${encodeURIComponent(carouselId)}`, {
+    method: "POST",
+    body: JSON.stringify({ message }),
+  });
+}
+
+export function generateCarouselImages(projectId: string, carouselId: string): Promise<{ carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-generate/${encodeURIComponent(carouselId)}`, {
+    method: "POST",
+  });
+}
+
+export interface CarouselTopicIdea {
+  title: string;
+  angle: string;
+}
+
+export function getCarouselTopicIdeas(projectId: string): Promise<{ ideas: CarouselTopicIdea[] }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-topic-ideas`, { method: "POST" });
+}
+
+export function draftCarouselCaption(projectId: string, carouselId: string): Promise<{ caption: string }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-caption/${encodeURIComponent(carouselId)}`, {
+    method: "POST",
+  });
+}
+
+export interface ScheduleCarouselInput {
+  date: string;
+  time: string;
+  caption: string;
+}
+
+export function scheduleCarousel(
+  projectId: string,
+  carouselId: string,
+  input: ScheduleCarouselInput,
+): Promise<{ item: ContentItem; carousel: Carousel }> {
+  return api(`/api/projects/${encodeURIComponent(projectId)}/carousels-schedule/${encodeURIComponent(carouselId)}`, {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }
 
