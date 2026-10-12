@@ -63,21 +63,56 @@
 }
 
 .ideas {
+  list-style: none;
   margin: 8px 0 0;
-  padding-left: 18px;
+  padding: 0;
   display: grid;
-  gap: 4px;
+  gap: 6px;
+}
+
+/* A choice in a list, not a primary action: no gradient, glow or lift from
+   the global button style (those "luzinhas" read as noise in a list). */
+.ideaButton,
+.ideaButton:hover,
+.ideaButton:active {
+  box-shadow: none;
+  transform: none;
+  filter: none;
 }
 
 .ideaButton {
-  background: none;
-  border: 0;
-  padding: 0;
-  color: var(--accent, inherit);
-  text-decoration: underline;
-  cursor: pointer;
-  font: inherit;
+  width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-weight: 400;
   text-align: left;
+}
+
+.ideaButton:hover {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+
+.ideaButton[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--surface-2);
+}
+
+.ideaTitle {
+  font-weight: 650;
+}
+
+.ideaAngle {
+  font-size: var(--text-sm);
+  color: var(--muted);
 }
 
 .plan {

@@ -289,8 +289,15 @@ export function Carousels() {
           <ul className={styles.ideas}>
             {ideas.map((idea) => (
               <li key={idea.title}>
-                <button type="button" className={styles.ideaButton} onClick={() => handlePickIdea(idea)}>{idea.title}</button>
-                {idea.angle ? <span className="muted"> — {idea.angle}</span> : null}
+                <button
+                  type="button"
+                  className={styles.ideaButton}
+                  aria-pressed={briefing === [idea.title, idea.angle].filter(Boolean).join(" — ")}
+                  onClick={() => handlePickIdea(idea)}
+                >
+                  <span className={styles.ideaTitle}>{idea.title}</span>
+                  {idea.angle ? <span className={styles.ideaAngle}>{idea.angle}</span> : null}
+                </button>
               </li>
             ))}
           </ul>

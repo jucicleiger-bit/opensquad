@@ -141,8 +141,11 @@ describe("Carousels", () => {
     await screen.findByText("Nenhum carrossel ainda");
 
     await userEvent.click(screen.getByRole("button", { name: "Assuntos em alta do segmento" }));
-    await userEvent.click(await screen.findByRole("button", { name: "5 erros ao pedir pizza" }));
+    const idea = await screen.findByRole("button", { name: /5 erros ao pedir pizza/ });
+    expect(idea).toHaveAttribute("aria-pressed", "false");
+    await userEvent.click(idea);
     expect(screen.getByLabelText("O que você quer neste carrossel?")).toHaveValue("5 erros ao pedir pizza — lista do que evitar");
+    expect(idea).toHaveAttribute("aria-pressed", "true");
   });
 
   it("shows the plan with the operator's messages and sends an adjustment", async () => {
