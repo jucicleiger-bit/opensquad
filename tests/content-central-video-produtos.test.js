@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { Jimp } from 'jimp';
 import {
   parsePreco, precoPorExtenso, precoNaTela, classificarFoto, recortarFundoBranco, listarProdutosVideo, normalizeOferta,
-  validateRoteiroOferta, expandirRoteiro, precosMantidos, legendaPostOferta, validadePorExtenso, PRODUTOS_POR_DURACAO,
+  validateRoteiroOferta, expandirRoteiro, precosMantidos, legendaPostOferta, validadePorExtenso,
+  MOLDURAS, SEGUNDOS_POR_PRODUTO, MAX_PRODUTOS, produtosPorDuracao,
 } from '../src/content-central-video-produtos.js';
 
 async function withDir(fn) {
@@ -111,8 +112,7 @@ test('normalizeOferta snapshots products and enforces the limits', () => {
   erro({ produtos: [{ id: 'zz' }] }, 30, /não encontrado/);
   erro({ produtos: [{ id: 'x' }] }, 30, /preço inválido/);
   erro({ produtos: [{ id: 'a' }, { id: 'a' }] }, 30, /duas vezes/);
-  erro({ produtos: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }, 15, /cabe até 2/);
-  assert.equal(PRODUTOS_POR_DURACAO[60], 10);
+  erro({ produtos: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], ritmo: 'calmo' }, 15, /cabe até 2/);
 });
 
 const oferta = { produtos: [{ id: 'a', nome: 'Fralda', preco: 1399, precoDe: 1699, unidade: 'un' }, { id: 'b', nome: 'Café', preco: 1299, precoDe: null, unidade: '' }], validoAte: '2026-10-18', criacao: 'nova' };
@@ -203,4 +203,58 @@ test('{unidade} speaks every registered unit and is refused without a unit', () 
   assert.equal(expandirRoteiro({ cenas }, um('dúzia')).cenas[0].fala, 'cinco reais, a dúzia!');
   assert.match(validateRoteiroOferta({ cenas }, um('')).join(' '), /Cena 1: Água não tem unidade\./);
   assert.deepEqual(validateRoteiroOferta({ cenas }, um('L')), []);
+});
+
+test('pace: seconds per product and the products that fit each duration', () => {
+  assert.deepEqual(SEGUNDOS_POR_PRODUTO, { rapido: 3, calmo: 4 });
+  assert.equal(MAX_PRODUTOS, 12);
+  assert.deepEqual([15, 30, 45, 60].map((d) => produtosPorDuracao(d, 'rapido')), [3, 8, 12, 12]);
+  assert.deepEqual([15, 30, 45, 60].map((d) => produtosPorDuracao(d, 'calmo')), [2, 6, 9, 12]);
+  assert.equal(produtosPorDuracao('auto', 'calmo'), 12);
+});
+
+test('MOLDURAS lists encarte, diagonal and neon with their tracks', () => {
+  assert.deepEqual(MOLDURAS.map((m) => m.id), ['encarte', 'diagonal', 'neon']);
+  assert.ok(MOLDURAS.every((m) => m.nome && m.trilha && m.descricao));
+});
+
+test('normalizeOferta: frame, pace and campaign with defaults and limits', () => {
+  const disp = [{ id: 'a', nome: 'A', preco: 100, precoDe: null, unidade: '', foto: 'x.png', fotoTipo: 'transparente' }];
+  const base = { produtos: [{ id: 'a' }], validoAte: '' };
+  const o = normalizeOferta(base, disp, 'auto');
+  assert.equal(o.moldura, 'encarte');
+  assert.equal(o.ritmo, 'rapido');
+  assert.equal(o.campanha, 'Ofertas da Semana');
+  const o2 = normalizeOferta({ ...base, moldura: 'auto', ritmo: 'calmo', campanha: '  Mês da Economia da Família Carvalho Supermercados  ' }, disp, 'auto');
+  assert.equal(o2.moldura, 'auto');
+  assert.equal(o2.ritmo, 'calmo');
+  assert.equal(o2.campanha, 'Mês da Economia da Família Car');
+  assert.equal(o2.campanha.length, 30);
+  assert.equal(normalizeOferta({ ...base, ritmo: 'turbo' }, disp, 'auto').ritmo, 'rapido');
+  assert.throws(() => normalizeOferta({ ...base, moldura: 'xadrez' }, disp, 'auto'), /Moldura desconhecida/);
+});
+
+test('normalizeOferta enforces the pace limit for a fixed duration', () => {
+  const disp = Array.from({ length: 9 }, (_, i) => ({ id: `p${i}`, nome: `P${i}`, preco: 100, precoDe: null, unidade: '', foto: 'x.png', fotoTipo: 'transparente' }));
+  const nove = { produtos: disp.map((p) => ({ id: p.id })), validoAte: '' };
+  assert.throws(() => normalizeOferta({ ...nove, ritmo: 'rapido' }, disp, 30), /30s cabe até 8 produtos/);
+  assert.doesNotThrow(() => normalizeOferta({ ...nove, ritmo: 'rapido' }, disp, 45));
+});
+
+test('validateRoteiroOferta: auto frame needs a known id in the roteiro', () => {
+  const oferta = { produtos: [{ id: 'a', nome: 'A', preco: 100, precoDe: null, unidade: '' }], validoAte: '', criacao: 'nova', moldura: 'auto', ritmo: 'calmo' };
+  const cenas = [{ tipo: 'p', produto: 'a', fala: 'A por {preco}!' }];
+  assert.match(validateRoteiroOferta({ cenas }, oferta).join(' '), /moldura/);
+  assert.match(validateRoteiroOferta({ moldura: 'xadrez', cenas }, oferta).join(' '), /moldura/);
+  assert.deepEqual(validateRoteiroOferta({ moldura: 'neon', cenas }, oferta), []);
+  assert.deepEqual(validateRoteiroOferta({ cenas }, { ...oferta, moldura: 'encarte' }), []);
+});
+
+test('validateRoteiroOferta: rápido product falas have at most 6 words besides placeholders', () => {
+  const oferta = { produtos: [{ id: 'a', nome: 'A', preco: 100, precoDe: 200, unidade: 'kg' }], validoAte: '', criacao: 'nova', moldura: 'encarte', ritmo: 'rapido' };
+  const ok = [{ tipo: 'p', produto: 'a', fala: 'Fralda IsaBaby, de {precoDe} por {preco} {unidade}!' }];
+  const longa = [{ tipo: 'p', produto: 'a', fala: 'Olha que maravilha essa fralda IsaBaby por {preco}!' }];
+  assert.deepEqual(validateRoteiroOferta({ cenas: ok }, oferta), []);
+  assert.match(validateRoteiroOferta({ cenas: longa }, oferta).join(' '), /Cena 1: .*6 palavras/);
+  assert.deepEqual(validateRoteiroOferta({ cenas: longa }, { ...oferta, ritmo: 'calmo' }), []);
 });

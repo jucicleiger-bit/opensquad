@@ -201,7 +201,7 @@ export async function listVideos(projectId, targetDir) {
   for (const id of await readdir(base)) {
     const video = await readJson(join(base, id, 'video.json'), null);
     if (!video) continue;
-    videos.push({ id: video.id, assunto: video.briefing.assunto, objetivo: video.briefing.objetivo, duracao: video.briefing.duracao, status: video.status, erro: video.erro, criadoEm: video.criadoEm, atualizadoEm: video.atualizadoEm, temVideo: existsSync(join(base, id, 'video.mp4')) });
+    videos.push({ id: video.id, assunto: video.briefing.assunto, objetivo: video.briefing.objetivo, duracao: video.briefing.duracao, moldura: video.briefing.oferta?.moldura || null, status: video.status, erro: video.erro, criadoEm: video.criadoEm, atualizadoEm: video.atualizadoEm, temVideo: existsSync(join(base, id, 'video.mp4')) });
   }
   return videos.sort((a, b) => b.criadoEm.localeCompare(a.criadoEm));
 }

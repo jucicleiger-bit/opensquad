@@ -1,0 +1,5 @@
+[
+  { "id": "encarte", "nome": "Encarte", "trilha": "funkee-monkeee.mp3", "descricao": "encarte clássico amarelo e vermelho, preço em explosão com selo OFERTA" },
+  { "id": "diagonal", "nome": "Diagonal", "trilha": "midnight-funk.mp3", "descricao": "tela dividida na diagonal (cor da marca e amarelo), preço em balão, cortina diagonal entre produtos" },
+  { "id": "neon", "nome": "Neon Premium", "trilha": "trap-electro-vibes.mp3", "descricao": "fundo preto premium com neon vermelho e dourado, faíscas, fecho ANOTA AÍ" }
+]

@@ -232,6 +232,18 @@ test('createVideo snapshots the Oferta products', async () => {
   });
 });
 
+test('listVideos includes the frame of an Oferta, null otherwise', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const oferta = await createVideo('king', ofertaBriefing, dir);
+    const outro = await createVideo('king', briefing, dir);
+    const list = await listVideos('king', dir);
+    assert.equal(list.find((v) => v.id === oferta.id).moldura, 'encarte');
+    assert.equal(list.find((v) => v.id === outro.id).moldura, null);
+  });
+});
+
 test('saveRoteiroCenas on an Oferta keeps the spoken prices', async () => {
   await withDir(async (dir) => {
     await createCentralProject({ projectId: 'king', name: 'King' }, dir);

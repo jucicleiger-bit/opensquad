@@ -2,15 +2,23 @@
 // product listing and per-video snapshot, product photos (classification and
 // white-background cutout) and the narration placeholders that keep prices
 // out of Claude's hands.
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Jimp } from 'jimp';
 import { getCentralPaths } from './content-central.js';
 
-export const MAX_PRODUTOS = 10;
-export const PRODUTOS_POR_DURACAO = { 15: 2, 30: 5, 45: 8, 60: 10 };
-// ponytail: one number for every product; tune after the operator watches real VTs.
-export const SEGUNDOS_POR_PRODUTO = 4;
+export const MAX_PRODUTOS = 12;
+export const SEGUNDOS_POR_PRODUTO = { rapido: 3, calmo: 4 };
+// The one list of VT frames; the motor's vt/molduras/<id>/ folders follow it.
+export const MOLDURAS = JSON.parse(readFileSync(new URL('./video-motor/vt/molduras/index.json', import.meta.url), 'utf8'));
+const MOLDURA_IDS = new Set(MOLDURAS.map((m) => m.id));
+const CAMPANHA_PADRAO = 'Ofertas da Semana';
+
+// Opening and closing take about 6 s; the rest is products at the chosen pace.
+export function produtosPorDuracao(duracao, ritmo) {
+  if (duracao === 'auto') return MAX_PRODUTOS;
+  return Math.min(MAX_PRODUTOS, Math.floor((Number(duracao) - 6) / SEGUNDOS_POR_PRODUTO[ritmo]));
+}
 
 function httpError(status, message) {
   return Object.assign(new Error(message), { status });
@@ -141,7 +149,12 @@ export function normalizeOferta(input, disponiveis, duracao) {
   const lista = Array.isArray(input?.produtos) ? input.produtos : [];
   if (!lista.length) throw httpError(400, 'Escolha pelo menos um produto.');
   if (lista.length > MAX_PRODUTOS) throw httpError(400, `No máximo ${MAX_PRODUTOS} produtos por vídeo.`);
-  if (duracao !== 'auto' && lista.length > PRODUTOS_POR_DURACAO[duracao]) throw httpError(400, `${duracao}s cabe até ${PRODUTOS_POR_DURACAO[duracao]} produtos.`);
+  const ritmo = input?.ritmo === 'calmo' ? 'calmo' : 'rapido';
+  const moldura = String(input?.moldura || 'encarte');
+  if (moldura !== 'auto' && !MOLDURA_IDS.has(moldura)) throw httpError(400, 'Moldura desconhecida.');
+  const campanha = String(input?.campanha ?? '').trim().slice(0, 30) || CAMPANHA_PADRAO;
+  const limite = produtosPorDuracao(duracao, ritmo);
+  if (duracao !== 'auto' && lista.length > limite) throw httpError(400, `${duracao}s cabe até ${limite} produtos.`);
   const porId = new Map(disponiveis.map((p) => [p.id, p]));
   const vistos = new Set();
   const produtos = lista.map((item) => {
@@ -159,6 +172,7 @@ export function normalizeOferta(input, disponiveis, duracao) {
     validoAte: /^\d{4}-\d{2}-\d{2}$/.test(String(input?.validoAte || '')) ? input.validoAte : '',
     criacao: input?.criacao === 'padrao' ? 'padrao' : 'nova',
     precosEm: new Date().toLocaleDateString('sv-SE'),
+    moldura, ritmo, campanha,
   };
 }
 
@@ -184,7 +198,15 @@ export function validateRoteiroOferta(roteiro, oferta) {
     }
     // {preço} or { preco } slip past MARCADOR and would be spoken as literal text.
     if (/[{}]/.test(fala.replace(MARCADOR, ''))) erros.push(`Cena ${i + 1}: marcador malformado; use {preco}, {precoDe}, {unidade} ou {validade}.`);
+    // Rápido: about 3 s per product, so only the name and the price.
+    if (p && oferta.ritmo === 'rapido') {
+      const palavras = (fala.replace(MARCADOR, ' ').match(/[\p{L}\d]+/gu) || []).length;
+      if (palavras > 6) erros.push(`Cena ${i + 1}: no ritmo rápido a fala do produto tem no máximo 6 palavras além do preço (tem ${palavras}).`);
+    }
   });
+  if (oferta.moldura === 'auto' && !MOLDURA_IDS.has(String(roteiro?.moldura || ''))) {
+    erros.push(`Escolha a moldura: escreva "moldura" no roteiro.json com um destes: ${[...MOLDURA_IDS].join(', ')}.`);
+  }
   for (const p of oferta.produtos) {
     if (!cenas.some((c) => String(c.produto) === p.id && /\{preco\}/.test(String(c.fala || '')))) erros.push(`Falta a cena de ${p.nome} com {preco}.`);
   }

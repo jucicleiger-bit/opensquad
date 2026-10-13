@@ -141,7 +141,8 @@ function duracaoTexto(b) {
   if (b.duracao !== 'auto') return `${b.duracao}s`;
   if (b.oferta) {
     const n = b.oferta.produtos.length;
-    return `automática (cerca de ${SEGUNDOS_POR_PRODUTO}s por produto × ${n} + uns 8s de abertura e fechamento ≈ ${n * SEGUNDOS_POR_PRODUTO + 8}s)`;
+    const s = SEGUNDOS_POR_PRODUTO[b.oferta.ritmo] || SEGUNDOS_POR_PRODUTO.rapido;
+    return `automática (cerca de ${s}s por produto × ${n} + uns 6s de abertura e fechamento ≈ ${n * s + 6}s)`;
   }
   return b.formato === 'status' ? 'automática (15 a 30s)' : 'automática (20 a 45s, o que o assunto pedir)';
 }
