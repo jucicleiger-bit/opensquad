@@ -356,7 +356,7 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
       <Secao n={6} id={`${uid}-est`} titulo="Estilo" ajuda="O clima visual e de ritmo do vídeo.">
         <div role="radiogroup" aria-labelledby={`${uid}-est`} className={styles.chipsRow}>
           {ESTILOS.map((e) => (
-            <label key={e.v} className={styles.styleChip} data-on={b.estilo === e.v}>
+            <label key={e.v} className={styles.suggestChip}>
               <input type="radio" className="sr-only" name="estilo" aria-label={e.nome.replace(/^\S+\s/, "")} checked={b.estilo === e.v} onChange={() => set("estilo", e.v)} />{e.nome}
             </label>
           ))}
