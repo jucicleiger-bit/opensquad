@@ -227,12 +227,12 @@ describe("Vídeo animado", () => {
     { id: "c", nome: "Leite", precoTela: "R$ 4,50", precoDeTela: "", unidade: "un", validoAte: "2026-10-20", previewUrl: "/p/c.png", foto: "/p/c.png", fotoTipo: "transparente", motivo: null },
     { id: "x", nome: "Ruim", precoTela: "", precoDeTela: "", unidade: "", validoAte: "", previewUrl: "", foto: null, fotoTipo: null, motivo: "preço inválido" },
   ];
-  function stubOferta() {
+  function stubOferta(videos: unknown[] = []) {
     return stubApi((url, init) => {
       if (url === "/api/state") return project(true);
       if (url.endsWith("/videos/produtos")) return { produtos: PRODUTOS };
       if (url.endsWith("/videos") && init?.method === "POST") return { video: { ...roteiroPronto.video, id: "v2", status: "roteiro_gerando" } };
-      if (url.endsWith("/videos")) return { videos: [] };
+      if (url.endsWith("/videos")) return { videos };
       return { ...roteiroPronto, video: { ...roteiroPronto.video, id: "v2", status: "roteiro_gerando" }, roteiro: null, ocupado: true };
     });
   }
@@ -273,6 +273,7 @@ describe("Vídeo animado", () => {
     const lista = await screen.findByRole("group", { name: "Produtos" });
     for (const nome of [/Fralda/, /Café/, /Leite/]) await userEvent.click(await within(lista).findByRole("checkbox", { name: nome }));
     await userEvent.click(screen.getByRole("radio", { name: "15s" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Calmo (4 s)" }));
     expect(screen.getByText("3 de 2")).toBeInTheDocument();
     expect(screen.getByText("15s cabe até 2 produtos.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Gerar roteiro" })).toBeDisabled();
@@ -281,7 +282,7 @@ describe("Vídeo animado", () => {
     await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
     const post = calls.find((c) => c.init?.method === "POST");
     expect(JSON.parse(String(post?.init?.body)).oferta).toEqual({
-      produtos: [{ id: "a", foto: "recorte" }, { id: "b", foto: "moldura" }, { id: "c", foto: "recorte" }], validoAte: "2026-10-18", criacao: "nova",
+      produtos: [{ id: "a", foto: "recorte" }, { id: "b", foto: "moldura" }, { id: "c", foto: "recorte" }], validoAte: "2026-10-18", criacao: "nova", moldura: "encarte", ritmo: "calmo", campanha: "Ofertas da Semana",
     });
   });
 
@@ -333,5 +334,65 @@ describe("Vídeo animado", () => {
     expect(screen.queryByRole("textbox", { name: /Pedir ajuste/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pedir ajuste" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Aprovar prévia" })).toBeInTheDocument();
+  });
+
+  const resumoVideo = (id: string, moldura: string | null, criadoEm: string) => ({ id, assunto: "Ofertas", objetivo: "oferta", duracao: 30, status: "pronto", erro: null, criadoEm, atualizadoEm: criadoEm, temVideo: true, moldura });
+
+  it("Oferta shows the frame tiles, defaults to encarte, and posts frame, pace and campaign", async () => {
+    const calls = stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    const molduras = screen.getByRole("radiogroup", { name: "Moldura" });
+    expect(within(molduras).getByRole("radio", { name: "Encarte" })).toBeChecked();
+    expect(within(molduras).getByRole("radio", { name: "Diagonal" })).toBeInTheDocument();
+    expect(within(molduras).getByRole("radio", { name: "✨ A IA escolhe" })).toBeInTheDocument();
+    await userEvent.click(within(molduras).getByRole("radio", { name: "Neon Premium" }));
+    expect(screen.getByRole("radio", { name: "Rápido (3 s)" })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: "Calmo (4 s)" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Selo da campanha" }), "Mês da Economia");
+    await userEvent.click(await screen.findByRole("checkbox", { name: /Fralda/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
+    const post = JSON.parse(String(calls.find((c) => c.init?.method === "POST")?.init?.body));
+    expect(post.oferta).toMatchObject({ moldura: "neon", ritmo: "calmo", campanha: "Mês da Economia" });
+  });
+
+  it("the frame defaults to the last Oferta video's frame", async () => {
+    stubOferta([resumoVideo("v9", "diagonal", "2026-10-12T10:00:00Z"), resumoVideo("v8", "neon", "2026-10-01T10:00:00Z")]);
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    expect(within(screen.getByRole("radiogroup", { name: "Moldura" })).getByRole("radio", { name: "Diagonal" })).toBeChecked();
+  });
+
+  it("A IA escolhe posts auto", async () => {
+    const calls = stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    await userEvent.click(screen.getByRole("radio", { name: "✨ A IA escolhe" }));
+    await userEvent.click(await screen.findByRole("checkbox", { name: /Fralda/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
+    const post = JSON.parse(String(calls.find((c) => c.init?.method === "POST")?.init?.body));
+    expect(post.oferta.moldura).toBe("auto");
+  });
+
+  it("the pace changes the product limit text", async () => {
+    stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    expect(screen.getByText("0 de 8")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Calmo (4 s)" }));
+    expect(screen.getByText("0 de 6")).toBeInTheDocument();
+  });
+
+  it("the review screen names the frame the AI chose", async () => {
+    const v = ofertaVideo("roteiro_pronto", "nova");
+    stubApi((url) => (url === "/api/state" ? project(true) : url.endsWith("/videos") ? { videos: [] } : {
+      ...v, video: { ...v.video, briefing: { ...v.video.briefing, oferta: { ...v.video.briefing.oferta, moldura: "auto", ritmo: "rapido", campanha: "X" } } }, roteiro: { ...v.roteiro, moldura: "neon" },
+    }));
+    renderAt("/projects/king/video?v=v1");
+    expect(await screen.findByText("Moldura Neon Premium")).toBeInTheDocument();
   });
 });

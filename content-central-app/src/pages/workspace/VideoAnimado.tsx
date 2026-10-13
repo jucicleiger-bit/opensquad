@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import {
   createVideo, getVideo, listVideoProdutos, listVideos, requestVideoAdjustment, saveVideoRoteiro, videoAction, videoFileUrl,
-  type VideoBriefing, type VideoCena, type VideoProduto, type VideoState, type VideoStatus, type VideoSummary,
+  type VideoBriefing, type VideoCena, type VideoOfertaInput, type VideoProduto, type VideoState, type VideoStatus, type VideoSummary,
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -63,8 +63,12 @@ const mudo = (el: HTMLVideoElement | null) => { if (el) el.defaultMuted = true; 
 const NOMES_OBJETIVO: Record<string, string> = { alcance: "Alcance", anuncio: "Anúncio", oferta: "Oferta", institucional: "Institucional", aviso: "Aviso" };
 const nomeObjetivo = (o: string) => NOMES_OBJETIVO[o] || o;
 const nomeDuracao = (d: number | "auto") => (d === "auto" ? "Automático" : `${d}s`);
-// Products an Oferta fits per duration (mirrors the server's PRODUTOS_POR_DURACAO; automatic duration takes up to the maximum).
-const LIMITE_PRODUTOS: Record<string, number> = { "15": 2, "30": 5, "45": 8, "60": 10, auto: 10 };
+// Frames and pace mirror the server (content-central-video-produtos.js); automatic duration takes up to the maximum.
+const MOLDURAS = [{ v: "encarte", nome: "Encarte", ajuda: "Fundo claro de panfleto, preço em selo" }, { v: "diagonal", nome: "Diagonal", ajuda: "Faixas inclinadas, ritmo de promoção" }, { v: "neon", nome: "Neon Premium", ajuda: "Fundo escuro com brilho neon" }] as const;
+const NOMES_MOLDURA: Record<string, string> = { encarte: "Encarte", diagonal: "Diagonal", neon: "Neon Premium", auto: "A IA escolhe" };
+const SEGUNDOS = { rapido: 3, calmo: 4 } as const;
+const MAX_PRODUTOS = 12;
+const limiteProdutos = (duracao: number | "auto", ritmo: "rapido" | "calmo") => (duracao === "auto" ? MAX_PRODUTOS : Math.min(MAX_PRODUTOS, Math.floor((duracao - 6) / SEGUNDOS[ritmo])));
 const CRIACOES = [
   { v: "nova", nome: "Criação nova", ajuda: "O Claude cria um VT único · ~15 min" },
   { v: "padrao", nome: "VT padrão", ajuda: "Modelo fixo nas cores da marca · ~5 min" },
@@ -167,6 +171,8 @@ export function VideoAnimado() {
   const reload = useCallback(() => listVideos(project.projectId).then((r) => setVideos(r.videos)).catch((e: Error) => setError(e.message)), [project.projectId]);
   useEffect(() => { reload(); }, [reload]);
   const open = (id: string | null) => setParams(id ? { v: id } : {});
+  // The list comes newest first, but sort anyway so the default never depends on it.
+  const ultimaMoldura = ([...(videos || [])].filter((v) => v.objetivo === "oferta" && v.moldura).sort((a, b) => b.criadoEm.localeCompare(a.criadoEm))[0]?.moldura || null) as VideoOfertaInput["moldura"] | null;
   const comecar = () => { setNovo(true); open(null); };
 
   return (
@@ -179,7 +185,7 @@ export function VideoAnimado() {
         <Button type="button" onClick={comecar}><Icon name="plus" />Novo vídeo</Button>
       </header>
       {error ? <div className="pill bad">{error}</div> : null}
-      {novo ? <NovoVideo project={project} onCreated={(id) => { setNovo(false); reload(); open(id); }} onCancel={() => setNovo(false)} /> : null}
+      {novo ? <NovoVideo project={project} ultimaMoldura={ultimaMoldura} onCreated={(id) => { setNovo(false); reload(); open(id); }} onCancel={() => setNovo(false)} /> : null}
       {selected ? <VideoDetalhe projectId={project.projectId} videoId={selected} onChanged={reload} onClose={() => open(null)} /> : null}
       {!selected && !novo ? (
         videos === null ? (
@@ -235,7 +241,7 @@ function Secao({ n, titulo, ajuda, id, children }: { n: number; titulo: string; 
   );
 }
 
-function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext["project"]; onCreated: (id: string) => void; onCancel: () => void }) {
+function NovoVideo({ project, ultimaMoldura, onCreated, onCancel }: { project: WorkspaceContext["project"]; ultimaMoldura: VideoOfertaInput["moldura"] | null; onCreated: (id: string) => void; onCancel: () => void }) {
   const [b, setB] = useState<VideoBriefing>({ assunto: "", objetivo: "alcance", formato: "reels", estilo: "livre", duracao: 30, tom: "criador", legenda: "do-video", observacao: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -255,6 +261,11 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   const [validoAte, setValidoAte] = useState("");
   const [validadeMexida, setValidadeMexida] = useState(false);
   const [criacao, setCriacao] = useState<"nova" | "padrao">("nova");
+  // null = untouched, so the last-used frame still applies if the list arrives after the form opens.
+  const [molduraEscolhida, setMolduraEscolhida] = useState<VideoOfertaInput["moldura"] | null>(null);
+  const moldura = molduraEscolhida ?? ultimaMoldura ?? "encarte";
+  const [ritmo, setRitmo] = useState<VideoOfertaInput["ritmo"]>("rapido");
+  const [campanha, setCampanha] = useState("");
   useEffect(() => {
     if (b.objetivo !== "oferta" || produtos) return;
     listVideoProdutos(project.projectId).then((r) => setProdutos(r.produtos)).catch((e) => setError((e as Error).message));
@@ -296,19 +307,19 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   }
 
   const oferta = b.objetivo === "oferta";
-  const limite = LIMITE_PRODUTOS[String(b.duracao)];
+  const limite = limiteProdutos(b.duracao, ritmo);
   const excedeu = oferta && escolhidos.length > limite;
   const faltaProduto = oferta && escolhidos.length === 0;
   const padrao = oferta && criacao === "padrao";
   const body: VideoBriefing = oferta
-    ? { ...b, estilo: padrao ? "livre" : b.estilo, oferta: { produtos: escolhidos, validoAte, criacao } }
+    ? { ...b, estilo: padrao ? "livre" : b.estilo, oferta: { produtos: escolhidos, validoAte, criacao, moldura, ritmo, campanha: campanha.trim() || "Ofertas da Semana" } }
     : b;
   // Sections are numbered in render order, since Produtos and Estilo come and go.
   let n = 0;
   const objetivo = OBJETIVOS.find((o) => o.v === b.objetivo)!;
   const foraDoIdeal = b.duracao !== "auto" && (b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1]);
   const resumo = [objetivo.nome, nomeDuracao(b.duracao), FORMATOS.find((f) => f.v === b.formato)!.nome, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
-  const resumoCompleto = [resumo, oferta ? `${escolhidos.length} produto${escolhidos.length === 1 ? "" : "s"}` : "", padrao ? "VT padrão" : ""].filter(Boolean).join(" · ");
+  const resumoCompleto = [resumo, oferta ? `${escolhidos.length} produto${escolhidos.length === 1 ? "" : "s"}` : "", oferta ? NOMES_MOLDURA[moldura] : "", oferta ? (ritmo === "rapido" ? "Rápido" : "Calmo") : "", padrao ? "VT padrão" : ""].filter(Boolean).join(" · ");
 
   return (
     <Card className={styles.form}>
@@ -399,6 +410,31 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
               </label>
             ))}
           </div>
+          <div role="radiogroup" aria-label="Moldura" className={styles.gallery}>
+            {[...MOLDURAS, { v: "auto", nome: "✨ A IA escolhe", ajuda: "A IA escolhe pela época e pelo assunto" }].map((m) => (
+              <label key={m.v} className={styles.tile}>
+                <input type="radio" className="sr-only" name="moldura" aria-label={m.nome} checked={moldura === m.v} onChange={() => setMolduraEscolhida(m.v as VideoOfertaInput["moldura"])} />
+                <span className={styles.tileMedia}>
+                  {m.v === "auto"
+                    ? <span className={styles.tileIcon} style={{ fontSize: 30 }} aria-hidden="true">✨</span>
+                    : <video ref={mudo} src={`/video-molduras/${m.v}.mp4`} autoPlay loop muted playsInline preload="auto" aria-hidden="true" />}
+                  <span className={styles.tileCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+                </span>
+                <span className={styles.tileName}>{m.nome}</span>
+                <span className={styles.tileHelp}>{m.ajuda}</span>
+              </label>
+            ))}
+          </div>
+          <div role="radiogroup" aria-label="Ritmo" className={styles.segmented}>
+            {([["rapido", "Rápido"], ["calmo", "Calmo"]] as const).map(([v, nome]) => (
+              <label key={v} className={styles.segment}>
+                <input type="radio" className="sr-only" name="ritmo" aria-label={`${nome} (${SEGUNDOS[v]} s)`} checked={ritmo === v} onChange={() => setRitmo(v)} />{nome} ({SEGUNDOS[v]} s)
+              </label>
+            ))}
+          </div>
+          <label className={styles.field}>Selo da campanha
+            <input type="text" maxLength={30} value={campanha} onChange={(e) => setCampanha(e.target.value)} placeholder="Ofertas da Semana" />
+          </label>
         </Secao>
       ) : null}
 
@@ -577,6 +613,7 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
           <span className={styles.chip}>{nomeDuracao(meta)}</span>
           {precosEm ? <span className={styles.chip}>{`preços de ${diaMes(precosEm)}`}</span> : null}
           {padrao ? <span className={styles.chip}>VT padrão</span> : null}
+          {oferta?.moldura ? <span className={styles.chip}>{`Moldura ${NOMES_MOLDURA[oferta.moldura === "auto" && state.roteiro?.moldura ? state.roteiro.moldura : oferta.moldura] || oferta.moldura}`}</span> : null}
         </div>
       </div>
       <Etapas status={video.status} falhou={falhou} />
