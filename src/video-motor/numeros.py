@@ -34,14 +34,18 @@ def _inteiro(n):
 
 
 def falado(token):
-    t = token.strip(" .!?…;:\"'()").lower()
+    # Whisper glues punctuation to the word before it ("32,90,"); keep a leading comma (",90").
+    t = token.strip(" .!?…;:\"'()").rstrip(",").lower()
     m = re.fullmatch(r",(\d{1,2})", t)  # Whisper sometimes splits "32 ,90"
     if m:
         return ["e"] + _inteiro(int(m.group(1).ljust(2, "0"))).split()
     m = re.fullmatch(r"(?:r\$)?(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(kg|g|l|ml|%|un)?", t)
     if not m:
         return [token]
-    out = _inteiro(int(m.group(1).replace(".", ""))).split()
+    inteiro = int(m.group(1).replace(".", ""))
+    if inteiro == 0 and m.group(2) and not m.group(3):  # "0,99" -> "noventa e nove centavos", like precoPorExtenso
+        return _inteiro(int(m.group(2).ljust(2, "0"))).split() + ["centavos"]
+    out = _inteiro(inteiro).split()
     if m.group(2):
         out += ["e"] + _inteiro(int(m.group(2).ljust(2, "0"))).split()
     return out + SUFIXOS.get(m.group(3) or "", [])
@@ -55,5 +59,8 @@ if __name__ == "__main__":
     assert falado("R$1.234,50") == "mil duzentos e trinta e quatro e cinquenta".split()
     assert falado("1100") == ["mil", "e", "cem"]
     assert falado("13,9!") == "treze e noventa".split()
+    assert falado("32,90,") == "trinta e dois e noventa".split()
+    assert falado("R$13,99,") == "treze e noventa e nove".split()
+    assert falado("0,99") == ["noventa", "e", "nove", "centavos"]
     assert falado("Fralda") == ["Fralda"]
     print("ok")
