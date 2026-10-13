@@ -74,7 +74,7 @@ src/video-motor/vt/molduras/diagonal/moldura.js
 src/video-motor/vt/molduras/neon/moldura.js
 src/video-motor/vt/molduras/index.json       [{ id, nome, trilha }] — the single list of frames
 src/video-motor/trilhas/*.mp3 + LICENCAS.md  music beds
-src/video-motor/checar.mjs                   the render check (used by render.mjs --checar and by the jobs)
+src/video-motor/checar.mjs                   the render check (CLI: node checar.mjs <dir>; also used by the jobs)
 content-central-app/public/video-molduras/<id>.mp4   muted form samples
 ```
 
@@ -160,12 +160,12 @@ When `roteiro.moldura` is set:
   - The exception is `moldura` with `auto`. Then stage 1 asks Claude to write `"moldura": "<id>"` (one of `index.json`) in `roteiro.json`.
   - `validateRoteiroOferta` rejects a missing or unknown id. The existing single retry carries the error.
   - The chosen id is kept in `roteiro.json`, and the review screen shows it.
-- **Rápido falas are short.** With `ritmo: rapido`, each product scene's **expanded** fala has at most 10 words, for example "Omo de setecentos gramas, quatorze e noventa e nove!".
-  - `validateRoteiroOferta` checks this after expansion. The check goes through the same retry.
+- **Rápido falas are short.** With `ritmo: rapido`, each product scene's fala has at most 6 words besides its placeholders (`{preco}`, `{precoDe}`, `{unidade}`), for example "Omo de setecentos gramas, {preco}!" or "Fralda IsaBaby, de {precoDe} por {preco}!". The spoken prices themselves are as long as they are.
+  - `validateRoteiroOferta` checks this before expansion. The check goes through the same retry.
 
 ### Render check (`checar.mjs`)
 
-`checarVideo({ videoDir })` opens the player like `renderVideo` does. For each scene with `produto`, it seeks to **0.6 s after the first word of `precoFalado`** (or 75% into the scene when that word is not found) and measures in the page. It returns `{ ok, falhas: ['Cena 3 (fralda): preço sai da área segura (x 18–480).', …] }`.
+`checarVideo({ videoDir })` opens the player like `renderVideo` does. For each scene with `produto`, it seeks to **0.6 s after `VT.momentoPreco`**: the last mention of the first word of `precoFalado`, since a "de" price is usually said first (or 75% into the scene when that word is not found) and measures in the page. It returns `{ ok, falhas: ['Cena 3 (fralda): preço sai da área segura (x 18–480).', …] }`.
 
 | Check | Pass |
 |---|---|
@@ -179,7 +179,7 @@ When `roteiro.moldura` is set:
 Effective opacity and transforms are computed by walking up from the element to `#stage`.
 
 **Where it runs:**
-- **The CLI** is `node render.mjs <dir> --checar`. It prints `ok` or the failures, and exits 1 on failure.
+- **The CLI** is `node <MOTOR>/checar.mjs <dir>`. It prints `ok` or the failures, and exits 1 on failure. (It lives in its own file, not as a `render.mjs` flag, so the music change to `render.mjs` and the check can be built in parallel.)
 - **Criação nova:**
   - Step 4 of `PEDIDO-producao.md` tells Claude to run it and fix `cenas.js` until it prints `ok`. Claude quotes the output in `NOTAS.md`.
   - The job then runs `checarVideo` itself after the runner. On failure it reruns stage 2 once, passing the failures as `erroAnterior`.
@@ -204,9 +204,9 @@ The form samples are about 6 s each, rendered once from a fixture with the VT pa
   - the price is always `VT.precoHtml` with `VT.carimbo` or `VT.contagem`;
   - transitions come from the frame or the kit;
   - mark the product photo `data-papel="produto"`;
-  - run `--checar`.
+  - run `node <MOTOR>/checar.mjs .`.
 - **PEDIDO-roteiro.md** covers `moldura: auto` and the short rápido falas.
-- **PEDIDO-producao.md** step 4 adds the `--checar` loop.
+- **PEDIDO-producao.md** step 4 adds the `checar.mjs` loop.
 
 ## Error handling
 
@@ -227,7 +227,7 @@ The form samples are about 6 s each, rendered once from a fixture with the VT pa
   - moldura, ritmo and campanha are normalized;
   - the pace limits table above holds;
   - with `auto`, the roteiro is validated for an id, and an unknown id is rejected;
-  - a rápido fala over 10 expanded words is rejected.
+  - a rápido fala with more than 6 words besides its placeholders is rejected.
 - **Jobs:**
   - a failing check reruns stage 2 once with the failures, then sets `erro`;
   - VT padrão runs the check.
