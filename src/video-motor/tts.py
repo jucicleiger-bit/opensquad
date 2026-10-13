@@ -69,8 +69,11 @@ def falar_gemini(texto, mp3, voice):
     key = env_key("OPENSQUAD_GEMINI_API_KEY")
     if not key:
         raise RuntimeError("sem OPENSQUAD_GEMINI_API_KEY no .env")
+    # Headed sections, as in Google's TTS prompting guide. With the direction as
+    # a plain paragraph the model read it aloud (2 of 2 tries); with headers, 0 of 3.
+    estilo = re.sub(r"\s*Leia exatamente o texto abaixo.*$", "", direcao)
     body = json.dumps({
-        "contents": [{"parts": [{"text": f"{direcao}\n\n{texto}"}]}],
+        "contents": [{"parts": [{"text": f"### DIRECTOR'S NOTES\n{estilo}\n\n#### TRANSCRIPT\n{texto}"}]}],
         "generationConfig": {"responseModalities": ["AUDIO"], "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}}},
     }).encode()
     req = urllib.request.Request(f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
