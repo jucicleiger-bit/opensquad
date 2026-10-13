@@ -62,7 +62,12 @@ test('eases start at 0 and end at 1; snapSettle is mostly done early', async () 
   }
   assert.ok(VT.ease.snapSettle(0.1) > 0.5);
   assert.ok(VT.ease.accelExit(0.5) < 0.2);
-  assert.ok(VT.ease.popOver(0.72) > 1.05);
+  const po = VT.ease.popOver;
+  let pico = 0, tPico = 0;
+  for (let i = 0; i <= 100; i += 1) { const v = po(i / 100); if (v > pico) { pico = v; tPico = i / 100; } }
+  assert.ok(pico >= 1.06 && pico <= 1.10, `popOver peak ${pico}`);
+  assert.ok(tPico >= 0.65 && tPico <= 0.80, `popOver peak at ${tPico}`);
+  assert.ok(po(0.25) >= 0.40 && po(0.25) <= 0.52, `popOver(0.25) ${po(0.25)}`);
 });
 
 test('momentoPreco takes the last mention of the first spoken price word', async () => {

@@ -9,6 +9,16 @@
   const lerp = (a, b, x) => a + (b - a) * x;
   const expoOut = (k) => (x) => (1 - Math.exp(-k * x)) / (1 - Math.exp(-k));
 
+  // Smooth piecewise curve: cubic Hermite through points (X, Y) with slopes M.
+  const hermite = (X, Y, M) => (x) => {
+    if (x <= 0) return 0;
+    if (x >= 1) return 1;
+    let i = 0;
+    while (x > X[i + 1]) i += 1;
+    const h = X[i + 1] - X[i], u = (x - X[i]) / h, u2 = u * u, u3 = u2 * u;
+    return (2 * u3 - 3 * u2 + 1) * Y[i] + (u3 - 2 * u2 + u) * h * M[i] + (3 * u2 - 2 * u3) * Y[i + 1] + (u3 - u2) * h * M[i + 1];
+  };
+
   // The measured eases, fitted to "% done at 10/25/50/75% of the move".
   const ease = {
     cruise: (x) => x,
@@ -19,8 +29,9 @@
     snapSettle: expoOut(7.5),
     whip: (x) => 1 - Math.pow(1 - x, 2.5),
     accelExit: (x) => Math.pow(x, 2.6),
-    // Late lean past the mark (peak ~1.08 near 0.72).
-    popOver: (x) => { const c = 1.3; return x >= 1 ? 1 : 1 + (c + 1) * Math.pow(x - 1, 3) + c * Math.pow(x - 1, 2); },
+    // Late lean past the mark: cubic Hermite through the measured anchors
+    // (10/25/50/75% of the move = 10/46/96/108% done), peak 1.08 at 0.72, back to 1 at 1.
+    popOver: hermite([0, 0.1, 0.25, 0.5, 0.72, 1], [0, 0.1, 0.46, 0.96, 1.08, 1], [0.6, 1.7, 2.4, 1.3, 0, 0]),
     // Slam: past the mark almost at once (peak 1.18 at 0.27), relaxing back.
     crashIn: (x) => (x <= 0 ? 0 : x >= 1 ? 1 : x < 0.27 ? 1.18 * Math.sin((x / 0.27) * Math.PI / 2) : 1 + 0.18 * Math.pow(1 - (x - 0.27) / 0.73, 2)),
   };
