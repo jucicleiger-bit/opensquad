@@ -68,5 +68,13 @@ Os vídeos são escritos pelo Claude (decisão de 2026-10-10). O Codex ficou par
 - Cada produto tem uma cena com `"produto": "<id>"` e `{preco}` na fala. Ritmo de locutor: frases curtas e exclamações, nome do produto, preço, próximo.
 - **Na tela**, preços só de `PRODUTOS[i].precoTela` e `PRODUTOS[i].precoDeTela` (risque o "de"). Nunca escreva um valor à mão no `cenas.js`.
 - `fotoTipo`: `recorte` e `transparente` já vêm sem fundo (pode fazer o produto voar, girar, crescer); `moldura` é foto com fundo real: mostre dentro de um cartão ou moldura, nunca como recorte.
+- **Layout de cada cena de produto** (palco de 540×960; vale também para a criação nova — a animação é livre, o tamanho não):
+  - **Produto é o herói:** a foto ocupa pelo menos 55% da altura do palco (≥ 520 px) ou 80% da largura, o que vier primeiro, centrada. Nunca um produto pequeno no alto com a tela vazia embaixo.
+  - **Preço gigante:** `precoTela` num selo de encarte (explosão, estrela ou etiqueta amarela com borda/sombra), com os números em pelo menos 72 px de altura, colado ou sobreposto a um canto do produto. Ele entra no máximo quando a primeira palavra do preço é falada e fica **parado, inteiro e legível até o fim da cena** (pelo menos 1,5 s). Pode pulsar, mas nunca sai nem gira a ponto de dificultar a leitura.
+  - **Preço "de"** (`precoDeTela`): riscado, pelo menos 34 px, logo acima ou ao lado do selo.
+  - **Nome do produto:** faixa no topo, pelo menos 30 px.
+  - **Área segura do Reels:** tudo que importa fica entre x 24 e 460 e entre y 110 e 800 (a lateral direita e a faixa de baixo ficam sob os botões e a legenda do Instagram). Nada cortado na borda.
+  - **Sem legenda palavra por palavra:** numa Oferta, o texto da tela é o nome e o preço (o formulário já escolhe "Sem legenda").
+  - **Confira nos stills:** um still por produto logo depois da fala do preço. O produto precisa estar grande e o preço inteiro e legível. Se não estiver, corrija antes de entregar.
 - Fecho: validade (se houver), endereço e WhatsApp.
 - **VT padrão** (`criacao: padrao`): as cenas são exatamente `abertura`, uma `produto` por produto na ordem de `produtos.json`, e `fechamento`. O visual é o modelo fixo; escreva só as falas.

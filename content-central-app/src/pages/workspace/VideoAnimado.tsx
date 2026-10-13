@@ -265,10 +265,12 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
     const datas = escolhidos.map((e) => produtos.find((p) => p.id === e.id)?.validoAte).filter(Boolean).sort() as string[];
     setValidoAte(datas[0] || "");
   }, [escolhidos, produtos, validadeMexida]);
-  // Oferta is narrated by the locutor; leaving it hands the voice back to the creator.
+  // Oferta is narrated by the locutor and shows no caption (the price is the text on
+  // screen); leaving it hands the voice and caption back to the defaults.
   function escolherObjetivo(v: VideoBriefing["objetivo"]) {
     setB((prev) => ({
       ...prev, objetivo: v, tom: v === "oferta" ? "locutor" : prev.tom === "locutor" ? "criador" : prev.tom,
+      legenda: v === "oferta" ? "sem" : prev.objetivo === "oferta" && prev.legenda === "sem" ? "do-video" : prev.legenda,
       assunto: v === "oferta" && !prev.assunto.trim() ? "Ofertas da semana" : prev.assunto,
     }));
   }

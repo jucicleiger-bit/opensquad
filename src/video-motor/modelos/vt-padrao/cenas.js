@@ -13,8 +13,9 @@
   window.VIDEO = {
     estrelas: false,
     fontes: 'https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@700;900&display=swap',
-    // The stage is 540×960 CSS px (rendered at 2×). The caption band starts at
-    // top 612px, so prices and the WhatsApp button stay above ~600px.
+    // The stage is 540×960 CSS px (rendered at 2×). Oferta videos have no
+    // caption by default, so the product fills the middle and the price sits
+    // under it, all inside the Reels safe area (x 24–460, y 110–800).
     css: `
       #stage { background: radial-gradient(circle at 50% 35%, ${cor} 0%, #120406 78%); }
       .vt-faixa { position:absolute; left:-30px; right:-30px; height:75px; background:#FFD100; transform:rotate(-6deg); box-shadow:0 6px 0 rgba(0,0,0,.25); }
@@ -22,15 +23,15 @@
       .vt-sub { position:absolute; left:0; right:0; text-align:center; font:900 27px Inter, sans-serif; color:#120406; text-transform:uppercase; }
       .vt-logo { position:absolute; left:50%; width:140px; height:140px; margin-left:-70px; border-radius:50%; background:#fff; display:grid; place-items:center; box-shadow:0 9px 20px rgba(0,0,0,.4); }
       .vt-logo img { max-width:78%; max-height:78%; }
-      .vt-foto { position:absolute; left:50%; top:118px; width:380px; height:320px; margin-left:-190px; box-sizing:border-box; display:grid; place-items:center; }
-      .vt-foto img { max-width:380px; max-height:320px; filter:drop-shadow(0 15px 20px rgba(0,0,0,.45)); }
+      .vt-foto { position:absolute; left:50%; top:122px; width:460px; height:470px; margin-left:-230px; box-sizing:border-box; display:grid; place-items:center; }
+      .vt-foto img { max-width:460px; max-height:470px; filter:drop-shadow(0 15px 20px rgba(0,0,0,.45)); }
       .vt-foto.moldura { background:#fff; border-radius:24px; padding:16px; box-shadow:0 15px 30px rgba(0,0,0,.45); }
-      .vt-foto.moldura img { max-width:348px; max-height:288px; border-radius:12px; filter:none; }
+      .vt-foto.moldura img { max-width:428px; max-height:438px; border-radius:12px; filter:none; }
       .vt-nome { position:absolute; left:30px; right:30px; top:34px; text-align:center; font:900 36px/1.05 Inter, sans-serif; color:#fff; text-transform:uppercase; text-shadow:0 3px 0 rgba(0,0,0,.35); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-      .vt-de { position:absolute; left:0; right:0; top:444px; text-align:center; font:900 28px Inter, sans-serif; color:#fff; opacity:.85; }
+      .vt-de { position:absolute; left:0; right:0; top:598px; text-align:center; font:900 34px Inter, sans-serif; color:#fff; opacity:.85; }
       .vt-de s { text-decoration-thickness:4px; text-decoration-color:#FFD100; }
-      .vt-preco { position:absolute; left:50%; top:480px; transform-origin:50% 50%; padding:4px 24px; margin-left:-160px; width:320px; border-radius:18px; background:#FFD100; color:#120406; text-align:center; font:400 78px/1 Anton, sans-serif; box-shadow:0 8px 0 rgba(0,0,0,.3); }
-      .vt-preco small { font:900 18px/1.1 Inter, sans-serif; display:block; margin-top:5px; }
+      .vt-preco { position:absolute; left:0; right:0; margin:0 auto; width:fit-content; min-width:280px; white-space:nowrap; top:644px; transform-origin:50% 50%; padding:6px 28px; border-radius:20px; background:#FFD100; color:#120406; text-align:center; font:400 100px/1 Anton, sans-serif; box-shadow:0 8px 0 rgba(0,0,0,.3); }
+      .vt-preco small { font:900 22px/1.1 Inter, sans-serif; display:block; margin-top:5px; }
       .vt-info { position:absolute; left:35px; right:35px; text-align:center; font:900 26px/1.25 Inter, sans-serif; color:#fff; }
       .vt-whats { position:absolute; left:50%; top:440px; margin-left:-210px; width:420px; box-sizing:border-box; padding:16px 10px; border-radius:999px; background:#25D366; color:#fff; text-align:center; white-space:nowrap; font:900 28px Inter, sans-serif; box-shadow:0 8px 0 rgba(0,0,0,.25); }
     `,

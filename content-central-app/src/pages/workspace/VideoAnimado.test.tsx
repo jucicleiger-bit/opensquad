@@ -195,6 +195,14 @@ describe("Vídeo animado", () => {
     expect(screen.getByRole("radio", { name: "Criador de conteúdo" })).toBeChecked();
   });
 
+  it("choosing Oferta preselects no caption, and leaving it restores the video's own", async () => {
+    await abrirForm();
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    expect(screen.getByRole("radio", { name: "Sem legenda" })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: "Alcance" }));
+    expect(screen.getByRole("radio", { name: "Do vídeo (sob medida)" })).toBeChecked();
+  });
+
   it("posts formato, estilo and duracao auto", async () => {
     const calls = stubApi((url, init) => {
       if (url === "/api/state") return project(true);
