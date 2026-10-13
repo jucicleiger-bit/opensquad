@@ -15,6 +15,7 @@ import asyncio, base64, difflib, json, os, re, shutil, subprocess, sys, unicoded
 from pathlib import Path
 import aiohttp
 import edge_tts
+from numeros import falado
 
 MAX_GAP = 0.22  # longest silence kept between two words, seconds
 TAIL = 0.15     # audio kept after the last word ends, seconds
@@ -126,6 +127,18 @@ def alinhar(mp3, texto):
     out = subprocess.run([UV, "run", "--python", "3.11", "--with", "faster-whisper", "python", str(motor / "alinhar.py"), str(mp3), "small"],
                          capture_output=True, check=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     ouvidas = json.loads(out.stdout.decode("utf-8"))
+    # Gemini TTS sometimes reads its direction aloud before the script; the
+    # caller then falls back to Live, which takes the direction as a system prompt.
+    if re.search(r"\bleia\s+em\s+portugu", " ".join(w["w"] for w in ouvidas), re.I):
+        raise RuntimeError("a voz leu a direção em voz alta")
+    # Whisper writes numbers as digits; the script spells them out. Split each
+    # numeric token into its spoken words, sharing the token's time evenly.
+    expandidas = []
+    for w in ouvidas:
+        pecas = falado(w["w"])
+        d = w["d"] / len(pecas)
+        expandidas += [{"w": p, "t": round(w["t"] + i * d, 3), "d": round(d, 3)} for i, p in enumerate(pecas)]
+    ouvidas = expandidas
     esperadas = tokens(texto)
     a = [norm(w) for w in esperadas]
     b = [norm(re.sub(r"[^\w'-]", "", w["w"])) for w in ouvidas]
