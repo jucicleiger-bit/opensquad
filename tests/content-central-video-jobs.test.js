@@ -44,6 +44,7 @@ function fakeRunner(calls, { fail } = {}) {
 test('isUsageLimit recognises Claude Code limit messages', () => {
   assert.equal(isUsageLimit('Claude AI usage limit reached|1791700000'), true);
   assert.equal(isUsageLimit("You've hit your limit · resets 3pm"), true);
+  assert.equal(isUsageLimit("You've hit your session limit · resets 2am (America/Cuiaba)"), true);
   assert.equal(isUsageLimit('erro de sintaxe'), false);
 });
 

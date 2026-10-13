@@ -28,7 +28,7 @@ export const DIRECOES = {
 };
 
 export function isUsageLimit(text) {
-  return /usage limit|hit your limit|limit reached|limite de uso/i.test(String(text || ''));
+  return /usage limit|session limit|hit your (\w+ )?limit|limit reached|limite de uso/i.test(String(text || ''));
 }
 
 // Killing only claude.exe would leave its Bash children (Chromium, python,

@@ -148,6 +148,22 @@ test('files are served from a whitelist, the MP4 honours Range', async () => {
   });
 });
 
+test('Oferta product photos are served, other files under fotos/ are not', async () => {
+  await withServer(async (dir, server) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const vdir = videoDir(dir, 'king', body.video.id);
+    await mkdir(join(vdir, 'fotos'), { recursive: true });
+    await writeFile(join(vdir, 'fotos', 'produto-abc.png'), 'png');
+    await writeFile(join(vdir, 'fotos', 'logo.png'), 'png');
+    const base = `${server.url}/api/projects/king/videos/${body.video.id}/arquivo`;
+    const foto = await realFetch(`${base}/fotos/produto-abc.png`);
+    assert.equal(foto.status, 200);
+    assert.equal(foto.headers.get('content-type'), 'image/png');
+    assert.equal((await realFetch(`${base}/fotos/logo.png`)).status, 404);
+    assert.equal((await realFetch(`${base}/fotos/../video.json`)).status, 404);
+  });
+});
+
 test('retomar reruns the stage recorded for the current status, never a stale one', async () => {
   await withServer(async (dir, server, enqueued) => {
     const { body } = await call(server, '/api/projects/king/videos', briefing);
