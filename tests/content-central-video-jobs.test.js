@@ -586,3 +586,56 @@ test('Oferta with moldura auto and no pick: one retry, then erro', async () => {
     assert.match((await readVideo('king', video.id, dir)).erro, /moldura/);
   });
 });
+
+test('Oferta auto: stage 2 prompt names the approved frame and Claude cannot swap it', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const prompts = [];
+    const runner = async ({ prompt, cwd }) => {
+      prompts.push(prompt);
+      if (/# Etapa 1/.test(prompt)) {
+        await ofertaRunner([], ['Fralda por {preco}!'])({ prompt, cwd });
+        const p = join(cwd, 'roteiro.json');
+        await writeFile(p, JSON.stringify({ ...JSON.parse(await readFile(p, 'utf8')), moldura: 'diagonal' }));
+        return { text: 'ok' };
+      }
+      const p = join(cwd, 'roteiro.json');
+      await writeFile(p, JSON.stringify({ ...JSON.parse(await readFile(p, 'utf8')), moldura: 'neon' }));
+      await writeFile(join(cwd, 'cenas.js'), '// cenas');
+      await mkdir(join(cwd, 'voz'), { recursive: true });
+      await writeFile(join(cwd, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'a', t: 0.1, d: 0.2 }] }] }));
+      return { text: 'ok' };
+    };
+    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) });
+    const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, moldura: 'auto' } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    await jobs.enqueue('king', video.id, 'producao');
+    await jobs.idle();
+    assert.equal((await readVideo('king', video.id, dir)).status, STATUS.PREVIA_PRONTA);
+    assert.match(prompts[1], /Moldura: Diagonal \(diagonal\)/);
+    assert.doesNotMatch(prompts[1], /você escolhe/);
+    const r = JSON.parse(await readFile(join(videoDir(dir, 'king', video.id), 'roteiro.json'), 'utf8'));
+    assert.equal(r.moldura, 'diagonal');
+    assert.equal(r.trilha, 'midnight-funk.mp3');
+  });
+});
+
+test('Oferta made before frames existed: no moldura, campanha, ritmo or trilha in roteiro.json, no Moldura line', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda por {preco}!']), renderer: async () => ({}) });
+    const video = await createVideo('king', ofertaBriefing, dir);
+    const { briefing: atual } = await readVideo('king', video.id, dir);
+    const legado = { ...atual.oferta };
+    for (const k of ['moldura', 'ritmo', 'campanha']) delete legado[k];
+    await updateVideo('king', video.id, { briefing: { ...atual, oferta: legado } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    const r = JSON.parse(await readFile(join(videoDir(dir, 'king', video.id), 'roteiro.json'), 'utf8'));
+    for (const k of ['moldura', 'campanha', 'ritmo', 'trilha']) assert.equal(k in r, false, k);
+    assert.doesNotMatch(calls[0].prompt, /Moldura:/);
+  });
+});

@@ -148,24 +148,25 @@ function duracaoTexto(b) {
 }
 
 const NOMES_RITMO = { rapido: 'rápido', calmo: 'calmo' };
-function linhaMoldura(o) {
-  const ritmo = `ritmo ${NOMES_RITMO[o.ritmo] || 'rápido'} (${SEGUNDOS_POR_PRODUTO[o.ritmo] || 3}s por produto)`;
+// `escolhida`: the frame already approved in stage 1, so stage 2 never offers a re-pick.
+function linhaMoldura(o, escolhida) {
+  const ritmo = `ritmo ${NOMES_RITMO[o.ritmo] || 'rápido'} (${SEGUNDOS_POR_PRODUTO[o.ritmo] || SEGUNDOS_POR_PRODUTO.rapido}s por produto)`;
   const selo = `selo da campanha "${o.campanha || 'Ofertas da Semana'}"`;
-  if (o.moldura === 'auto') {
+  if (o.moldura === 'auto' && !escolhida) {
     return `Moldura: você escolhe pelo assunto, a observação e a época; escreva "moldura": "<id>" no roteiro.json, um de: ${MOLDURAS.map((m) => `${m.id}: ${m.descricao}`).join('; ')}. ${ritmo}, ${selo}.`;
   }
-  const m = MOLDURAS.find((x) => x.id === o.moldura) || MOLDURAS[0];
+  const m = MOLDURAS.find((x) => x.id === (o.moldura === 'auto' ? escolhida : o.moldura)) || MOLDURAS[0];
   return `Moldura: ${m.nome} (${m.id}), ${ritmo}, ${selo}.`;
 }
 
-function stagePrompt(nome, video, temLogo, erroAnterior) {
+function stagePrompt(nome, video, temLogo, erroAnterior, moldura) {
   const b = video.briefing;
   return [
     `Leia e siga ${MOTOR_PROMPT}/${nome}. Onde ele diz <MOTOR>, use: ${MOTOR_PROMPT}`,
     `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${duracaoTexto(b)}.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
     `Formato: ${b.formato === 'status' ? 'Story/Status do WhatsApp (REGRAS.md § Formato)' : 'Reels'}.`,
     ...(b.oferta ? [`Oferta: ${b.oferta.produtos.length} produto${b.oferta.produtos.length > 1 ? 's' : ''} em produtos.json, criação ${b.oferta.criacao === 'padrao' ? 'VT padrão' : 'nova'} (REGRAS.md § Oferta).`] : []),
-    ...(b.oferta ? [linhaMoldura(b.oferta)] : []),
+    ...(b.oferta?.moldura ? [linhaMoldura(b.oferta, moldura)] : []),
     ...(ESTILO_TEXTO[b.estilo] ? [`Estilo: ${ESTILO_TEXTO[b.estilo]} (REGRAS.md § Estilo).`] : []),
     LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
     temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
@@ -174,7 +175,7 @@ function stagePrompt(nome, video, temLogo, erroAnterior) {
 }
 
 // Brand, voice and caption come from the briefing, never from the model.
-function forcarRoteiro(roteiro, briefing, marca) {
+function forcarRoteiro(roteiro, briefing, marca, moldura) {
   roteiro.marca = marca;
   roteiro.voz = 'gemini:Puck';
   roteiro.velocidade = '+6%';
@@ -184,10 +185,12 @@ function forcarRoteiro(roteiro, briefing, marca) {
   delete roteiro.legendas;
   if (briefing.legenda === 'sem') roteiro.legendas = false;
   else if (briefing.legenda !== 'do-video') roteiro.legenda = briefing.legenda;
-  if (briefing.oferta) {
+  // Oferta videos made before frames existed have no moldura: they stay as they were.
+  if (briefing.oferta?.moldura) {
     const o = briefing.oferta;
-    // "auto" keeps Claude's pick (validated before this); anything else comes from the briefing.
+    // "auto": stage 1 keeps Claude's validated pick, stage 2 restores the approved one; anything else comes from the briefing.
     if (o.moldura !== 'auto') roteiro.moldura = o.moldura;
+    else if (moldura) roteiro.moldura = moldura;
     roteiro.campanha = o.campanha;
     roteiro.ritmo = o.ritmo;
     roteiro.trilha = (MOLDURAS.find((m) => m.id === roteiro.moldura) || MOLDURAS[0]).trilha;
@@ -272,7 +275,7 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erro)}`, cwd: dir, addDirs })
       // Prices come from the catalog, never from Claude: produtos.json comes back as it was.
       const produtosOriginal = oferta ? await readJson(join(dir, 'produtos.json'), null) : null;
       await runner({ prompt: `# Etapa 2
-${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior, aprovado.moldura)}`, cwd: dir, addDirs: [MOTOR_DIR] });
       if (produtosOriginal) await writeJson(join(dir, 'produtos.json'), produtosOriginal);
       if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
     }
@@ -287,7 +290,7 @@ ${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior)}`, cwd: dir, a
     // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
     const atual = await readJson(join(dir, 'roteiro.json'), null);
     if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');
-    await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca));
+    await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca, aprovado.moldura));
     // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
     const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
     const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
