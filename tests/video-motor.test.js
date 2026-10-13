@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { Jimp } from 'jimp';
 import { renderVideo, MOTOR_DIR } from '../src/video-motor/render.mjs';
 
 async function withFixture(fn) {
@@ -63,4 +64,18 @@ test('the player exposes produtos.json as window.PRODUTOS', async () => {
     await writeFile(join(dir, 'cenas.js'), cenas);
     await renderVideo({ videoDir: dir, stills: [0.05] });
   });
+});
+
+test('the vt-padrao template renders a small VT without page errors', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'vt-padrao-'));
+  try {
+    await cp('tests/fixtures/vt-padrao', dir, { recursive: true });
+    await cp(join(MOTOR_DIR, 'modelos', 'vt-padrao', 'cenas.js'), join(dir, 'cenas.js'));
+    await mkdir(join(dir, 'fotos'), { recursive: true });
+    const im = new Jimp({ width: 200, height: 200, color: 0x00000000 });
+    for (let y = 40; y < 160; y++) for (let x = 40; x < 160; x++) im.setPixelColor(0x2266ccff, x, y);
+    await im.write(join(dir, 'fotos', 'produto-a.png'));
+    const r = await renderVideo({ videoDir: dir, stills: [0.05, 3, 5.5, 8] });
+    assert.equal(r.stills.length, 4);
+  } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }
 });

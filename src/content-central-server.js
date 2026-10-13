@@ -957,6 +957,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
             const pedido = String(body.pedido || '').trim();
             if (!pedido) throw Object.assign(new Error('Escreva o ajuste.'), { status: 400 });
             if (body.etapa === 'roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.ROTEIRO_GERANDO, 'roteiro', { ajuste: pedido }); }
+            if (body.etapa === 'producao' && video.briefing.oferta?.criacao === 'padrao') throw Object.assign(new Error('VT padrão: para mudar o visual, use Criação nova.'), { status: 400 });
             if (body.etapa === 'producao') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao', { ajuste: pedido }); }
             throw Object.assign(new Error('Etapa de ajuste inválida.'), { status: 400 });
           }

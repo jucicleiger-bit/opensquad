@@ -247,3 +247,17 @@ test('GET videos/produtos lists the offers with their usable state', async () =>
     assert.equal('preco' in r.body.produtos[0], false);
   });
 });
+
+test('a visual ajuste on a VT padrão prévia is refused', async () => {
+  await withServer(async (dir, server, enqueued) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    const video = await readVideo('king', id, dir);
+    await updateVideo('king', id, { status: STATUS.PREVIA_PRONTA, briefing: { ...video.briefing, oferta: { produtos: [], criacao: 'padrao' } } }, dir);
+    const before = enqueued.length;
+    const r = await call(server, `/api/projects/king/videos/${id}/ajuste`, { etapa: 'producao', pedido: 'muda a cor' });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /Criação nova/);
+    assert.equal(enqueued.length, before);
+  });
+});

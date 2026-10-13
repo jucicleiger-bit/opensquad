@@ -12,7 +12,7 @@ import {
   STATUS, requireVideoProject, readVideo, updateVideo, videoDir, validateRoteiro, buildMarca, buildMaterialInventory, normalizeVideoAnimado,
 } from './content-central-video.js';
 import {
-  SEGUNDOS_POR_PRODUTO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso,
+  SEGUNDOS_POR_PRODUTO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso, legendaPostOferta,
 } from './content-central-video-produtos.js';
 
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
@@ -180,7 +180,19 @@ async function escritoDepois(path, inicio) {
 
 const falas = (roteiro) => JSON.stringify((roteiro?.cenas || []).map((c) => [c.tipo, c.fala]));
 
-export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer }) {
+// Runs the motor's TTS directly (VT padrão has no Claude in stage 2).
+function narrarComTts(dir) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.env.PYTHON_BIN || 'python', [join(MOTOR_DIR, 'tts.py'), dir], { cwd: dir, windowsHide: true });
+    let saida = '';
+    child.stdout.on('data', (c) => { saida += c; });
+    child.stderr.on('data', (c) => { saida += c; });
+    child.on('error', (err) => reject(new Error(`Não consegui gerar a voz: ${err.message}`)));
+    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(saida.trim().slice(-600) || `A voz saiu com código ${code}.`))));
+  });
+}
+
+export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer, narrador = narrarComTts }) {
   const queue = [];
   const busy = new Set();
   let running = null;
@@ -225,11 +237,20 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erro)}`, cwd: dir, addDirs })
     const aprovado = await readJson(join(dir, 'roteiro.json'), null);
     if (!aprovado) throw new Error('Não há roteiro aprovado para produzir.');
     await writeAjuste(dir, ajuste);
-    const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
-    await runner({ prompt: `# Etapa 2
+    const oferta = video.briefing.oferta;
+    if (oferta?.criacao === 'padrao') {
+      // Fixed template: narration and stills are mechanical, no Claude.
+      await narrador(dir);
+      await copyFile(join(MOTOR_DIR, 'modelos', 'vt-padrao', 'cenas.js'), join(dir, 'cenas.js'));
+      const { loja } = await readJson(join(dir, 'produtos.json'), { loja: {} });
+      await writeFile(join(dir, 'legenda-post.txt'), legendaPostOferta(oferta, loja));
+    } else {
+      const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
+      await runner({ prompt: `# Etapa 2
 ${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+      if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
+    }
     // An adjustment may reuse the existing voice (saves quota): tempos.json then only has to exist.
-    if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
     const temposPath = join(dir, 'voz', 'tempos.json');
     if (ajuste ? !existsSync(temposPath) : !await escritoDepois(temposPath, inicio)) throw new Error('A produção não gerou voz/tempos.json.');
     // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.

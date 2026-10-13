@@ -1,0 +1,9 @@
+{
+  "marca": { "nome": "Mercado Teste", "logo": "", "whatsapp": "65 0000-0000", "instagram": "@teste", "cor": "#E11D2E" },
+  "voz": "gemini:Puck",
+  "cenas": [
+    { "tipo": "abertura", "fala": "Olha só as ofertas da semana!", "descricao": "abertura" },
+    { "tipo": "produto", "produto": "a", "fala": "Fralda de dezesseis e noventa e nove por treze e noventa e nove!", "descricao": "produto" },
+    { "tipo": "fechamento", "fala": "Só até domingo, chama no WhatsApp!", "descricao": "fecho" }
+  ]
+}

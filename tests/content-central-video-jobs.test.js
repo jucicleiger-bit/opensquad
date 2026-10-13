@@ -458,3 +458,36 @@ test('Oferta prompt: a fixed duration is kept, only auto uses the per-product fo
     assert.match(calls[1].prompt, /Duração alvo: automática .*por produto/);
   });
 });
+
+test('VT padrão stage 2 never calls Claude: it narrates, copies the template, writes the caption and stills', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const narrados = [];
+    const renders = [];
+    const runner = async ({ prompt, cwd }) => {
+      calls.push(prompt);
+      await writeFile(join(cwd, 'roteiro.json'), JSON.stringify({ cenas: [{ tipo: 'abertura', fala: 'Ofertas!', descricao: 'a' }, { tipo: 'produto', produto: 'fralda', fala: 'Fralda por {preco}!', descricao: 'b' }, { tipo: 'fechamento', fala: 'Chama no WhatsApp!', descricao: 'c' }] }));
+      return { text: 'ok' };
+    };
+    const narrador = async (vdir) => {
+      narrados.push(vdir);
+      await mkdir(join(vdir, 'voz'), { recursive: true });
+      await writeFile(join(vdir, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'Ofertas', t: 0.05, d: 0.3 }] }, { words: [{ w: 'Fralda', t: 1, d: 0.3 }] }, { words: [{ w: 'Chama', t: 3, d: 0.3 }] }] }));
+    };
+    const jobs = createVideoJobs({ targetDir: dir, runner, narrador, renderer: async (o) => { renders.push(o); return {}; } });
+    const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, criacao: 'padrao' } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    await jobs.enqueue('king', video.id, 'producao');
+    await jobs.idle();
+    const vdir = videoDir(dir, 'king', video.id);
+    assert.equal(calls.length, 1, 'only stage 1 called Claude');
+    assert.deepEqual(narrados, [vdir]);
+    assert.equal(await readFile(join(vdir, 'cenas.js'), 'utf8'), await readFile(new URL('../src/video-motor/modelos/vt-padrao/cenas.js', import.meta.url), 'utf8'));
+    assert.match(await readFile(join(vdir, 'legenda-post.txt'), 'utf8'), /R\$ 13,99/);
+    assert.ok(renders[0].stills.length >= 2);
+    assert.equal((await readVideo('king', video.id, dir)).status, STATUS.PREVIA_PRONTA);
+  });
+});

@@ -1,0 +1,18 @@
+{ "arquivo": "voz/narracao.mp3", "cenas": [
+  { "words": [
+    { "w": "Olha", "t": 0.05, "d": 0.25, "fim": false }, { "w": "só", "t": 0.4, "d": 0.25, "fim": false },
+    { "w": "as", "t": 0.75, "d": 0.25, "fim": false }, { "w": "ofertas", "t": 1.0, "d": 0.25, "fim": false },
+    { "w": "da", "t": 1.45, "d": 0.25, "fim": false }, { "w": "semana", "t": 1.75, "d": 0.25, "fim": true } ] },
+  { "words": [
+    { "w": "Fralda", "t": 2.4, "d": 0.25, "fim": false }, { "w": "de", "t": 2.71, "d": 0.25, "fim": false },
+    { "w": "dezesseis", "t": 3.02, "d": 0.25, "fim": false }, { "w": "e", "t": 3.33, "d": 0.25, "fim": false },
+    { "w": "noventa", "t": 3.64, "d": 0.25, "fim": false }, { "w": "e", "t": 3.95, "d": 0.25, "fim": false },
+    { "w": "nove", "t": 4.26, "d": 0.25, "fim": false }, { "w": "por", "t": 4.57, "d": 0.25, "fim": false },
+    { "w": "treze", "t": 4.88, "d": 0.25, "fim": false }, { "w": "e", "t": 5.19, "d": 0.25, "fim": false },
+    { "w": "noventa", "t": 5.5, "d": 0.25, "fim": false }, { "w": "e", "t": 5.81, "d": 0.25, "fim": false },
+    { "w": "nove", "t": 6.12, "d": 0.25, "fim": true } ] },
+  { "words": [
+    { "w": "Só", "t": 6.8, "d": 0.25, "fim": false }, { "w": "até", "t": 7.18, "d": 0.25, "fim": false },
+    { "w": "domingo", "t": 7.56, "d": 0.25, "fim": false }, { "w": "chama", "t": 7.94, "d": 0.25, "fim": false },
+    { "w": "no", "t": 8.32, "d": 0.25, "fim": false }, { "w": "WhatsApp", "t": 8.7, "d": 0.3, "fim": true } ] }
+] }
