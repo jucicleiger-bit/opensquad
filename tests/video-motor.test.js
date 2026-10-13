@@ -75,6 +75,8 @@ test('the vt-padrao template renders a small VT without page errors', async () =
     const im = new Jimp({ width: 200, height: 200, color: 0x00000000 });
     for (let y = 40; y < 160; y++) for (let x = 40; x < 160; x++) im.setPixelColor(0x2266ccff, x, y);
     await im.write(join(dir, 'fotos', 'produto-a.png'));
+    const roteiro = JSON.parse(await readFile(join(dir, 'roteiro.json'), 'utf8'));
+    await writeFile(join(dir, 'roteiro.json'), JSON.stringify({ ...roteiro, moldura: 'encarte' }));
     const r = await renderVideo({ videoDir: dir, stills: [0.05, 3, 5.5, 8] });
     assert.equal(r.stills.length, 4);
   } finally { await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }); }

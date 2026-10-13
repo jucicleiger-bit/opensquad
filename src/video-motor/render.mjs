@@ -38,7 +38,7 @@ async function ensureSounds() {
 }
 
 // /_motor/* from the motor folder, /v/* from the video folder; nothing else.
-function serve(videoDir) {
+export function serve(videoDir) {
   const roots = { _motor: resolve(MOTOR_DIR), v: resolve(videoDir) };
   const server = createServer(async (req, res) => {
     try {
