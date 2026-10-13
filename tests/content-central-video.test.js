@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Jimp } from 'jimp';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import {
   STATUS, normalizeBriefing, createVideo, updateVideo, readVideoState, listVideos, saveRoteiroCenas, deleteVideo,
@@ -205,4 +206,51 @@ test('validateRoteiro: auto duration has no time warning; alcance may close with
 test('duracaoAlvo is the number of seconds, or null for auto', () => {
   assert.equal(duracaoAlvo({ duracao: 30 }), 30);
   assert.equal(duracaoAlvo({ duracao: 'auto' }), null);
+});
+
+async function comOferta(dir, projectId = 'king') {
+  const paths = getCentralPaths(dir, projectId);
+  await mkdir(join(paths.projectDir, 'assets', 'references'), { recursive: true });
+  const im = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+  for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) im.setPixelColor(0x202020ff, x, y);
+  await im.write(join(paths.projectDir, 'assets', 'references', 'fralda.png'));
+  const project = JSON.parse(await readFile(paths.projectPath, 'utf8'));
+  project.offerAssets = [{ id: 'f1', relativePath: 'assets/references/fralda.png', previewUrl: '/p/fralda.png' }];
+  project.contentStrategy = { ...(project.contentStrategy || {}), offers: [{ id: 'fralda', name: 'Fralda IsaBaby', type: 'offer', price: 'R$ 13,99', originalPrice: 'R$ 16,99', priceUnit: 'un', photoReferenceIds: ['f1'] }] };
+  await writeFile(paths.projectPath, JSON.stringify(project));
+}
+const ofertaBriefing = { ...briefing, objetivo: 'oferta', tom: 'locutor', oferta: { produtos: [{ id: 'fralda' }], validoAte: '2026-10-18', criacao: 'nova' } };
+
+test('createVideo snapshots the Oferta products', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    assert.deepEqual(video.briefing.oferta.produtos.map((p) => [p.id, p.preco, p.precoDe, p.fotoTipo]), [['fralda', 1399, 1699, 'recorte']]);
+    await assert.rejects(createVideo('king', { ...ofertaBriefing, oferta: { produtos: [{ id: 'nao' }] } }, dir), (e) => e.status === 400);
+  });
+});
+
+test('saveRoteiroCenas on an Oferta keeps the spoken prices', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const cenas = [{ tipo: 'p', produto: 'fralda', fala: 'Fralda por treze e noventa e nove!', descricao: 'x' }];
+    await saveRoteiroCenas('king', video.id, cenas, dir);
+    await assert.rejects(saveRoteiroCenas('king', video.id, [{ ...cenas[0], fala: 'Fralda baratinha!' }], dir), (e) => e.status === 400 && /treze e noventa e nove/.test(e.message));
+  });
+});
+
+test('readVideoState lists the Oferta products from the snapshot before the folder is prepared', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    const state = await readVideoState('king', video.id, dir);
+    assert.deepEqual(state.produtos.map((p) => [p.id, p.precoTela, p.precoDeTela, p.fotoTipo]), [['fralda', 'R$ 13,99', 'R$ 16,99', 'recorte']]);
+    const outro = await createVideo('king', briefing, dir);
+    assert.deepEqual((await readVideoState('king', outro.id, dir)).produtos, []);
+  });
 });

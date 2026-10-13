@@ -12,3 +12,5 @@ Entregue só nesta pasta:
 Só escreva nesta pasta; não altere nada em `<MOTOR>` (player, render, regras, exemplos). Se aprender uma lição nova, anote no `NOTAS.md` deste vídeo.
 
 Não gere voz, não gere imagens, não renderize. Se houver `ajuste.txt`, ele traz o pedido de ajuste do operador sobre o roteiro atual: aplique-o.
+
+**Oferta:** se o briefing tiver `oferta`, leia `produtos.json` e REGRAS.md § Oferta antes de escrever. Se existir `roteiro-modelo.json`, ele é a versão com marcadores do roteiro atual: num ajuste, parta dele e devolva `roteiro.json` também com marcadores.

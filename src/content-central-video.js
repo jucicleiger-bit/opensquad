@@ -6,6 +6,7 @@ import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getCentralPaths, loadProject, readJson, writeJson } from './content-central.js';
+import { listarProdutosVideo, normalizeOferta, precosMantidos, precoNaTela } from './content-central-video-produtos.js';
 
 export const STATUS = {
   ROTEIRO_GERANDO: 'roteiro_gerando', ROTEIRO_PRONTO: 'roteiro_pronto',
@@ -70,7 +71,10 @@ export function normalizeBriefing(input = {}, produtosDisponiveis = null) {
   const legenda = String(input.legenda || 'do-video');
   if (!LEGENDAS.has(legenda)) throw httpError(400, 'Modelo de legenda desconhecido.');
   const briefing = { assunto, objetivo, formato, estilo, duracao, tom, legenda, observacao: String(input.observacao || '').trim() };
-  if (objetivo === 'oferta' && !produtosDisponiveis) throw httpError(400, 'Oferta precisa dos produtos cadastrados.');
+  if (objetivo === 'oferta') {
+    if (!produtosDisponiveis) throw httpError(400, 'Oferta precisa dos produtos cadastrados.');
+    briefing.oferta = normalizeOferta(input.oferta, produtosDisponiveis, duracao);
+  }
   return briefing;
 }
 
@@ -78,8 +82,8 @@ export function normalizeBriefing(input = {}, produtosDisponiveis = null) {
 export const duracaoAlvo = (briefing) => (briefing?.duracao === 'auto' ? null : Number(briefing?.duracao) || null);
 
 export async function createVideo(projectId, input, targetDir) {
-  await requireVideoProject(projectId, targetDir);
-  const briefing = normalizeBriefing(input);
+  const project = await requireVideoProject(projectId, targetDir);
+  const briefing = normalizeBriefing(input, input?.objetivo === 'oferta' ? await listarProdutosVideo(project, targetDir) : null);
   const agora = new Date().toISOString();
   const id = `${agora.slice(0, 10)}-${slug(briefing.assunto) || 'video'}-${randomBytes(2).toString('hex')}`;
   const dir = videoDir(targetDir, projectId, id);
@@ -149,6 +153,10 @@ export async function saveRoteiroCenas(projectId, videoId, cenas, targetDir) {
   }));
   const { erros } = validateRoteiro({ cenas: limpas });
   if (erros.length) throw httpError(400, erros.join(' '));
+  if (video.briefing.oferta) {
+    const faltando = precosMantidos(limpas, video.briefing.oferta);
+    if (faltando.length) throw httpError(400, faltando.join(' '));
+  }
   const path = join(videoDir(targetDir, projectId, videoId), 'roteiro.json');
   const roteiro = { ...(await readJson(path, {})), cenas: limpas };
   await writeJson(path, roteiro);
@@ -164,9 +172,14 @@ export async function readVideoState(projectId, videoId, targetDir) {
   const stills = existsSync(join(dir, 'stills')) ? (await readdir(join(dir, 'stills'))).filter((n) => n.endsWith('.jpg')).sort((a, b) => parseFloat(a.slice(1)) - parseFloat(b.slice(1))) : [];
   const has = (name) => existsSync(join(dir, name));
   const narracao = await readJson(join(dir, 'voz', 'narracao.json'), null);
+  // Once the folder is prepared, produtos.json is the truth; before that, the snapshot taken at creation.
+  const lidos = await readJson(join(dir, 'produtos.json'), null);
+  const daPasta = (lidos?.produtos || []).map(({ id, nome, precoTela, precoDeTela, foto, fotoTipo }) => ({ id, nome, precoTela, precoDeTela, foto, fotoTipo }));
+  const produtos = daPasta.length ? daPasta : (video.briefing.oferta?.produtos || []).map((p) => ({ id: p.id, nome: p.nome, precoTela: precoNaTela(p.preco), precoDeTela: p.precoDe ? precoNaTela(p.precoDe) : '', foto: '', fotoTipo: p.fotoTipo }));
   return {
     video,
     roteiro,
+    produtos,
     estimativa: roteiro ? estimateSeconds(roteiro.cenas) : null,
     avisos,
     stills,

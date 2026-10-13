@@ -54,3 +54,13 @@ test('a video folder without cenas.js fails with a clear message', async () => {
     await assert.rejects(renderVideo({ videoDir: dir, stills: [0.05] }), /cenas\.js não encontrado/);
   });
 });
+
+test('the player exposes produtos.json as window.PRODUTOS', async () => {
+  await withFixture(async (dir) => {
+    await writeFile(join(dir, 'produtos.json'), JSON.stringify({ produtos: [{ id: 'a', precoTela: 'R$ 1,00' }], loja: { nome: 'X' } }));
+    // A missing global throws inside html() and fails the render.
+    const cenas = (await readFile(join(dir, 'cenas.js'), 'utf8')).replace("html: () => '", 'html: () => `').replace("OLÁ</div>'", 'OLÁ ${window.PRODUTOS[0].precoTela}</div>`');
+    await writeFile(join(dir, 'cenas.js'), cenas);
+    await renderVideo({ videoDir: dir, stills: [0.05] });
+  });
+});

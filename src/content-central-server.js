@@ -158,6 +158,7 @@ import {
   STATUS as VIDEO_STATUS, requireVideoProject, createVideo, listVideos, readVideoState, readVideo, updateVideo, saveRoteiroCenas, deleteVideo, reconcileInterruptedVideos, videoDir,
 } from './content-central-video.js';
 import { createVideoJobs } from './content-central-video-jobs.js';
+import { listarProdutosVideo } from './content-central-video-produtos.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem, syncQueue } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
 import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
@@ -921,9 +922,13 @@ async function handleRequest(req, res, targetDir, context = {}) {
   // with their status so the tab can show them.
   if (parts[3] === 'videos') {
     try {
-      await requireVideoProject(projectId, targetDir);
+      const videoProject = await requireVideoProject(projectId, targetDir);
       const jobs = context.videoJobs;
       const vid = parts[4];
+      if (method === 'GET' && parts.length === 5 && vid === 'produtos') {
+        const produtos = (await listarProdutosVideo(videoProject, targetDir)).map((p) => ({ ...p, preco: undefined, precoDe: undefined })); // cents stay server-side (JSON drops undefined)
+        return sendJson(res, 200, { produtos });
+      }
       if (method === 'GET' && parts.length === 4) return sendJson(res, 200, { videos: await listVideos(projectId, targetDir) });
       if (method === 'POST' && parts.length === 4) {
         const video = await createVideo(projectId, await readBody(req), targetDir);

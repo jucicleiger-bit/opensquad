@@ -210,6 +210,11 @@ function seek(t) {
 
 window.ready = (async () => {
   R = await (await fetch(asset('roteiro.json'))).json();
+  // Oferta videos bring products and store data; on-screen prices come only from here.
+  const prod = await fetch(asset('produtos.json'));
+  const dados = prod.ok ? await prod.json() : {};
+  window.PRODUTOS = dados.produtos || [];
+  window.LOJA = dados.loja || {};
   // A video can bring its own scenes, look and cuts in <pasta>/cenas.js.
   await new Promise((ok, rej) => { const sc = document.createElement('script'); sc.src = asset('cenas.js'); sc.onload = ok; sc.onerror = () => rej(new Error('cenas.js não encontrado na pasta do vídeo')); document.head.appendChild(sc); });
   VIDEO = window.VIDEO || {};

@@ -59,3 +59,14 @@ Os vídeos são escritos pelo Claude (decisão de 2026-10-10). O Codex ficou par
 8. A narração é contínua, sem buracos de voz muda. O motor grava tudo de uma vez e encurta silêncios. Para dar respiro, segure a imagem, nunca a voz.
 9. O logo precisa de contraste. O da King tem o K branco: em fundo claro, coloque-o sobre uma placa escura.
 10. Material real (fotos de clientes, Stories aprovados) vale mais do que exemplo inventado. Procure no projeto antes de gerar imagem.
+
+
+## Oferta (VT de mercado)
+
+- Os produtos estão em `produtos.json` (na ordem escolhida pelo operador) e as fotos em `fotos/produto-<id>.*`. Os dados da loja (nome, endereço, WhatsApp, horário, validade) estão em `produtos.json` → `loja`.
+- **Preço nunca é digitado.** Na fala, use `{preco}` (e `{precoDe}` só para produto com preço "de"); o sistema troca pelo preço por extenso do cadastro. `{unidade}` vira "a unidade", "o quilo"…; `{validade}` vira "domingo, dia 19" (só se houver validade). A fala de uma Oferta **não pode ter nenhum dígito**: escreva nomes e quantidades por extenso ("Omo de setecentos gramas").
+- Cada produto tem uma cena com `"produto": "<id>"` e `{preco}` na fala. Ritmo de locutor: frases curtas e exclamações, nome do produto, preço, próximo.
+- **Na tela**, preços só de `PRODUTOS[i].precoTela` e `PRODUTOS[i].precoDeTela` (risque o "de"). Nunca escreva um valor à mão no `cenas.js`.
+- `fotoTipo`: `recorte` e `transparente` já vêm sem fundo (pode fazer o produto voar, girar, crescer); `moldura` é foto com fundo real: mostre dentro de um cartão ou moldura, nunca como recorte.
+- Fecho: validade (se houver), endereço e WhatsApp.
+- **VT padrão** (`criacao: padrao`): as cenas são exatamente `abertura`, uma `produto` por produto na ordem de `produtos.json`, e `fechamento`. O visual é o modelo fixo; escreva só as falas.

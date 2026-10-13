@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promise
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Jimp } from 'jimp';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import { STATUS, createVideo, readVideo, updateVideo, videoDir } from '../src/content-central-video.js';
 import { createVideoJobs, isUsageLimit, runClaudeCode, DIRECOES } from '../src/content-central-video-jobs.js';
@@ -367,5 +368,76 @@ test('stage 1 prompt carries format, style and auto duration', async () => {
     assert.match(calls[0].prompt, /Formato: Story\/Status/);
     assert.match(calls[0].prompt, /Estilo: premium/);
     assert.match(calls[0].prompt, /Duração alvo: automática/);
+  });
+});
+
+async function comOferta(dir, projectId = 'king') {
+  const paths = getCentralPaths(dir, projectId);
+  await mkdir(join(paths.projectDir, 'assets', 'references'), { recursive: true });
+  const im = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+  for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) im.setPixelColor(0x202020ff, x, y);
+  await im.write(join(paths.projectDir, 'assets', 'references', 'fralda.png'));
+  const project = JSON.parse(await readFile(paths.projectPath, 'utf8'));
+  project.offerAssets = [{ id: 'f1', relativePath: 'assets/references/fralda.png', previewUrl: '/p/fralda.png' }];
+  project.contentStrategy = { ...(project.contentStrategy || {}), offers: [{ id: 'fralda', name: 'Fralda IsaBaby', type: 'offer', price: 'R$ 13,99', originalPrice: 'R$ 16,99', priceUnit: 'un', photoReferenceIds: ['f1'] }] };
+  await writeFile(paths.projectPath, JSON.stringify(project));
+}
+const ofertaBriefing = { ...briefing, objetivo: 'oferta', tom: 'locutor', oferta: { produtos: [{ id: 'fralda' }], validoAte: '2026-10-18', criacao: 'nova' } };
+
+function ofertaRunner(calls, falas) {
+  let n = 0;
+  return async ({ prompt, cwd }) => {
+    calls.push({ prompt, cwd });
+    const fala = falas[Math.min(n++, falas.length - 1)];
+    await writeFile(join(cwd, 'roteiro.json'), JSON.stringify({ cenas: [{ tipo: 'abre', fala: 'Olha as ofertas!', descricao: 'a' }, { tipo: 'p', produto: 'fralda', fala, descricao: 'b' }, { tipo: 'fim', fala: 'Só até {validade}, chama no WhatsApp!', descricao: 'c' }] }));
+    return { text: 'ok' };
+  };
+}
+
+test('Oferta stage 1 writes produtos.json, the cutout photo, the template and the expanded roteiro', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda de {precoDe} por {preco}!']), renderer: async () => ({}) });
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    const vdir = videoDir(dir, 'king', video.id);
+    assert.equal((await readVideo('king', video.id, dir)).status, STATUS.ROTEIRO_PRONTO);
+    const produtos = JSON.parse(await readFile(join(vdir, 'produtos.json'), 'utf8'));
+    assert.equal(produtos.produtos[0].precoTela, 'R$ 13,99');
+    assert.equal(produtos.produtos[0].foto, 'fotos/produto-fralda.png');
+    assert.ok(existsSync(join(vdir, 'fotos', 'produto-fralda.png')));
+    assert.match(JSON.parse(await readFile(join(vdir, 'roteiro-modelo.json'), 'utf8')).cenas[1].fala, /\{preco\}/);
+    assert.equal(JSON.parse(await readFile(join(vdir, 'roteiro.json'), 'utf8')).cenas[1].fala, 'Fralda de dezesseis e noventa e nove por treze e noventa e nove!');
+    assert.match(calls[0].prompt, /Oferta: 1 produto/);
+  });
+});
+
+test('Oferta stage 1 retries once with the validation error, then fails', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda por 13,99!', 'Fralda por 13,99!']), renderer: async () => ({}) });
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    assert.equal(calls.length, 2);
+    assert.match(calls[1].prompt, /A tentativa anterior falhou com: .*dígitos/);
+    const final = await readVideo('king', video.id, dir);
+    assert.equal(final.status, STATUS.ERRO);
+    assert.match(final.erro, /dígitos/);
+  });
+});
+
+test('Oferta stage 1 retry succeeds when Claude fixes the roteiro', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda por 13,99!', 'Fralda por {preco}!']), renderer: async () => ({}) });
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    assert.equal((await readVideo('king', video.id, dir)).status, STATUS.ROTEIRO_PRONTO);
   });
 });

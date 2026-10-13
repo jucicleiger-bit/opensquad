@@ -5,12 +5,15 @@
 import { spawn } from 'node:child_process';
 import { copyFile, writeFile, rm, cp, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJson, writeJson, getCentralPaths } from './content-central.js';
 import {
   STATUS, requireVideoProject, readVideo, updateVideo, videoDir, validateRoteiro, buildMarca, buildMaterialInventory, normalizeVideoAnimado,
 } from './content-central-video.js';
+import {
+  SEGUNDOS_POR_PRODUTO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso,
+} from './content-central-video-produtos.js';
 
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
 const MOTOR_PROMPT = MOTOR_DIR.replaceAll('\\', '/').replace(/\/+$/, ''); // Git Bash loses backslashes
@@ -69,6 +72,20 @@ export function runClaudeCode({ prompt, cwd, addDirs = [], timeoutMs = CLAUDE_TI
 
 const defaultRenderer = async (opts) => (await import('./video-motor/render.mjs')).renderVideo(opts);
 
+const DIAS_CURTOS = { mon: 'seg', tue: 'ter', wed: 'qua', thu: 'qui', fri: 'sex', sat: 'sáb', sun: 'dom' };
+// "seg a sex 08:00–18:00 · sáb 08:00–12:00": days with the same hours are grouped.
+function resumoHorario(hours) {
+  if (!hours || typeof hours !== 'object') return '';
+  const grupos = [];
+  for (const [dia, curto] of Object.entries(DIAS_CURTOS)) {
+    const faixa = (hours[dia] || []).map((f) => `${f.from}–${f.to}`).join(', ');
+    if (!faixa) continue;
+    const ultimo = grupos[grupos.length - 1];
+    if (ultimo && ultimo.faixa === faixa) ultimo.ate = curto; else grupos.push({ de: curto, ate: curto, faixa });
+  }
+  return grupos.map((g) => `${g.de === g.ate ? g.de : `${g.de} a ${g.ate}`} ${g.faixa}`).join(' · ');
+}
+
 async function prepareFolder(project, video, dir, targetDir) {
   const settings = normalizeVideoAnimado(project.videoAnimado, project.projectId);
   const marca = buildMarca(project, settings);
@@ -83,6 +100,24 @@ async function prepareFolder(project, video, dir, targetDir) {
   });
   await writeJson(join(dir, 'material.json'), await buildMaterialInventory(settings.projetosDeMaterial, targetDir));
   if (temLogo) await copyFile(logo, join(dir, 'fotos', 'logo.png'));
+  const oferta = video.briefing.oferta;
+  if (oferta) {
+    const base = getCentralPaths(targetDir, project.projectId).projectDir;
+    const produtos = [];
+    for (const p of oferta.produtos) {
+      const origem = join(base, p.fotoOrigem || '');
+      if (!p.fotoOrigem || !existsSync(origem)) throw new Error(`A foto de ${p.nome} não foi encontrada no cadastro.`);
+      const foto = `fotos/produto-${p.id}${p.fotoTipo === 'recorte' ? '.png' : extname(origem).toLowerCase()}`;
+      if (p.fotoTipo === 'recorte') await recortarFundoBranco(origem, join(dir, foto));
+      else await copyFile(origem, join(dir, foto));
+      produtos.push({ id: p.id, nome: p.nome, preco: p.preco, precoDe: p.precoDe, precoTela: precoNaTela(p.preco), precoDeTela: p.precoDe ? precoNaTela(p.precoDe) : '', precoFalado: precoPorExtenso(p.preco), unidade: p.unidade, foto, fotoTipo: p.fotoTipo });
+    }
+    const empresa = project.companyProfile || {};
+    await writeJson(join(dir, 'produtos.json'), {
+      produtos,
+      loja: { nome: marca.nome, endereco: empresa.address || '', whatsapp: marca.whatsapp, horario: resumoHorario(project.businessHours), validoAte: oferta.validoAte, validade: oferta.validoAte ? validadePorExtenso(oferta.validoAte) : '' },
+    });
+  }
   await copyFile(join(MOTOR_DIR, 'REGRAS.md'), join(dir, 'REGRAS.md'));
   await cp(join(MOTOR_DIR, 'exemplos'), join(dir, 'exemplos'), { recursive: true });
   return { marca, settings, temLogo };
@@ -101,8 +136,11 @@ const LEGENDA_TEXTO = {
 
 const ESTILO_TEXTO = { dinamico: 'dinamico', mercado: 'mercado', premium: 'premium', informativo: 'informativo' };
 
-// Task 4 adds the Oferta line (product count drives the automatic target).
 function duracaoTexto(b) {
+  if (b.oferta) {
+    const n = b.oferta.produtos.length;
+    return `automática (cerca de ${SEGUNDOS_POR_PRODUTO}s por produto × ${n} + uns 8s de abertura e fechamento ≈ ${n * SEGUNDOS_POR_PRODUTO + 8}s)`;
+  }
   if (b.duracao !== 'auto') return `${b.duracao}s`;
   return b.formato === 'status' ? 'automática (15 a 30s)' : 'automática (20 a 45s, o que o assunto pedir)';
 }
@@ -113,6 +151,7 @@ function stagePrompt(nome, video, temLogo, erroAnterior) {
     `Leia e siga ${MOTOR_PROMPT}/${nome}. Onde ele diz <MOTOR>, use: ${MOTOR_PROMPT}`,
     `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${duracaoTexto(b)}.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
     `Formato: ${b.formato === 'status' ? 'Story/Status do WhatsApp (REGRAS.md § Formato)' : 'Reels'}.`,
+    ...(b.oferta ? [`Oferta: ${b.oferta.produtos.length} produto${b.oferta.produtos.length > 1 ? 's' : ''} em produtos.json, criação ${b.oferta.criacao === 'padrao' ? 'VT padrão' : 'nova'} (REGRAS.md § Oferta).`] : []),
     ...(ESTILO_TEXTO[b.estilo] ? [`Estilo: ${ESTILO_TEXTO[b.estilo]} (REGRAS.md § Estilo).`] : []),
     LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
     temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
@@ -151,14 +190,33 @@ export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = 
     const { marca, settings, temLogo } = await prepareFolder(project, video, dir, targetDir);
     await writeAjuste(dir, ajuste);
     const addDirs = [MOTOR_DIR, ...settings.projetosDeMaterial.map((id) => getCentralPaths(targetDir, id).assetsDir)];
-    await runner({ prompt: `# Etapa 1
-${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs });
-    if (!await escritoDepois(join(dir, 'roteiro.json'), inicio)) throw new Error('O Claude não escreveu o roteiro.json.');
-    const roteiro = await readJson(join(dir, 'roteiro.json'), null);
-    if (!roteiro) throw new Error('O Claude não escreveu o roteiro.json.');
+    const rodar = async (erro, desde) => {
+      await runner({ prompt: `# Etapa 1
+${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erro)}`, cwd: dir, addDirs });
+      if (!await escritoDepois(join(dir, 'roteiro.json'), desde)) throw new Error('O Claude não escreveu o roteiro.json.');
+      const lido = await readJson(join(dir, 'roteiro.json'), null);
+      if (!lido) throw new Error('O Claude não escreveu o roteiro.json.');
+      return lido;
+    };
+    const oferta = video.briefing.oferta;
+    let roteiro = await rodar(erroAnterior, inicio);
+    // Oferta: prices only through placeholders. One automatic retry with the
+    // problems spelled out, then the operator sees the error.
+    if (oferta) {
+      let problemas = validateRoteiroOferta(roteiro, oferta);
+      if (problemas.length) {
+        roteiro = await rodar(problemas.join(' '), Date.now());
+        problemas = validateRoteiroOferta(roteiro, oferta);
+        if (problemas.length) throw new Error(problemas.join(' '));
+      }
+    }
     forcarRoteiro(roteiro, video.briefing, marca);
     const { erros } = validateRoteiro(roteiro, video.briefing);
     if (erros.length) throw new Error(erros.join(' '));
+    if (oferta) {
+      await writeJson(join(dir, 'roteiro-modelo.json'), roteiro);
+      roteiro = expandirRoteiro(roteiro, oferta);
+    }
     await writeJson(join(dir, 'roteiro.json'), roteiro);
     return STATUS.ROTEIRO_PRONTO;
   }

@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
+import { Jimp } from 'jimp';
 import { startContentCentralServer } from '../src/content-central-server.js';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import { STATUS, readVideo, updateVideo, videoDir } from '../src/content-central-video.js';
@@ -222,5 +223,27 @@ test('caption previews and voice samples from the app build play on Safari (type
     assert.equal(trecho.status, 206);
     assert.equal(trecho.headers.get('content-type'), 'video/mp4');
     assert.equal((await trecho.arrayBuffer()).byteLength, 10);
+  });
+});
+
+test('GET videos/produtos lists the offers with their usable state', async () => {
+  await withServer(async (dir, server) => {
+    const paths = getCentralPaths(dir, 'king');
+    await mkdir(join(paths.projectDir, 'assets', 'references'), { recursive: true });
+    const im = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+    for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) im.setPixelColor(0x202020ff, x, y);
+    await im.write(join(paths.projectDir, 'assets', 'references', 'fralda.png'));
+    const project = JSON.parse(await readFile(paths.projectPath, 'utf8'));
+    project.offerAssets = [{ id: 'f1', relativePath: 'assets/references/fralda.png', previewUrl: '/p/fralda.png' }];
+    project.contentStrategy = { ...(project.contentStrategy || {}), offers: [
+      { id: 'fralda', name: 'Fralda IsaBaby', type: 'offer', price: 'R$ 13,99', originalPrice: 'R$ 16,99', priceUnit: 'un', photoReferenceIds: ['f1'] },
+      { id: 'ruim', name: 'Ruim', type: 'offer', price: 'barato', photoReferenceIds: ['f1'] },
+    ] };
+    await writeFile(paths.projectPath, JSON.stringify(project));
+    const r = await call(server, '/api/projects/king/videos/produtos');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.produtos.map((p) => [p.id, p.motivo]), [['fralda', null], ['ruim', 'preço inválido']]);
+    assert.equal(r.body.produtos[0].precoTela, 'R$ 13,99');
+    assert.equal('preco' in r.body.produtos[0], false);
   });
 });
