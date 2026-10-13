@@ -98,7 +98,7 @@
       .dg-legal { position:absolute; left:0; right:0; top:868px; height:44px; padding:0 24px; display:flex; align-items:center; justify-content:center; background:rgba(26,0,6,.86); color:#fff; font:700 13px/1.3 Inter, sans-serif; text-align:center; }
 
       /* produto */
-      .dg-nome { position:absolute; left:16px; top:112px; max-width:428px; min-height:48px; display:flex; align-items:center; padding-left:10px; border-left:6px solid #FFC400; color:#fff; font:900 34px/1 Inter, sans-serif; text-transform:uppercase; text-shadow:0 3px 0 rgba(0,0,0,.35); }
+      .dg-nome { position:absolute; left:24px; top:112px; max-width:428px; min-height:48px; display:flex; align-items:center; padding-left:4px; border-left:6px solid #FFC400; color:#fff; font:900 34px/1 Inter, sans-serif; text-transform:uppercase; text-shadow:0 3px 0 rgba(0,0,0,.35); }
       .dg-nome.m { font-size:28px; } .dg-nome.s { font-size:23px; } .dg-nome.xs { font-size:19px; line-height:1.02; }
       .dg-halo { position:absolute; left:20px; top:175px; width:500px; height:420px; border-radius:50%; background: radial-gradient(circle, rgba(255,255,255,.35) 0%, rgba(255,255,255,0) 68%); }
       .dg-foto { position:absolute; left:40px; top:165px; width:460px; height:440px; display:flex; align-items:center; justify-content:center; }
@@ -115,7 +115,7 @@
       .dg-preco .vt-un { color:#fff; text-shadow:none; font-size:.17em; max-width:96px; white-space:normal; }
 
       /* abertura */
-      .dg-ab-t { position:absolute; left:24px; width:436px; text-align:center; font-family:Anton, sans-serif; color:#fff; text-transform:uppercase; line-height:.95; letter-spacing:1px; -webkit-text-stroke:8px var(--vm2); paint-order:stroke fill; text-shadow:0 9px 0 rgba(0,0,0,.3); white-space:nowrap; }
+      .dg-ab-t { position:absolute; left:24px; width:436px; display:flex; justify-content:center; font-family:Anton, sans-serif; color:#fff; text-transform:uppercase; line-height:.95; letter-spacing:1px; -webkit-text-stroke:8px var(--vm2); paint-order:stroke fill; text-shadow:0 9px 0 rgba(0,0,0,.3); white-space:nowrap; }
       .dg-ab-t span { display:inline-block; }
       .dg-ab-loja { position:absolute; left:26px; top:560px; max-width:408px; box-sizing:border-box; padding:10px 22px 8px; border-radius:8px; background:#fff; color:var(--vm); font:400 38px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:1px; box-shadow:0 7px 0 var(--vm2); }
       .dg-ab-selo { position:absolute; left:276px; top:632px; width:164px; height:164px; border-radius:50%; background:var(--vv); border:6px solid #fff; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; font:400 34px/1.02 Anton, sans-serif; text-transform:uppercase; text-align:center; box-shadow:0 8px 0 var(--vm2); }
@@ -124,8 +124,8 @@
       /* fechamento */
       .dg-fc-so { position:absolute; left:24px; width:436px; top:128px; text-align:center; }
       .dg-fc-so span { display:inline-block; padding:8px 22px 6px; border-radius:8px; background:var(--vv); border:3px solid #fff; color:#fff; font:400 44px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:2px; box-shadow:0 6px 0 var(--vm2); }
-      .dg-fc-dia { position:absolute; left:24px; width:436px; text-align:center; line-height:1; font-family:Anton, sans-serif; color:var(--vm); text-transform:uppercase; text-shadow:0 6px 0 #fff; white-space:nowrap; }
-      .dg-fc-data { position:absolute; left:24px; width:436px; text-align:center; line-height:1; font-family:Anton, sans-serif; color:var(--vv); text-transform:uppercase; -webkit-text-stroke:8px #fff; paint-order:stroke fill; text-shadow:0 8px 0 rgba(0,0,0,.25); white-space:nowrap; }
+      .dg-fc-dia { position:absolute; left:24px; width:436px; display:flex; justify-content:center; line-height:1; font-family:Anton, sans-serif; color:var(--vm); text-transform:uppercase; text-shadow:0 6px 0 #fff; white-space:nowrap; }
+      .dg-fc-data { position:absolute; left:24px; width:436px; display:flex; justify-content:center; line-height:1; font-family:Anton, sans-serif; color:var(--vv); text-transform:uppercase; -webkit-text-stroke:8px #fff; paint-order:stroke fill; text-shadow:0 8px 0 rgba(0,0,0,.25); white-space:nowrap; }
       .dg-fc-dia span, .dg-fc-data span { display:inline-block; }
       .dg-fc-card { position:absolute; left:24px; width:436px; top:470px; box-sizing:border-box; padding:16px 18px; border-radius:10px; background:#fff; border-left:10px solid var(--vv); color:#1a0006; font:900 25px/1.2 Inter, sans-serif; box-shadow:0 8px 0 rgba(0,0,0,.3); }
       .dg-fc-card small { display:block; margin-top:6px; font:700 19px/1.2 Inter, sans-serif; color:#5a4a4d; }
@@ -160,7 +160,7 @@
           const ls = linhas(R.campanha || 'Ofertas', 3);
           let y = 150;
           const tit = ls.map((l, n) => { const fs = tam(l.length, 132); const top = y; y += fs * 0.98; return `<div class="dg-ab-t" data-k="t${n}" style="top:${top.toFixed(0)}px;font-size:${fs}px"><span>${esc(l)}</span></div>`; }).join('');
-                    const nome = loja().nome || m.nome || '';
+          const nome = loja().nome || m.nome || '';
           return raiz(m, `${fundo()}
             ${tit}
             ${nome ? `<div class="dg-ab-loja" data-k="loja">${esc(nome)}</div>` : ''}
