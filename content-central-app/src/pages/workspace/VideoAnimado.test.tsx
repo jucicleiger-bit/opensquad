@@ -170,4 +170,46 @@ describe("Vídeo animado", () => {
     expect(after.some((c) => c.url.endsWith("/api/projects/king/videos"))).toBe(true);
     expect(after.some((c) => c.url.endsWith("/videos/v1"))).toBe(false);
   });
+
+  async function abrirForm() {
+    stubApi((url) => (url === "/api/state" ? project(true) : { videos: [] }));
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+  }
+
+  it("offers the five objectives, the format, auto duration, three voices and the style", async () => {
+    await abrirForm();
+    const objetivo = screen.getByRole("radiogroup", { name: "Objetivo" });
+    for (const n of ["Alcance", "Anúncio", "Oferta", "Institucional", "Aviso"]) expect(within(objetivo).getByRole("radio", { name: n })).toBeInTheDocument();
+    expect(within(screen.getByRole("radiogroup", { name: "Formato" })).getByRole("radio", { name: "Story/Status" })).toBeInTheDocument();
+    expect(within(screen.getByRole("radiogroup", { name: "Duração" })).getByRole("radio", { name: "Automático" })).toBeInTheDocument();
+    expect(within(screen.getByRole("radiogroup", { name: "Voz" })).getByRole("radio", { name: "Locutor de VT" })).toBeInTheDocument();
+    expect(within(screen.getByRole("radiogroup", { name: "Estilo" })).getByRole("radio", { name: "Livre" })).toBeChecked();
+  });
+
+  it("choosing Oferta preselects the locutor voice, and leaving it restores the creator", async () => {
+    await abrirForm();
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    expect(screen.getByRole("radio", { name: "Locutor de VT" })).toBeChecked();
+    await userEvent.click(screen.getByRole("radio", { name: "Alcance" }));
+    expect(screen.getByRole("radio", { name: "Criador de conteúdo" })).toBeChecked();
+  });
+
+  it("posts formato, estilo and duracao auto", async () => {
+    const calls = stubApi((url, init) => {
+      if (url === "/api/state") return project(true);
+      if (url.endsWith("/videos") && init?.method === "POST") return { video: { ...roteiroPronto.video, id: "v2", status: "roteiro_gerando" } };
+      if (url.endsWith("/videos")) return { videos: [] };
+      return { ...roteiroPronto, video: { ...roteiroPronto.video, id: "v2", status: "roteiro_gerando" }, roteiro: null, ocupado: true };
+    });
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.type(screen.getByLabelText("Assunto"), "Promoção da semana");
+    await userEvent.click(screen.getByRole("radio", { name: "Story/Status" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Automático" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Premium" }));
+    await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
+    const post = calls.find((c) => c.init?.method === "POST");
+    expect(JSON.parse(String(post?.init?.body))).toMatchObject({ formato: "status", duracao: "auto", estilo: "premium" });
+  });
 });

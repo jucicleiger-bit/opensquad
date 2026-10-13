@@ -1917,9 +1917,17 @@ export function saveBrainNotebook(projectId: string, text: string): Promise<{ no
 }
 
 export type VideoStatus = "roteiro_gerando" | "roteiro_pronto" | "producao_gerando" | "previa_pronta" | "render_gerando" | "pronto" | "erro" | "aguardando_limite" | "interrompido";
-export interface VideoBriefing { assunto: string; objetivo: "alcance" | "anuncio"; duracao: 15 | 30 | 45 | 60; tom: "criador" | "vendedor"; legenda: "simples" | "karaoke" | "pop" | "destaque" | "caixa" | "do-video" | "sem"; observacao?: string }
+export type VideoObjetivo = "alcance" | "anuncio" | "oferta" | "institucional" | "aviso";
+export interface VideoOfertaInput { produtos: Array<{ id: string; foto?: "recorte" | "moldura" }>; validoAte: string; criacao: "nova" | "padrao" }
+export interface VideoOfertaSnapshot { produtos: Array<{ id: string; nome: string; preco: number; precoDe: number | null; unidade: string; fotoOrigem: string; fotoTipo: "transparente" | "recorte" | "moldura" }>; validoAte: string; criacao: "nova" | "padrao"; precosEm: string }
+export interface VideoBriefing {
+  assunto: string; objetivo: VideoObjetivo; formato?: "reels" | "status"; estilo?: "livre" | "dinamico" | "mercado" | "premium" | "informativo";
+  duracao: 15 | 30 | 45 | 60 | "auto"; tom: "criador" | "vendedor" | "locutor";
+  legenda: "simples" | "karaoke" | "pop" | "destaque" | "caixa" | "do-video" | "sem"; observacao?: string;
+  oferta?: VideoOfertaInput | VideoOfertaSnapshot;
+}
 export interface VideoCena { tipo: string; fala: string; descricao: string; segura?: number }
-export interface VideoSummary { id: string; assunto: string; objetivo: string; duracao: number; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; temVideo: boolean }
+export interface VideoSummary { id: string; assunto: string; objetivo: string; duracao: number | "auto"; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; temVideo: boolean }
 export interface VideoRecord { id: string; projectId: string; briefing: VideoBriefing; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; etapaComErro?: "roteiro" | "producao" | "render"; etapaInterrompida?: VideoStatus }
 export interface VideoState {
   video: VideoRecord; roteiro: { cenas: VideoCena[] } | null; estimativa: number | null; avisos: string[]; stills: string[];

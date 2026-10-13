@@ -119,9 +119,14 @@
 }
 .suggestChip:hover { background: var(--surface-3); filter: none; transform: none; box-shadow: none; }
 .suggestChip[aria-pressed="true"] { border-color: var(--accent); color: var(--text); background: oklch(from var(--accent) l c h / 16%); }
+.suggestChip:has(input:checked) { border-color: var(--accent); color: var(--text); background: oklch(from var(--accent) l c h / 16%); }
+.suggestChip:has(input:focus-visible) { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
 .suggestAll { width: auto; max-width: 100%; justify-self: start; min-height: 36px; padding: 6px var(--space-sm); font-size: var(--text-sm); color: var(--soft); }
 
 /* Option cards: the native radio is visually hidden inside the label, the card carries the state. */
+.chipsRow { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.chipsRow .suggestChip { display: inline-flex; align-items: center; cursor: pointer; }
+.options5 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: var(--space-sm); }
 .options2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm); }
 .option {
   position: relative; display: grid; gap: var(--space-2xs); margin: 0; cursor: pointer;
@@ -350,6 +355,7 @@
   .options2 { grid-template-columns: minmax(0, 1fr); }
   .segmented { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); justify-self: stretch; }
   .segment { padding: 0; }
+  .segment:last-child { grid-column: 1 / -1; }
   .section { padding: var(--space-md); }
   .actionBar { padding: var(--space-sm) var(--space-md); }
   .gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); }

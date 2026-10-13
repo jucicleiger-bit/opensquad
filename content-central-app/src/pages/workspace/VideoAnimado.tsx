@@ -36,19 +36,33 @@ const LEGENDA_INFO: Record<VideoBriefing["legenda"], { titulo: string; ajuda: st
   sem: { titulo: "Sem legenda", ajuda: "Só a narração, sem texto na tela" },
 };
 const OBJETIVOS = [
-  { v: "alcance", nome: "Alcance", ajuda: "Ganhar seguidores e comentários · fecha com enquete", ideal: [20, 45] },
+  { v: "alcance", nome: "Alcance", ajuda: "Ganhar seguidores · fecha com enquete ou “salva e compartilha”", ideal: [20, 45] },
   { v: "anuncio", nome: "Anúncio", ajuda: "Converter no WhatsApp · fecha com chamada direta", ideal: [15, 30] },
+  { v: "oferta", nome: "Oferta", ajuda: "VT de mercado com vários produtos e preços", ideal: [15, 60] },
+  { v: "institucional", nome: "Institucional", ajuda: "Apresenta a empresa · fecha com a marca", ideal: [20, 45] },
+  { v: "aviso", nome: "Aviso", ajuda: "Feriado, horário, novidade · curto e direto", ideal: [15, 15] },
 ] as const;
 const TONS = [
   { v: "criador", nome: "Criador de conteúdo", curto: "Criador", ajuda: "Animado, sorrindo" },
   { v: "vendedor", nome: "Vendedor de bairro", curto: "Vendedor", ajuda: "Próximo, confiante" },
+  { v: "locutor", nome: "Locutor de VT", curto: "Locutor", ajuda: "Propaganda de mercado, energia lá em cima" },
+] as const;
+const FORMATOS = [
+  { v: "reels", nome: "Reels", ajuda: "Feed e Reels do Instagram" },
+  { v: "status", nome: "Story/Status", ajuda: "Mais curto, fecha no WhatsApp" },
+] as const;
+const ESTILOS = [
+  { v: "livre", nome: "Livre" }, { v: "dinamico", nome: "🔥 Dinâmico" }, { v: "mercado", nome: "🛒 Promoção de mercado" },
+  { v: "premium", nome: "✨ Premium" }, { v: "informativo", nome: "📰 Informativo" },
 ] as const;
 const ETAPAS = ["Roteiro", "Prévia", "Vídeo final"];
 const PALAVRAS_POR_SEGUNDO = 2.6;
 const segundos = (fala: string) => Math.round(((fala.match(/[\p{L}\d]+/gu) || []).length / PALAVRAS_POR_SEGUNDO) * 10) / 10;
 // React sets `muted` only as a property, and Chrome then refuses to autoplay; the attribute makes the loop start.
 const mudo = (el: HTMLVideoElement | null) => { if (el) el.defaultMuted = true; };
-const nomeObjetivo = (o: string) => (o === "anuncio" ? "Anúncio" : "Alcance");
+const NOMES_OBJETIVO: Record<string, string> = { alcance: "Alcance", anuncio: "Anúncio", oferta: "Oferta", institucional: "Institucional", aviso: "Aviso" };
+const nomeObjetivo = (o: string) => NOMES_OBJETIVO[o] || o;
+const nomeDuracao = (d: number | "auto") => (d === "auto" ? "Automático" : `${d}s`);
 
 type Tom = "gen" | "review" | "ok" | "bad" | "warn";
 function tomDoStatus(s: string): Tom {
@@ -183,7 +197,7 @@ export function VideoAnimado() {
                     <span className={styles.cardTitle}>{v.assunto}</span>
                     <span className={styles.chips}>
                       <span className={styles.chip}>{nomeObjetivo(v.objetivo)}</span>
-                      <span className={styles.chip}>{v.duracao}s</span>
+                      <span className={styles.chip}>{nomeDuracao(v.duracao)}</span>
                       <span className={styles.date}>{dataCurta(v.criadoEm)}</span>
                     </span>
                     <MiniEtapas status={v.status} />
@@ -214,7 +228,7 @@ function Secao({ n, titulo, ajuda, id, children }: { n: number; titulo: string; 
 }
 
 function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext["project"]; onCreated: (id: string) => void; onCancel: () => void }) {
-  const [b, setB] = useState<VideoBriefing>({ assunto: "", objetivo: "alcance", duracao: 30, tom: "criador", legenda: "do-video", observacao: "" });
+  const [b, setB] = useState<VideoBriefing>({ assunto: "", objetivo: "alcance", formato: "reels", estilo: "livre", duracao: 30, tom: "criador", legenda: "do-video", observacao: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tocando, setTocando] = useState<string | null>(null);
@@ -227,6 +241,10 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   }, [project]);
   const set = <K extends keyof VideoBriefing>(k: K, v: VideoBriefing[K]) => setB((prev) => ({ ...prev, [k]: v }));
   useEffect(() => () => audio.current?.pause(), []);
+  // Oferta is narrated by the locutor; leaving it hands the voice back to the creator.
+  function escolherObjetivo(v: VideoBriefing["objetivo"]) {
+    setB((prev) => ({ ...prev, objetivo: v, tom: v === "oferta" ? "locutor" : prev.tom === "locutor" ? "criador" : prev.tom }));
+  }
 
   // One sample at a time; the button sits outside the option's label so it never changes the selection.
   function amostra(tom: string) {
@@ -246,8 +264,8 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   }
 
   const objetivo = OBJETIVOS.find((o) => o.v === b.objetivo)!;
-  const foraDoIdeal = b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1];
-  const resumo = [objetivo.nome, `${b.duracao}s`, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
+  const foraDoIdeal = b.duracao !== "auto" && (b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1]);
+  const resumo = [objetivo.nome, nomeDuracao(b.duracao), FORMATOS.find((f) => f.v === b.formato)!.nome, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
 
   return (
     <Card className={styles.form}>
@@ -270,10 +288,10 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
       </Secao>
 
       <Secao n={2} id={`${uid}-obj`} titulo="Objetivo" ajuda="Muda o tom do roteiro e como o vídeo termina.">
-        <div role="radiogroup" aria-labelledby={`${uid}-obj`} className={styles.options2}>
+        <div role="radiogroup" aria-labelledby={`${uid}-obj`} className={styles.options5}>
           {OBJETIVOS.map((o) => (
             <label key={o.v} className={styles.option}>
-              <input type="radio" className="sr-only" name="objetivo" aria-label={o.nome} checked={b.objetivo === o.v} onChange={() => set("objetivo", o.v)} />
+              <input type="radio" className="sr-only" name="objetivo" aria-label={o.nome} checked={b.objetivo === o.v} onChange={() => escolherObjetivo(o.v)} />
               <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
               <span className={styles.optionName}>{o.nome}</span>
               <span className={styles.optionHelp}>{o.ajuda}</span>
@@ -282,24 +300,42 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         </div>
       </Secao>
 
-      <Secao n={3} id={`${uid}-dur`} titulo="Duração" ajuda="Tempo alvo do vídeo. O roteiro mostra quanto a fala ocupa de verdade.">
+      <Secao n={3} id={`${uid}-fmt`} titulo="Formato" ajuda="Onde o vídeo vai ser postado.">
+        <div role="radiogroup" aria-labelledby={`${uid}-fmt`} className={styles.options2}>
+          {FORMATOS.map((f) => (
+            <label key={f.v} className={styles.option}>
+              <input type="radio" className="sr-only" name="formato" aria-label={f.nome} checked={b.formato === f.v} onChange={() => set("formato", f.v)} />
+              <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+              <span className={styles.optionName}>{f.nome}</span>
+              <span className={styles.optionHelp}>{f.ajuda}</span>
+            </label>
+          ))}
+        </div>
+      </Secao>
+
+      <Secao n={4} id={`${uid}-dur`} titulo="Duração" ajuda="Tempo alvo do vídeo. O roteiro mostra quanto a fala ocupa de verdade.">
         <div role="radiogroup" aria-labelledby={`${uid}-dur`} className={styles.segmented}>
           {([15, 30, 45, 60] as const).map((d) => (
             <label key={d} className={styles.segment} data-ideal={d >= objetivo.ideal[0] && d <= objetivo.ideal[1]}>
               <input type="radio" className="sr-only" name="duracao" checked={b.duracao === d} onChange={() => set("duracao", d)} />{d}s
             </label>
           ))}
+          <label className={styles.segment}>
+            <input type="radio" className="sr-only" name="duracao" aria-label="Automático" checked={b.duracao === "auto"} onChange={() => set("duracao", "auto")} />Automático ✨
+          </label>
         </div>
         <p className={styles.hint} data-fora={foraDoIdeal}>
           {foraDoIdeal ? <Icon name="alert" size={15} /> : null}
           {foraDoIdeal
             ? `${b.duracao}s fica fora do ideal para ${objetivo.nome.toLowerCase()} (${objetivo.ideal[0]}–${objetivo.ideal[1]} s). Dá para usar, mas a retenção costuma cair.`
-            : `Ideal para ${objetivo.nome.toLowerCase()}: ${objetivo.ideal[0]}–${objetivo.ideal[1]} s.`}
+            : b.duracao === "auto"
+              ? "Automático: o roteiro escolhe o tempo pelo conteúdo."
+              : `Ideal para ${objetivo.nome.toLowerCase()}: ${objetivo.ideal[0]}–${objetivo.ideal[1]} s.`}
         </p>
       </Secao>
 
-      <Secao n={4} id={`${uid}-voz`} titulo="Voz" ajuda="Quem narra. Toque no play para ouvir uma amostra.">
-        <div role="radiogroup" aria-labelledby={`${uid}-voz`} className={styles.options2}>
+      <Secao n={5} id={`${uid}-voz`} titulo="Voz" ajuda="Quem narra. Toque no play para ouvir uma amostra.">
+        <div role="radiogroup" aria-labelledby={`${uid}-voz`} className={styles.options3}>
           {TONS.map((t) => (
             <div key={t.v} className={styles.voiceWrap}>
               <label className={`${styles.option} ${styles.voice}`}>
@@ -317,7 +353,17 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         </div>
       </Secao>
 
-      <Secao n={5} id={`${uid}-leg`} titulo="Legenda" ajuda="Veja cada estilo rodando antes de escolher.">
+      <Secao n={6} id={`${uid}-est`} titulo="Estilo" ajuda="O clima visual e de ritmo do vídeo.">
+        <div role="radiogroup" aria-labelledby={`${uid}-est`} className={styles.chipsRow}>
+          {ESTILOS.map((e) => (
+            <label key={e.v} className={styles.styleChip} data-on={b.estilo === e.v}>
+              <input type="radio" className="sr-only" name="estilo" aria-label={e.nome.replace(/^\S+\s/, "")} checked={b.estilo === e.v} onChange={() => set("estilo", e.v)} />{e.nome}
+            </label>
+          ))}
+        </div>
+      </Secao>
+
+      <Secao n={7} id={`${uid}-leg`} titulo="Legenda" ajuda="Veja cada estilo rodando antes de escolher.">
         <div role="radiogroup" aria-labelledby={`${uid}-leg`} className={styles.gallery}>
           {LEGENDAS.map(([v, l]) => (
             <label key={v} className={styles.tile}>
@@ -336,7 +382,7 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         </div>
       </Secao>
 
-      <Secao n={6} id={`${uid}-obs`} titulo="Observação (opcional)" ajuda="Algo que o roteiro precisa citar ou evitar.">
+      <Secao n={8} id={`${uid}-obs`} titulo="Observação (opcional)" ajuda="Algo que o roteiro precisa citar ou evitar.">
         <textarea aria-labelledby={`${uid}-obs`} value={b.observacao} onChange={(e) => set("observacao", e.target.value)} placeholder="Ex.: citar o preço do plano mensal" />
       </Secao>
 
@@ -395,8 +441,10 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
   };
   const total = Math.round((cenas.reduce((n, c) => n + segundos(c.fala) + (c.segura || 0), 0)) * 10) / 10;
   const meta = video.briefing.duracao;
-  const escala = Math.max(meta * 1.3, total * 1.05);
-  const desvio = total < meta * 0.85 ? "curto" : total > meta * 1.15 ? "longo" : null;
+  // With automatic duration there is no target to measure against.
+  const alvo = meta === "auto" ? total : meta;
+  const escala = Math.max(alvo * 1.3, total * 1.05);
+  const desvio = meta === "auto" ? null : total < alvo * 0.85 ? "curto" : total > alvo * 1.15 ? "longo" : null;
   const move = (i: number, d: number) => setCenas((cs) => { const next = [...cs]; const [c] = next.splice(i, 1); next.splice(i + d, 0, c); return next; });
   // Same choice as the server's retry: the field recorded for the current status.
   const falhou = Math.max(0, video.status === "interrompido"
@@ -418,7 +466,7 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
         <h3 className={styles.detailTitle}>{video.briefing.assunto}</h3>
         <div className={styles.chips}>
           <span className={styles.chip}>{nomeObjetivo(video.briefing.objetivo)}</span>
-          <span className={styles.chip}>{meta}s</span>
+          <span className={styles.chip}>{nomeDuracao(meta)}</span>
         </div>
       </div>
       <Etapas status={video.status} falhou={falhou} />
@@ -454,9 +502,9 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
           <div className={styles.timebar} data-desvio={desvio || undefined}>
             <div className={styles.track}>
               <span className={styles.fill} style={{ width: `${Math.min(100, (total / escala) * 100)}%` }} />
-              <span className={styles.target} style={{ left: `${(meta / escala) * 100}%` }} title={`Meta ${meta}s`} />
+              <span className={styles.target} style={{ left: `${(alvo / escala) * 100}%` }} title={`Meta ${nomeDuracao(meta)}`} />
             </div>
-            <span className={styles.timeText}>{total}s de {meta}s</span>
+            <span className={styles.timeText}>{meta === "auto" ? `${total}s` : `${total}s de ${meta}s`}</span>
             {desvio ? <span className={styles.timeFlag}>{desvio === "curto" ? "Curto" : "Longo"} demais</span> : null}
           </div>
           {state.avisos.map((a) => <div key={a} className={styles.notice}><Icon name="alert" size={15} />{a}</div>)}
