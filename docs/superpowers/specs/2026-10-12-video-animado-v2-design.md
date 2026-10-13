@@ -79,6 +79,22 @@ The other gaps:
   The convention: "reais" is spoken only when there are no cents; a value under one real says "centavos".
 - **`precoNaTela(centavos)`** returns "R$ 13,99".
 
+### Plan-time adjustments (2026-10-12, after reading the code)
+
+These override the sections below where they differ.
+
+- **Products module.** Prices, photo classification, the white-background cutout, placeholders and validation live in one new module, `src/content-central-video-produtos.js`. The cutout uses Jimp (already a dependency) in Node; `cutout.py` is untouched.
+- **Picker data.** A new route, `GET /api/projects/:id/videos/produtos`, returns every offer with its usable state for the picker: price shown on screen, photo type, and the reason it is disabled.
+- **Placeholders.**
+  - `{nome}` is dropped. Claude writes product names the way they are spoken.
+  - A fala in an Oferta video must contain **no digits at all**, because numbers break the Whisper alignment.
+- **Expansion runs once, at the end of stage 1.**
+  - `roteiro-modelo.json` keeps the placeholder version, and `roteiro.json` holds the expanded text.
+  - The review screen shows and edits the expanded text. On save, the server checks that each product scene still contains its spoken price.
+  - An ajuste of the roteiro starts from `roteiro-modelo.json`.
+- **VT padrão structure.** The scene `tipo`s are exactly `abertura`, then one `produto` per product, then `fechamento`. Stage 1 validation enforces this.
+- **VT padrão stage 2** runs `tts.py` itself, through an injectable `narrador` so tests can stub it. It writes `legenda-post.txt` mechanically. A visual ajuste on the prévia is a 400.
+
 ### Narration placeholders and validation (Oferta only)
 
 In `roteiro.json`, each product scene carries `"produto": "<offer id>"`. Its `fala` uses placeholders instead of numbers:
