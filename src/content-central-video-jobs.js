@@ -72,6 +72,7 @@ export function runClaudeCode({ prompt, cwd, addDirs = [], timeoutMs = CLAUDE_TI
 }
 
 const defaultRenderer = async (opts) => (await import('./video-motor/render.mjs')).renderVideo(opts);
+const defaultChecador = async (opts) => (await import('./video-motor/checar.mjs')).checarVideo(opts);
 
 const DIAS_CURTOS = { mon: 'seg', tue: 'ter', wed: 'qua', thu: 'qui', fri: 'sex', sat: 'sáb', sun: 'dom' };
 // "seg a sex 08:00–18:00 · sáb 08:00–12:00": days with the same hours are grouped.
@@ -220,7 +221,7 @@ export function narrarComTts(dir, { timeoutMs = TTS_TIMEOUT_MS, bin = process.en
   });
 }
 
-export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer, narrador = narrarComTts }) {
+export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer, narrador = narrarComTts, checador = defaultChecador }) {
   const queue = [];
   const busy = new Set();
   let running = null;
@@ -266,37 +267,53 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erro)}`, cwd: dir, addDirs })
     if (!aprovado) throw new Error('Não há roteiro aprovado para produzir.');
     await writeAjuste(dir, ajuste);
     const oferta = video.briefing.oferta;
-    if (oferta?.criacao === 'padrao') {
-      // Fixed template: narration and stills are mechanical, no Claude.
-      await narrador(dir);
-      await copyFile(join(MOTOR_DIR, 'modelos', 'vt-padrao', 'cenas.js'), join(dir, 'cenas.js'));
-    } else {
-      const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
+    const padrao = oferta?.criacao === 'padrao';
+    // Everything after the scene code exists: caption, tempos, roteiro re-force, preview stills.
+    const finalizar = async (inicioRodada, reaproveitaVoz) => {
+      // Oferta: the post caption is mechanical too, so no hand-typed price reaches it.
+      if (oferta) {
+        const { loja } = await readJson(join(dir, 'produtos.json'), { loja: {} });
+        await writeFile(join(dir, 'legenda-post.txt'), legendaPostOferta(oferta, loja));
+      }
+      // An adjustment (or a check retry) may reuse the existing voice: tempos.json then only has to exist.
+      const temposPath = join(dir, 'voz', 'tempos.json');
+      if (reaproveitaVoz ? !existsSync(temposPath) : !await escritoDepois(temposPath, inicioRodada)) throw new Error('A produção não gerou voz/tempos.json.');
+      // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
+      const atual = await readJson(join(dir, 'roteiro.json'), null);
+      if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');
+      await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca, aprovado.moldura));
+      // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
+      const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
+      const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
+      // Claude's own check renders and older rounds must not show up in the preview grid.
+      await rm(join(dir, 'stills'), { recursive: true, force: true });
+      await renderer({ videoDir: dir, stills: marcas });
+    };
+    const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
+    const produzir = async (erro, desde, reaproveitaVoz) => {
       // Prices come from the catalog, never from Claude: produtos.json comes back as it was.
       const produtosOriginal = oferta ? await readJson(join(dir, 'produtos.json'), null) : null;
       await runner({ prompt: `# Etapa 2
-${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior, aprovado.moldura)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+${stagePrompt('PEDIDO-producao.md', video, temLogo, erro, aprovado.moldura)}`, cwd: dir, addDirs: [MOTOR_DIR] });
       if (produtosOriginal) await writeJson(join(dir, 'produtos.json'), produtosOriginal);
-      if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
-    }
-    // Oferta: the post caption is mechanical too, so no hand-typed price reaches it.
+      if (!await escritoDepois(join(dir, 'cenas.js'), desde)) throw new Error('A produção não gerou cenas.js.');
+      await finalizar(desde, reaproveitaVoz);
+    };
+    if (padrao) {
+      // Fixed template: narration and stills are mechanical, no Claude.
+      await narrador(dir);
+      await copyFile(join(MOTOR_DIR, 'modelos', 'vt-padrao', 'cenas.js'), join(dir, 'cenas.js'));
+      await finalizar(inicio, ajuste);
+    } else await produzir(erroAnterior, inicio, ajuste);
+    // Oferta: measure the rendered scenes. Claude gets one retry with the failures (the voice is kept); the template has no one to retry.
     if (oferta) {
-      const { loja } = await readJson(join(dir, 'produtos.json'), { loja: {} });
-      await writeFile(join(dir, 'legenda-post.txt'), legendaPostOferta(oferta, loja));
+      let r = await checador({ videoDir: dir });
+      if (!r.ok && !padrao) {
+        await produzir(`Conferência automática reprovou:\n${r.falhas.join('\n')}`, Date.now(), true);
+        r = await checador({ videoDir: dir });
+      }
+      if (!r.ok) throw new Error(`A conferência automática reprovou a prévia:\n${r.falhas.join('\n')}`);
     }
-    // An adjustment may reuse the existing voice (saves quota): tempos.json then only has to exist.
-    const temposPath = join(dir, 'voz', 'tempos.json');
-    if (ajuste ? !existsSync(temposPath) : !await escritoDepois(temposPath, inicio)) throw new Error('A produção não gerou voz/tempos.json.');
-    // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
-    const atual = await readJson(join(dir, 'roteiro.json'), null);
-    if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');
-    await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca, aprovado.moldura));
-    // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
-    const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
-    const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
-    // Claude's own check renders and older rounds must not show up in the preview grid.
-    await rm(join(dir, 'stills'), { recursive: true, force: true });
-    await renderer({ videoDir: dir, stills: marcas });
     return STATUS.PREVIA_PRONTA;
   }
 

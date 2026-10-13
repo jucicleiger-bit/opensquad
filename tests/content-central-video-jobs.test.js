@@ -484,7 +484,7 @@ test('VT padrão stage 2 never calls Claude: it narrates, copies the template, w
       await mkdir(join(vdir, 'voz'), { recursive: true });
       await writeFile(join(vdir, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'Ofertas', t: 0.05, d: 0.3 }] }, { words: [{ w: 'Fralda', t: 1, d: 0.3 }] }, { words: [{ w: 'Chama', t: 3, d: 0.3 }] }] }));
     };
-    const jobs = createVideoJobs({ targetDir: dir, runner, narrador, renderer: async (o) => { renders.push(o); return {}; } });
+    const jobs = createVideoJobs({ targetDir: dir, runner, narrador, renderer: async (o) => { renders.push(o); return {}; }, checador: async () => ({ ok: true, falhas: [] }) });
     const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, criacao: 'padrao' } }, dir);
     await jobs.enqueue('king', video.id, 'roteiro');
     await jobs.idle();
@@ -515,7 +515,7 @@ test('Oferta nova stage 2: Claude cannot change produtos.json, and legenda-post.
       await writeFile(join(cwd, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'a', t: 0.1, d: 0.2 }] }] }));
       return { text: 'ok' };
     };
-    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) });
+    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}), checador: async () => ({ ok: true, falhas: [] }) });
     const video = await createVideo('king', ofertaBriefing, dir);
     await jobs.enqueue('king', video.id, 'roteiro');
     await jobs.idle();
@@ -606,7 +606,7 @@ test('Oferta auto: stage 2 prompt names the approved frame and Claude cannot swa
       await writeFile(join(cwd, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'a', t: 0.1, d: 0.2 }] }] }));
       return { text: 'ok' };
     };
-    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) });
+    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}), checador: async () => ({ ok: true, falhas: [] }) });
     const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, moldura: 'auto' } }, dir);
     await jobs.enqueue('king', video.id, 'roteiro');
     await jobs.idle();
@@ -637,5 +637,83 @@ test('Oferta made before frames existed: no moldura, campanha, ritmo or trilha i
     const r = JSON.parse(await readFile(join(videoDir(dir, 'king', video.id), 'roteiro.json'), 'utf8'));
     for (const k of ['moldura', 'campanha', 'ritmo', 'trilha']) assert.equal(k in r, false, k);
     assert.doesNotMatch(calls[0].prompt, /Moldura:/);
+  });
+});
+
+function producaoOferta(calls) {
+  return async ({ prompt, cwd }) => {
+    calls.push(prompt);
+    if (/# Etapa 1/.test(prompt)) return ofertaRunner([], ['Fralda por {preco}!'])({ prompt, cwd });
+    await writeFile(join(cwd, 'cenas.js'), '// cenas');
+    await mkdir(join(cwd, 'voz'), { recursive: true });
+    await writeFile(join(cwd, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'a', t: 0.1, d: 0.2 }] }] }));
+    return { text: 'ok' };
+  };
+}
+async function ateProducao(dir, jobs, briefing = ofertaBriefing) {
+  const video = await createVideo('king', briefing, dir);
+  await jobs.enqueue('king', video.id, 'roteiro');
+  await jobs.idle();
+  await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+  await jobs.enqueue('king', video.id, 'producao');
+  await jobs.idle();
+  return readVideo('king', video.id, dir);
+}
+
+test('Oferta nova: a failed check reruns stage 2 once with the failures, then passes', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    let n = 0;
+    const checador = async () => (n++ === 0 ? { ok: false, falhas: ['Cena 2 (p): produto pequeno (80x80 px; precisa de 432 de altura ou de largura).'] } : { ok: true, falhas: [] });
+    const jobs = createVideoJobs({ targetDir: dir, runner: producaoOferta(calls), renderer: async () => ({}), checador });
+    const v = await ateProducao(dir, jobs);
+    assert.equal(v.status, STATUS.PREVIA_PRONTA);
+    const etapa2 = calls.filter((p) => /# Etapa 2/.test(p));
+    assert.equal(etapa2.length, 2);
+    assert.match(etapa2[1], /Conferência automática reprovou:[\s\S]*produto pequeno/);
+  });
+});
+
+test('Oferta nova: a check that fails twice ends in erro with the list', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const checador = async () => ({ ok: false, falhas: ['Cena 2 (p): preço pequeno (40 px; mínimo 72).'] });
+    const jobs = createVideoJobs({ targetDir: dir, runner: producaoOferta([]), renderer: async () => ({}), checador });
+    const v = await ateProducao(dir, jobs);
+    assert.equal(v.status, STATUS.ERRO);
+    assert.match(v.erro, /conferência automática reprovou a prévia[\s\S]*preço pequeno/i);
+  });
+});
+
+test('VT padrão: a failed check is an error at once (no Claude in stage 2)', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const runner = async ({ prompt, cwd }) => {
+      calls.push(prompt);
+      await writeFile(join(cwd, 'roteiro.json'), JSON.stringify({ cenas: [{ tipo: 'abertura', fala: 'Ofertas!', descricao: 'a' }, { tipo: 'produto', produto: 'fralda', fala: 'Fralda por {preco}!', descricao: 'b' }, { tipo: 'fechamento', fala: 'Chama no WhatsApp!', descricao: 'c' }] }));
+      return { text: 'ok' };
+    };
+    const narrador = async (vdir) => { await mkdir(join(vdir, 'voz'), { recursive: true }); await writeFile(join(vdir, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'Ofertas', t: 0.05, d: 0.3 }] }, { words: [{ w: 'Fralda', t: 1, d: 0.3 }] }, { words: [{ w: 'Chama', t: 3, d: 0.3 }] }] })); };
+    const checador = async () => ({ ok: false, falhas: ['x'] });
+    const jobs = createVideoJobs({ targetDir: dir, runner, narrador, renderer: async () => ({}), checador });
+    const v = await ateProducao(dir, jobs, { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, criacao: 'padrao' } });
+    assert.equal(v.status, STATUS.ERRO);
+    assert.equal(calls.length, 1);
+  });
+});
+
+test('non-Oferta videos never run the check', async () => {
+  await withProject(async (dir) => {
+    let chamadas = 0;
+    const jobs = createVideoJobs({ targetDir: dir, runner: fakeRunner([]), renderer: async () => ({}), checador: async () => { chamadas += 1; return { ok: true, falhas: [] }; } });
+    const video = await createVideo('king', briefing, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    await jobs.enqueue('king', video.id, 'producao');
+    await jobs.idle();
+    assert.equal(chamadas, 0);
   });
 });
