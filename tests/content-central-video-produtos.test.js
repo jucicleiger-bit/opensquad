@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Jimp } from 'jimp';
@@ -168,4 +168,32 @@ test('legendaPostOferta lists products with screen prices', () => {
   assert.match(txt, /18\/10/);
   assert.match(txt, /Rua 58, 19/);
   assert.match(txt, /#ofertas/);
+});
+
+test('listarProdutosVideo survives an unreadable photo', async () => {
+  await withDir(async (dir) => {
+    const proj = join(dir, '_opensquad', 'content-central', 'projects', 'p');
+    await mkdir(join(proj, 'assets', 'references'), { recursive: true });
+    await imagem(join(proj, 'assets', 'references', 'a.png'), 0xffffffff);
+    await writeFile(join(proj, 'assets', 'references', 'x.png'), 'nao sou imagem');
+    const assets = [
+      { id: 'fa', relativePath: 'assets/references/a.png', previewUrl: '/x/a.png' },
+      { id: 'fx', relativePath: 'assets/references/x.png', previewUrl: '/x/x.png' },
+    ];
+    const offers = [
+      { id: 'ruim', name: 'Ruim', type: 'offer', price: 'R$ 2,00', photoReferenceIds: ['fx'] },
+      { id: 'ok', name: 'Ok', type: 'offer', price: 'R$ 3,00', photoReferenceIds: ['fa'] },
+    ];
+    const lista = await listarProdutosVideo(projeto(dir, offers, assets), dir);
+    assert.deepEqual(lista.map((p) => [p.id, p.motivo, p.fotoTipo]), [['ruim', 'sem foto', null], ['ok', null, 'branco']]);
+  });
+});
+
+test('{unidade} speaks every registered unit and is refused without a unit', () => {
+  const um = (unidade) => ({ produtos: [{ id: 'a', nome: 'Água', preco: 500, precoDe: null, unidade }], validoAte: '', criacao: 'nova' });
+  const cenas = [{ tipo: 'p', produto: 'a', fala: '{preco}, {unidade}!' }];
+  assert.equal(expandirRoteiro({ cenas }, um('L')).cenas[0].fala, 'cinco reais, o litro!');
+  assert.equal(expandirRoteiro({ cenas }, um('dúzia')).cenas[0].fala, 'cinco reais, a dúzia!');
+  assert.match(validateRoteiroOferta({ cenas }, um('')).join(' '), /Cena 1: Água não tem unidade\./);
+  assert.deepEqual(validateRoteiroOferta({ cenas }, um('L')), []);
 });

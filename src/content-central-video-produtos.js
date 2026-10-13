@@ -118,14 +118,19 @@ export async function listarProdutosVideo(project, targetDir) {
     const preco = parsePreco(o.price);
     const de = parsePreco(o.originalPrice);
     const asset = (o.photoReferenceIds || []).map((id) => assets.get(id)).find((a) => a?.relativePath && existsSync(join(base, a.relativePath)));
-    const motivo = !String(o.price || '').trim() ? 'sem preço' : preco == null ? 'preço inválido' : !asset ? 'sem foto' : null;
+    let motivo = !String(o.price || '').trim() ? 'sem preço' : preco == null ? 'preço inválido' : !asset ? 'sem foto' : null;
+    let fotoTipo = null;
+    if (!motivo) {
+      // An unreadable file (webp, avif, corrupt) only disqualifies its own product.
+      try { fotoTipo = await classificarFoto(join(base, asset.relativePath)); } catch { motivo = 'sem foto'; }
+    }
     const precoDe = preco != null && de != null && de > preco ? de : null;
     out.push({
       id: o.id, nome: o.name, preco, precoDe,
       precoTela: preco != null ? precoNaTela(preco) : '', precoDeTela: precoDe ? precoNaTela(precoDe) : '',
       unidade: o.priceUnit || '', validoAte: o.validUntil || '', previewUrl: asset?.previewUrl || '',
       foto: asset?.relativePath || null,
-      fotoTipo: motivo ? null : await classificarFoto(join(base, asset.relativePath)),
+      fotoTipo,
       motivo,
     });
   }
@@ -175,6 +180,7 @@ export function validateRoteiroOferta(roteiro, oferta) {
       else if (nome === 'validade') { if (!oferta.validoAte) erros.push(`Cena ${i + 1}: {validade} sem data de validade.`); }
       else if (!p) erros.push(`Cena ${i + 1}: {${nome}} fora de uma cena de produto.`);
       else if (nome === 'precoDe' && !p.precoDe) erros.push(`Cena ${i + 1}: ${p.nome} não tem preço "de".`);
+      else if (nome === 'unidade' && !p.unidade) erros.push(`Cena ${i + 1}: ${p.nome} não tem unidade.`);
     }
   });
   for (const p of oferta.produtos) {
@@ -194,7 +200,10 @@ export function validadePorExtenso(iso) {
   return `${DIAS[d.getDay()]}, dia ${d.getDate()}`;
 }
 
-const UNIDADE_FALA = { kg: 'o quilo', g: 'a grama', '100g': 'os cem gramas', un: 'a unidade', pacote: 'o pacote' };
+const UNIDADE_FALA = {
+  kg: 'o quilo', g: 'a grama', '100g': 'os cem gramas', un: 'a unidade', L: 'o litro', 'dúzia': 'a dúzia', pacote: 'o pacote',
+  caixa: 'a caixa', fardo: 'o fardo', bandeja: 'a bandeja', 'maço': 'o maço', lata: 'a lata', garrafa: 'a garrafa',
+};
 
 function expandirFala(fala, produto, validoAte) {
   return String(fala).replace(MARCADOR, (m, nome) => {
