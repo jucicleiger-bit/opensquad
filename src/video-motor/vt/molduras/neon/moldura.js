@@ -112,7 +112,7 @@
       .neo-preco .vt-un { color:#f3f3f8; text-shadow:none; font-size:.19em; white-space:normal; overflow-wrap:anywhere; letter-spacing:.5px; }
 
       /* abertura */
-      .neo-ab-l { position:absolute; left:24px; width:436px; text-align:center; font-family:Anton, sans-serif; text-transform:uppercase; line-height:1; white-space:nowrap; }
+      .neo-ab-l { position:absolute; left:24px; width:436px; display:flex; justify-content:center; font-family:Anton, sans-serif; text-transform:uppercase; line-height:1; white-space:nowrap; }
       .neo-ab-l span { display:inline-block; }
       .neo-ab-l.v { color:#ffe3e8; text-shadow:0 0 4px #fff, 0 0 12px #ff1f3d, 0 0 28px #ff1f3d, 0 0 56px #ff1f3d; }
       .neo-ab-l.o { color:#fff3c9; text-shadow:0 0 4px #fff, 0 0 12px #FFC400, 0 0 28px #FF9A00, 0 0 56px #FF9A00; }
@@ -121,7 +121,7 @@
 
       /* fechamento */
       .neo-fc-t span { display:inline-block; }
-      .neo-fc-t { position:absolute; left:24px; width:436px; top:186px; text-align:center; font:400 112px/1 Anton, sans-serif; text-transform:uppercase; white-space:nowrap; color:#fff3c9; text-shadow:0 0 4px #fff, 0 0 12px #FFC400, 0 0 28px #FF9A00, 0 0 56px #FF9A00; }
+      .neo-fc-t { position:absolute; left:24px; width:436px; top:186px; display:flex; justify-content:center; text-align:center; font:400 112px/1 Anton, sans-serif; text-transform:uppercase; white-space:nowrap; color:#fff3c9; text-shadow:0 0 4px #fff, 0 0 12px #FFC400, 0 0 28px #FF9A00, 0 0 56px #FF9A00; }
       .neo-fc-sub { position:absolute; left:24px; width:436px; top:326px; text-align:center; font:900 20px/1 Inter, sans-serif; letter-spacing:4px; text-transform:uppercase; color:#ffe3e8; text-shadow:0 0 10px #ff1f3d; }
       .neo-fc-wa { position:absolute; left:24px; width:436px; top:372px; height:100px; box-sizing:border-box; padding:0 14px 0 12px; display:flex; align-items:center; justify-content:center; gap:16px; border-radius:999px; background:#fff; color:#111; font:900 40px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 0 8px #ff1f3d, 0 0 28px rgba(255,31,61,.75), 0 0 60px rgba(255,31,61,.4); }
       .neo-fc-wa.m { font-size:34px; } .neo-fc-wa.l { font-size:30px; } .neo-fc-wa.xl { font-size:26px; }
