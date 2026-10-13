@@ -45,3 +45,21 @@ test('a blank stretch longer than half a second fails as tela vazia', async () =
     assert.ok(r.falhas.some((f) => /^Tela vazia de 0\.00s/.test(f)), r.falhas.join('\n'));
   } finally { await limpar(dir); }
 });
+
+test('a price said too late for the stamp to settle fails as preço chega tarde demais, without geometry noise', async () => {
+  const dir = await fixtureVt('encarte');
+  try {
+    // "treze" is the last word of the product line and the next scene opens 0.3 s later, so the cut comes before the stamp settles.
+    const arq = join(dir, 'voz', 'tempos.json');
+    const tempos = JSON.parse(await readFile(arq, 'utf8'));
+    const trz = tempos.cenas[1].words.findIndex((w) => w.w === 'treze');
+    tempos.cenas[1].words = tempos.cenas[1].words.slice(0, trz + 1);
+    const t0 = tempos.cenas[1].words[trz].t;
+    const desloca = t0 + 0.3 - tempos.cenas[2].words[0].t;
+    for (const w of tempos.cenas[2].words) w.t = Number((w.t + desloca).toFixed(2));
+    await writeFile(arq, JSON.stringify(tempos));
+    const r = await checarVideo({ videoDir: dir });
+    assert.ok(r.falhas.some((f) => /^Cena 2 \(produto\): preço chega tarde demais \(assenta em \d+\.\d\ds, mas a cena corta em \d+\.\d\ds\)/.test(f)), r.falhas.join('\n'));
+    assert.ok(!r.falhas.some((f) => /Cena 2 .*(sai da área segura|preço não está visível)/.test(f)), r.falhas.join('\n'));
+  } finally { await limpar(dir); }
+});
