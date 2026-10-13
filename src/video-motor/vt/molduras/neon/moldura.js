@@ -10,6 +10,9 @@
   const loja = () => window.LOJA || {};
   const ddmm = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso || ''); return m ? `${m[3]}/${m[2]}` : ''; };
   const iniciais = (nome) => String(nome || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  // Scale (<= 1) that makes a line's text fit max px; its first child is an inline-block span.
+  // Layout width, so the result does not depend on the transform set by an earlier frame.
+  const cabe = (el, max) => { const w = el.firstElementChild ? el.firstElementChild.offsetWidth : 0; return w > max ? max / w : 1; };
   const aparece = (t, a, b) => (t >= a ? Math.min(1, (t - a) / (b - a)) : 0);
 
   // 40 sparks, seeded once (LCG): position at t = f(t) only, so any seek is exact.
@@ -90,10 +93,10 @@
 
       /* produto */
       .neo-spot { position:absolute; left:20px; top:145px; width:500px; height:480px; background: radial-gradient(ellipse at center, rgba(255,255,255,.34) 0%, rgba(255,255,255,.12) 38%, rgba(255,255,255,0) 68%); }
-      .neo-nome { position:absolute; left:16px; right:16px; top:112px; height:48px; display:flex; align-items:center; justify-content:center; padding:0 14px; box-sizing:border-box; color:#fff; font:900 28px/1.02 Inter, sans-serif; text-transform:uppercase; text-align:center; text-shadow:0 0 12px rgba(255,31,61,.55); }
-      .neo-nome span { display:block; max-height:44px; overflow:hidden; }
+      .neo-nome { position:absolute; left:24px; width:436px; top:112px; height:48px; display:flex; align-items:center; justify-content:center; padding:0 14px; box-sizing:border-box; color:#fff; font:900 28px/1.02 Inter, sans-serif; text-transform:uppercase; text-align:center; text-shadow:0 0 12px rgba(255,31,61,.55); }
+      .neo-nome span { display:block; max-height:46px; overflow:hidden; }
       .neo-nome::after { content:''; position:absolute; left:20%; right:20%; bottom:2px; height:3px; border-radius:2px; background:#ff1f3d; box-shadow:0 0 6px #ff1f3d, 0 0 14px #ff1f3d; }
-      .neo-nome.m { font-size:22px; } .neo-nome.s { font-size:17px; }
+      .neo-nome.m { font-size:22px; } .neo-nome.s { font-size:17px; } .neo-nome.xs { font-size:14px; }
       .neo-foto { position:absolute; left:40px; top:165px; width:460px; height:440px; display:flex; align-items:center; justify-content:center; }
       .neo-foto img { display:block; max-width:460px; max-height:440px; min-height:440px; object-fit:contain; filter: drop-shadow(0 0 16px rgba(255,255,255,.22)) drop-shadow(0 14px 12px rgba(0,0,0,.65)); }
       .neo-foto.card img { box-sizing:border-box; padding:10px; background:#121217; border:3px solid #ff3b55; border-radius:14px; filter:none; box-shadow:0 0 8px #ff1f3d, 0 0 24px rgba(255,31,61,.65), inset 0 0 14px rgba(255,31,61,.25); }
@@ -109,22 +112,25 @@
       .neo-preco .vt-un { color:#f3f3f8; text-shadow:none; font-size:.19em; white-space:normal; overflow-wrap:anywhere; letter-spacing:.5px; }
 
       /* abertura */
-      .neo-ab-l { position:absolute; left:0; width:540px; text-align:center; font-family:Anton, sans-serif; text-transform:uppercase; line-height:1; white-space:nowrap; }
+      .neo-ab-l { position:absolute; left:24px; width:436px; text-align:center; font-family:Anton, sans-serif; text-transform:uppercase; line-height:1; white-space:nowrap; }
+      .neo-ab-l span { display:inline-block; }
       .neo-ab-l.v { color:#ffe3e8; text-shadow:0 0 4px #fff, 0 0 12px #ff1f3d, 0 0 28px #ff1f3d, 0 0 56px #ff1f3d; }
       .neo-ab-l.o { color:#fff3c9; text-shadow:0 0 4px #fff, 0 0 12px #FFC400, 0 0 28px #FF9A00, 0 0 56px #FF9A00; }
-      .neo-ab-loja { position:absolute; left:0; width:540px; top:690px; text-align:center; }
-      .neo-ab-loja span { display:inline-block; box-sizing:border-box; max-width:480px; padding:10px 24px; border-radius:999px; border:3px solid #ff3b55; background:rgba(214,18,48,.14); color:#fff; font:900 24px/1 Inter, sans-serif; text-transform:uppercase; letter-spacing:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 0 8px #ff1f3d, 0 0 22px rgba(255,31,61,.6), inset 0 0 10px rgba(255,31,61,.3); }
+      .neo-ab-loja { position:absolute; left:24px; width:436px; top:690px; text-align:center; }
+      .neo-ab-loja span { display:inline-block; box-sizing:border-box; max-width:436px; padding:10px 24px; border-radius:999px; border:3px solid #ff3b55; background:rgba(214,18,48,.14); color:#fff; font:900 24px/1 Inter, sans-serif; text-transform:uppercase; letter-spacing:1px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 0 8px #ff1f3d, 0 0 22px rgba(255,31,61,.6), inset 0 0 10px rgba(255,31,61,.3); }
 
       /* fechamento */
-      .neo-fc-t { position:absolute; left:0; width:540px; top:176px; text-align:center; font:400 124px/1 Anton, sans-serif; text-transform:uppercase; white-space:nowrap; color:#fff3c9; text-shadow:0 0 4px #fff, 0 0 12px #FFC400, 0 0 28px #FF9A00, 0 0 56px #FF9A00; }
-      .neo-fc-sub { position:absolute; left:0; width:540px; top:332px; text-align:center; font:900 20px/1 Inter, sans-serif; letter-spacing:4px; text-transform:uppercase; color:#ffe3e8; text-shadow:0 0 10px #ff1f3d; }
-      .neo-fc-wa { position:absolute; left:30px; right:30px; top:378px; height:100px; box-sizing:border-box; padding:0 18px 0 14px; display:flex; align-items:center; justify-content:center; gap:16px; border-radius:999px; background:#fff; color:#111; font:900 40px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 0 8px #ff1f3d, 0 0 28px rgba(255,31,61,.75), 0 0 60px rgba(255,31,61,.4); }
-      .neo-fc-wa.m { font-size:33px; }
+      .neo-fc-t span { display:inline-block; }
+      .neo-fc-t { position:absolute; left:24px; width:436px; top:186px; text-align:center; font:400 112px/1 Anton, sans-serif; text-transform:uppercase; white-space:nowrap; color:#fff3c9; text-shadow:0 0 4px #fff, 0 0 12px #FFC400, 0 0 28px #FF9A00, 0 0 56px #FF9A00; }
+      .neo-fc-sub { position:absolute; left:24px; width:436px; top:326px; text-align:center; font:900 20px/1 Inter, sans-serif; letter-spacing:4px; text-transform:uppercase; color:#ffe3e8; text-shadow:0 0 10px #ff1f3d; }
+      .neo-fc-wa { position:absolute; left:24px; width:436px; top:372px; height:100px; box-sizing:border-box; padding:0 14px 0 12px; display:flex; align-items:center; justify-content:center; gap:16px; border-radius:999px; background:#fff; color:#111; font:900 40px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 0 8px #ff1f3d, 0 0 28px rgba(255,31,61,.75), 0 0 60px rgba(255,31,61,.4); }
+      .neo-fc-wa.m { font-size:34px; } .neo-fc-wa.l { font-size:30px; } .neo-fc-wa.xl { font-size:26px; }
       .neo-fc-wa i { display:grid; place-items:center; flex:none; width:68px; height:68px; border-radius:50%; background:#d6122f; box-shadow:0 0 12px rgba(255,31,61,.8); }
-      .neo-fc-info { position:absolute; left:30px; right:30px; top:540px; display:flex; flex-direction:column; align-items:center; gap:30px; }
-      .neo-fc-end { display:flex; align-items:center; gap:12px; max-width:470px; color:#fff; font:700 24px/1.2 Inter, sans-serif; text-align:left; }
+      .neo-fc-info { position:absolute; left:24px; width:436px; top:536px; display:flex; flex-direction:column; align-items:center; gap:30px; }
+      .neo-fc-end { display:flex; align-items:center; gap:12px; max-width:436px; color:#fff; font:700 24px/1.2 Inter, sans-serif; text-align:left; }
+      .neo-fc-end span { min-width:0; }
       .neo-fc-end svg { flex:none; filter: drop-shadow(0 0 6px #FFC400); }
-      .neo-fc-hor { padding:10px 22px; border-radius:999px; border:2px solid #FFC83D; color:#fff3c9; font:900 21px/1.15 Inter, sans-serif; text-align:center; text-shadow:0 0 8px rgba(255,154,0,.8); box-shadow:0 0 8px rgba(255,200,61,.55), inset 0 0 8px rgba(255,200,61,.2); }
+      .neo-fc-hor { max-width:436px; box-sizing:border-box; padding:10px 22px; border-radius:999px; border:2px solid #FFC83D; color:#fff3c9; font:900 21px/1.15 Inter, sans-serif; text-align:center; text-shadow:0 0 8px rgba(255,154,0,.8); box-shadow:0 0 8px rgba(255,200,61,.55), inset 0 0 8px rgba(255,200,61,.2); }
     `,
     fixo: {
       html: (lojaDados, campanha, marca) => {
@@ -157,10 +163,10 @@
       abertura: {
         html: () => {
           const linhas = linhasDe(R.campanha);
-          const fs = linhas.map((l) => Math.min(150, Math.floor(480 / (l.length * 0.47))));
+          const fs = linhas.map((l) => Math.min(150, Math.floor(436 / (l.length * 0.47))));
           const alto = fs.reduce((a, b) => a + b * 1.02, 0);
           let y = 400 - alto / 2;
-          const blocos = linhas.map((l, i) => { const h = `<div class="neo-ab-l ${i % 2 ? 'o' : 'v'}" data-k="l${i}" style="top:${y.toFixed(0)}px;font-size:${fs[i]}px">${esc(l)}</div>`; y += fs[i] * 1.02; return h; }).join('');
+          const blocos = linhas.map((l, i) => { const h = `<div class="neo-ab-l ${i % 2 ? 'o' : 'v'}" data-k="l${i}" style="top:${y.toFixed(0)}px;font-size:${fs[i]}px"><span>${esc(l)}</span></div>`; y += fs[i] * 1.02; return h; }).join('');
           const nome = loja().nome || (R.marca && R.marca.nome) || '';
           return `${fundo(400)}${blocos}${nome ? `<div class="neo-ab-loja" data-k="loja"><span>${esc(nome)}</span></div>` : ''}`;
         },
@@ -171,7 +177,7 @@
           for (let i = 0; i < n; i += 1) {
             const a = s.start + 0.12 + i * 0.22;
             const k = E.snapSettle(p(t, a, a + 0.4));
-            st(q(`l${i}`), flick(t, a) * (0.95 + 0.05 * Math.sin(t * 7 + i)), `scale(${lerp(1.35, 1, k)})`);
+            st(q(`l${i}`), flick(t, a) * (0.95 + 0.05 * Math.sin(t * 7 + i)), `scale(${lerp(1.35, 1, k) * cabe(q(`l${i}`), 436)})`);
             flash = Math.max(flash, Math.max(0, 1 - Math.abs(t - (a + 0.05)) * 9) * 0.1);
           }
           if (q('loja')) st(q('loja'), aparece(t, s.start + 0.75, s.start + 0.9), `translateY(${lerp(30, 0, E.softLand(p(t, s.start + 0.75, s.start + 1.15)))}px)`);
@@ -185,7 +191,7 @@
           const nome = String(pr.nome || '');
           const reais = VT.precoPartes(pr.precoTela).reais;
           return `${fundo(385)}<div class="neo-spot" data-k="spot"></div>
-            <div class="neo-nome ${nome.length > 34 ? 's' : nome.length > 22 ? 'm' : ''}" data-k="nome" data-papel="nome"><span>${esc(nome)}</span></div>
+            <div class="neo-nome ${nome.length > 66 ? 'xs' : nome.length > 30 ? 's' : nome.length > 20 ? 'm' : ''}" data-k="nome" data-papel="nome"><span>${esc(nome)}</span></div>
             <div class="neo-foto ${pr.fotoTipo === 'moldura' ? 'card' : ''}" data-k="foto"><img data-papel="produto" src="${asset(pr.foto)}"></div>
             <div class="neo-dew" data-k="de">${VT.deHtml(pr, { classe: 'neo-de' })}</div>
             <div class="neo-anel" data-k="anel"></div>
@@ -215,9 +221,9 @@
           const l = loja();
           const wa = String(l.whatsapp || '');
           return `${fundo(470)}
-            <div class="neo-fc-t" data-k="t">Anota aí!</div>
+            <div class="neo-fc-t" data-k="t"><span>Anota aí!</span></div>
             ${wa ? `<div class="neo-fc-sub" data-k="sub">Chama no WhatsApp</div>
-            <div class="neo-fc-wa ${wa.length > 13 ? 'm' : ''}" data-k="wa"><i>${FONE}</i><span>${esc(wa)}</span></div>` : ''}
+            <div class="neo-fc-wa ${wa.length > 15 ? 'xl' : wa.length > 13 ? 'l' : wa.length > 11 ? 'm' : ''}" data-k="wa"><i>${FONE}</i><span>${esc(wa)}</span></div>` : ''}
             <div class="neo-fc-info" data-k="info">
               ${l.endereco ? `<div class="neo-fc-end" data-k="end">${PIN}<span>${esc(l.endereco)}</span></div>` : ''}
               ${l.horario ? `<div class="neo-fc-hor" data-k="hor">${esc(l.horario)}</div>` : ''}
@@ -226,7 +232,7 @@
         frame(t, c, q, A, s) {
           fundoFrame(t, q);
           const kt = E.crashIn(p(t, s.start + 0.1, s.start + 0.6));
-          st(q('t'), flick(t, s.start + 0.1) * (0.95 + 0.05 * Math.sin(t * 6)), `scale(${lerp(2.6, 1, kt)})`);
+          st(q('t'), flick(t, s.start + 0.1) * (0.95 + 0.05 * Math.sin(t * 6)), `scale(${lerp(2.6, 1, kt) * cabe(q('t'), 436)})`);
           if (q('sub')) st(q('sub'), aparece(t, s.start + 0.5, s.start + 0.65), 'none');
           if (q('wa')) {
             const kw = E.snapSettle(p(t, s.start + 0.65, s.start + 1.05));
@@ -237,7 +243,7 @@
           if (q('hor')) st(q('hor'), aparece(t, s.start + 1, s.start + 1.15), `translateY(${lerp(40, 0, E.softLand(p(t, s.start + 1, s.start + 1.4)))}px)`);
           return { flash: Math.max(0, 1 - Math.abs(t - (s.start + 0.18)) * 8) * 0.25 };
         },
-        sfx: (c, A, s) => [{ t: s.start + 0.05, s: 'zap' }, { t: s.start + 0.45, s: 'ding' }],
+        sfx: (c, A, s) => [{ t: s.start + 0.05, s: 'zap' }, { t: s.start + 0.24, s: 'ding' }],
       },
     },
     transicao: VT.transicao.passada,
