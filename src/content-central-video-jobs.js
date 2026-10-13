@@ -20,6 +20,7 @@ const CLOCK_SLACK_MS = 2000; // coarse filesystem timestamps
 export const DIRECOES = {
   criador: 'Leia em português do Brasil, como um criador de conteúdo de Instagram: animado, sorrindo, ritmo rápido, com energia e variação de entonação, dando ênfase nas palavras importantes. Leia exatamente o texto abaixo, sem acrescentar nada:',
   vendedor: 'Leia em português do Brasil, como um vendedor simpático e confiante de loja de bairro: próximo, caloroso e natural, sem exagero, com ritmo de anúncio de Instagram. Leia exatamente o texto abaixo, sem acrescentar nada:',
+  locutor: 'Leia em português do Brasil, como locutor de comercial de supermercado na TV e no rádio: muita energia, sorriso na voz, ritmo rápido, ênfase forte nos nomes dos produtos e nos preços, como quem anuncia uma oferta imperdível. Leia exatamente o texto abaixo, sem acrescentar nada:',
 };
 
 export function isUsageLimit(text) {
@@ -98,11 +99,21 @@ const LEGENDA_TEXTO = {
   'do-video': 'Legendas na tela: as falas do próprio vídeo.',
 };
 
+const ESTILO_TEXTO = { dinamico: 'dinamico', mercado: 'mercado', premium: 'premium', informativo: 'informativo' };
+
+// Task 4 adds the Oferta line (product count drives the automatic target).
+function duracaoTexto(b) {
+  if (b.duracao !== 'auto') return `${b.duracao}s`;
+  return b.formato === 'status' ? 'automática (15 a 30s)' : 'automática (20 a 45s, o que o assunto pedir)';
+}
+
 function stagePrompt(nome, video, temLogo, erroAnterior) {
   const b = video.briefing;
   return [
     `Leia e siga ${MOTOR_PROMPT}/${nome}. Onde ele diz <MOTOR>, use: ${MOTOR_PROMPT}`,
-    `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${b.duracao}s.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
+    `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${duracaoTexto(b)}.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
+    `Formato: ${b.formato === 'status' ? 'Story/Status do WhatsApp (REGRAS.md § Formato)' : 'Reels'}.`,
+    ...(ESTILO_TEXTO[b.estilo] ? [`Estilo: ${ESTILO_TEXTO[b.estilo]} (REGRAS.md § Estilo).`] : []),
     LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
     temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
     ...(erroAnterior ? [`A tentativa anterior falhou com: ${erroAnterior}`] : []),

@@ -13,10 +13,25 @@ Vem do cadastro e do Raio-X do projeto:
 - **Identidade visual.** No caso da King: preto e branco como base, #FFD100 só em destaques e CTA, tipografia forte e legível, sem poluição visual.
 - **Tom do Raio-X, quando fizer sentido.** No caso da King: claro, direto e educativo, perguntas que geram reflexão, CTA para conversa ou diagnóstico, nunca prometer resultado.
 
-## Objetivo do vídeo (perguntar sempre antes do roteiro)
+## Objetivo do vídeo (vem do briefing)
 
-- **Reels de alcance:** o objetivo é ser visto e ganhar seguidor. Fecha com uma **enquete**, uma pergunta com opções que puxa comentário, mais o convite para seguir. Tom de identificação e reflexão, conteúdo que vale salvar. Entre 20 e 45 segundos.
-- **Anúncio:** o objetivo é converter e gerar conversa no WhatsApp. Segue dor, solução, prova e oferta. Fecha com CTA direto: WhatsApp com número. A prova real (antes e depois de cliente) é essencial. Entre 15 e 30 segundos.
+- **Alcance:** ser visto e ganhar seguidor. Fecha com uma **enquete** (pergunta com opções que puxa comentário) **ou** pedindo para salvar/compartilhar, quando o vídeo for dica, receita ou lista; sempre com o convite para seguir. Entre 20 e 45 segundos.
+- **Anúncio:** converter e gerar conversa no WhatsApp. Dor, solução, prova e oferta. Fecha com CTA direto: WhatsApp com número. Entre 15 e 30 segundos.
+- **Oferta:** VT de mercado com os produtos de `produtos.json` (veja § Oferta). Fecha com validade, endereço e WhatsApp.
+- **Institucional:** apresenta a empresa (história, bastidores, diferencial). Sem preço e sem venda dura. Fecha com a marca e o convite para seguir.
+- **Aviso:** comunicado curto (feriado, novo horário, chegou mercadoria). Direto, sem venda e sem enquete. Fecha com o horário ou o endereço. Cerca de 15 segundos.
+
+## Formato
+
+- **Reels:** o padrão. A interface do Instagram cobre a faixa de baixo e a lateral direita.
+- **Story/Status do WhatsApp:** mais curto (15 a 30 s), fecha sempre chamando no WhatsApp, nunca usa enquete (no Status ninguém comenta). Sem os botões do Reels por cima: a legenda pode ficar mais baixa.
+
+## Estilo (direção opcional; "livre" = você decide)
+
+- **dinamico:** cortes rápidos, muito movimento, energia de Reels viral.
+- **mercado:** cara de encarte animado: preço grande, amarelo e vermelho, explosões e selos de oferta.
+- **premium:** calmo e elegante: fundo escuro ou neutro, tipografia fina, movimentos lentos, muito respiro.
+- **informativo:** claro e didático: tópicos numerados, ícones simples, texto de apoio legível.
 
 ## Voz
 

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import {
   STATUS, normalizeBriefing, createVideo, updateVideo, readVideoState, listVideos, saveRoteiroCenas, deleteVideo,
-  estimateSeconds, validateRoteiro, buildMarca, buildMaterialInventory, reconcileInterruptedVideos, requireVideoProject, videoDir, normalizeVideoAnimado,
+  estimateSeconds, validateRoteiro, duracaoAlvo, buildMarca, buildMaterialInventory, reconcileInterruptedVideos, requireVideoProject, videoDir, normalizeVideoAnimado,
 } from '../src/content-central-video.js';
 
 async function withDir(fn) {
@@ -83,7 +83,7 @@ test('validateRoteiro: errors block, objective mismatches and timing only warn',
   const ok = { cenas: [{ tipo: 'a', fala: 'Antes de anunciar, pensa.', descricao: 'x' }, { tipo: 'b', fala: 'Chama no WhatsApp!', descricao: 'y' }] };
   assert.deepEqual(validateRoteiro(ok, { ...briefing, duracao: 15 }).erros, []);
   assert.ok(validateRoteiro(ok, { ...briefing, duracao: 60 }).avisos.some((a) => /tempo/i.test(a)));
-  assert.ok(validateRoteiro(ok, { ...briefing, objetivo: 'alcance' }).avisos.some((a) => /pergunta/i.test(a)));
+  assert.ok(validateRoteiro(ok, { ...briefing, objetivo: 'alcance' }).avisos.some((a) => /enquete/i.test(a)));
   assert.ok(validateRoteiro({ cenas: [] }, briefing).erros.length > 0);
   assert.ok(validateRoteiro({ cenas: [{ tipo: 'a', fala: '' }] }, briefing).erros.length > 0);
 });
@@ -182,4 +182,27 @@ test('updateVideo clears the recorded failed/interrupted stage once a stage star
     assert.equal(next.etapaComErro, undefined);
     assert.equal(next.etapaInterrompida, undefined);
   });
+});
+
+test('briefing accepts the v2 objectives, format, style, auto duration and locutor', () => {
+  const b = normalizeBriefing({ ...briefing, objetivo: 'aviso', formato: 'status', estilo: 'premium', duracao: 'auto', tom: 'locutor' });
+  assert.deepEqual([b.objetivo, b.formato, b.estilo, b.duracao, b.tom], ['aviso', 'status', 'premium', 'auto', 'locutor']);
+  const padrao = normalizeBriefing(briefing);
+  assert.deepEqual([padrao.formato, padrao.estilo], ['reels', 'livre']);
+  assert.throws(() => normalizeBriefing({ ...briefing, formato: 'tv' }), (err) => err.status === 400);
+  assert.throws(() => normalizeBriefing({ ...briefing, estilo: 'cinematografico' }), (err) => err.status === 400);
+  assert.throws(() => normalizeBriefing({ ...briefing, objetivo: 'oferta' }), (err) => err.status === 400 && /produtos/.test(err.message));
+});
+
+test('validateRoteiro: auto duration has no time warning; alcance may close with salva/compartilha', () => {
+  const cenas = [{ tipo: 'a', fala: 'Dica rápida de hoje.', descricao: 'x' }, { tipo: 'b', fala: 'Salva pra não esquecer e segue a gente.', descricao: 'y' }];
+  assert.deepEqual(validateRoteiro({ cenas }, { objetivo: 'alcance', duracao: 'auto', formato: 'reels' }).avisos, []);
+  assert.deepEqual(validateRoteiro({ cenas }, { objetivo: 'institucional', duracao: 'auto', formato: 'reels' }).avisos, []);
+  const status = validateRoteiro({ cenas }, { objetivo: 'aviso', duracao: 'auto', formato: 'status' }).avisos;
+  assert.ok(status.some((a) => /WhatsApp/.test(a)));
+});
+
+test('duracaoAlvo is the number of seconds, or null for auto', () => {
+  assert.equal(duracaoAlvo({ duracao: 30 }), 30);
+  assert.equal(duracaoAlvo({ duracao: 'auto' }), null);
 });

@@ -352,3 +352,20 @@ test('a retry after an error tells Claude what failed before; a success clears t
     assert.doesNotMatch(calls[1].prompt, /tentativa anterior/);
   });
 });
+
+test('DIRECOES has the locutor direction', () => {
+  assert.match(DIRECOES.locutor, /^Leia em português do Brasil, como locutor de comercial de supermercado/);
+});
+
+test('stage 1 prompt carries format, style and auto duration', async () => {
+  await withProject(async (dir) => {
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: fakeRunner(calls), renderer: async () => ({}) });
+    const video = await createVideo('king', { ...briefing, formato: 'status', estilo: 'premium', duracao: 'auto' }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    assert.match(calls[0].prompt, /Formato: Story\/Status/);
+    assert.match(calls[0].prompt, /Estilo: premium/);
+    assert.match(calls[0].prompt, /Duração alvo: automática/);
+  });
+});

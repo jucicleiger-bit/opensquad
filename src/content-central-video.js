@@ -15,9 +15,11 @@ export const STATUS = {
 };
 export const ESTADOS_GERANDO = new Set([STATUS.ROTEIRO_GERANDO, STATUS.PRODUCAO_GERANDO, STATUS.RENDER_GERANDO]);
 const ESTADOS_FALHA = new Set([STATUS.ERRO, STATUS.AGUARDANDO_LIMITE, STATUS.INTERROMPIDO]);
-const OBJETIVOS = new Set(['alcance', 'anuncio']);
+const OBJETIVOS = new Set(['alcance', 'anuncio', 'oferta', 'institucional', 'aviso']);
+const FORMATOS = new Set(['reels', 'status']);
+const ESTILOS = new Set(['livre', 'dinamico', 'mercado', 'premium', 'informativo']);
 const DURACOES = new Set([15, 30, 45, 60]);
-const TONS = new Set(['criador', 'vendedor']);
+const TONS = new Set(['criador', 'vendedor', 'locutor']);
 const LEGENDAS = new Set(['simples', 'karaoke', 'pop', 'destaque', 'caixa', 'do-video', 'sem']);
 const PALAVRAS_POR_SEGUNDO = 2.6;
 
@@ -52,19 +54,28 @@ export function videoDir(targetDir, projectId, videoId) {
 
 const slug = (text) => String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 
-export function normalizeBriefing(input = {}) {
+export function normalizeBriefing(input = {}, produtosDisponiveis = null) {
   const assunto = String(input.assunto || '').trim();
   if (!assunto) throw httpError(400, 'Informe o assunto do vídeo.');
   const objetivo = String(input.objetivo || '');
-  if (!OBJETIVOS.has(objetivo)) throw httpError(400, 'Objetivo deve ser alcance ou anúncio.');
-  const duracao = Number(input.duracao);
-  if (!DURACOES.has(duracao)) throw httpError(400, 'Duração deve ser 15, 30, 45 ou 60 segundos.');
+  if (!OBJETIVOS.has(objetivo)) throw httpError(400, 'Objetivo deve ser alcance, anúncio, oferta, institucional ou aviso.');
+  const formato = String(input.formato || 'reels');
+  if (!FORMATOS.has(formato)) throw httpError(400, 'Formato deve ser reels ou status.');
+  const estilo = String(input.estilo || 'livre');
+  if (!ESTILOS.has(estilo)) throw httpError(400, 'Estilo desconhecido.');
+  const duracao = input.duracao === 'auto' ? 'auto' : Number(input.duracao);
+  if (duracao !== 'auto' && !DURACOES.has(duracao)) throw httpError(400, 'Duração deve ser 15, 30, 45, 60 segundos ou automática.');
   const tom = String(input.tom || 'criador');
-  if (!TONS.has(tom)) throw httpError(400, 'Tom deve ser criador ou vendedor.');
+  if (!TONS.has(tom)) throw httpError(400, 'Tom deve ser criador, vendedor ou locutor.');
   const legenda = String(input.legenda || 'do-video');
   if (!LEGENDAS.has(legenda)) throw httpError(400, 'Modelo de legenda desconhecido.');
-  return { assunto, objetivo, duracao, tom, legenda, observacao: String(input.observacao || '').trim() };
+  const briefing = { assunto, objetivo, formato, estilo, duracao, tom, legenda, observacao: String(input.observacao || '').trim() };
+  if (objetivo === 'oferta' && !produtosDisponiveis) throw httpError(400, 'Oferta precisa dos produtos cadastrados.');
+  return briefing;
 }
+
+// Seconds the script should aim for, or null when the operator chose "auto".
+export const duracaoAlvo = (briefing) => (briefing?.duracao === 'auto' ? null : Number(briefing?.duracao) || null);
 
 export async function createVideo(projectId, input, targetDir) {
   await requireVideoProject(projectId, targetDir);
@@ -116,11 +127,13 @@ export function validateRoteiro(roteiro, briefing) {
     if (!String(c.fala || '').trim()) erros.push(`Cena ${i + 1} sem fala.`);
   });
   if (!erros.length && briefing) {
+    const alvo = duracaoAlvo(briefing);
     const est = estimateSeconds(cenas);
-    if (Math.abs(est - briefing.duracao) > briefing.duracao * 0.15) avisos.push(`Tempo estimado ${est}s, a meta é ${briefing.duracao}s.`);
-    const fecho = String(cenas[cenas.length - 1].fala || '');
-    if (briefing.objetivo === 'alcance' && !/\?/.test(cenas.slice(-2).map((c) => c.fala).join(' '))) avisos.push('Vídeo de alcance deve fechar com uma pergunta (enquete).');
-    if (briefing.objetivo === 'anuncio' && !/whats/i.test(fecho)) avisos.push('Anúncio deve fechar chamando no WhatsApp.');
+    if (alvo && Math.abs(est - alvo) > alvo * 0.15) avisos.push(`Tempo estimado ${est}s, a meta é ${alvo}s.`);
+    const fim = cenas.slice(-2).map((c) => String(c.fala || '')).join(' ');
+    const status = briefing.formato === 'status';
+    if (briefing.objetivo === 'alcance' && !status && !/\?|salv|compartilh/i.test(fim)) avisos.push('Vídeo de alcance deve fechar com uma enquete ou pedindo para salvar/compartilhar.');
+    if ((briefing.objetivo === 'anuncio' || status) && !/whats/i.test(fim)) avisos.push('Este vídeo deve fechar chamando no WhatsApp.');
   }
   return { erros, avisos };
 }
