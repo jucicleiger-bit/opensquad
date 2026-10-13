@@ -65,7 +65,7 @@ const nomeObjetivo = (o: string) => NOMES_OBJETIVO[o] || o;
 const nomeDuracao = (d: number | "auto") => (d === "auto" ? "Automático" : `${d}s`);
 // Frames and pace mirror the server (content-central-video-produtos.js); automatic duration takes up to the maximum.
 const MOLDURAS = [{ v: "encarte", nome: "Encarte", ajuda: "Fundo claro de panfleto, preço em selo" }, { v: "diagonal", nome: "Diagonal", ajuda: "Faixas inclinadas, ritmo de promoção" }, { v: "neon", nome: "Neon Premium", ajuda: "Fundo escuro com brilho neon" }] as const;
-const NOMES_MOLDURA: Record<string, string> = { encarte: "Encarte", diagonal: "Diagonal", neon: "Neon Premium", auto: "A IA escolhe" };
+const NOMES_MOLDURA: Record<string, string> = { ...Object.fromEntries(MOLDURAS.map((m) => [m.v, m.nome])), auto: "A IA escolhe" };
 const SEGUNDOS = { rapido: 3, calmo: 4 } as const;
 const MAX_PRODUTOS = 12;
 const limiteProdutos = (duracao: number | "auto", ritmo: "rapido" | "calmo") => (duracao === "auto" ? MAX_PRODUTOS : Math.min(MAX_PRODUTOS, Math.floor((duracao - 6) / SEGUNDOS[ritmo])));

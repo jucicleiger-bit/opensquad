@@ -12,12 +12,12 @@ export const SEGUNDOS_POR_PRODUTO = { rapido: 3, calmo: 4 };
 // The one list of VT frames; the motor's vt/molduras/<id>/ folders follow it.
 export const MOLDURAS = JSON.parse(readFileSync(new URL('./video-motor/vt/molduras/index.json', import.meta.url), 'utf8'));
 const MOLDURA_IDS = new Set(MOLDURAS.map((m) => m.id));
-const CAMPANHA_PADRAO = 'Ofertas da Semana';
+export const CAMPANHA_PADRAO = 'Ofertas da Semana';
 
 // Opening and closing take about 6 s; the rest is products at the chosen pace.
 export function produtosPorDuracao(duracao, ritmo) {
   if (duracao === 'auto') return MAX_PRODUTOS;
-  return Math.min(MAX_PRODUTOS, Math.floor((Number(duracao) - 6) / SEGUNDOS_POR_PRODUTO[ritmo]));
+  return Math.min(MAX_PRODUTOS, Math.floor((Number(duracao) - 6) / (SEGUNDOS_POR_PRODUTO[ritmo] || SEGUNDOS_POR_PRODUTO.rapido)));
 }
 
 function httpError(status, message) {

@@ -67,7 +67,7 @@
       .enc-burst svg { display:block; width:100%; height:100%; overflow:visible; filter: drop-shadow(0 6px 0 rgba(0,0,0,.35)); }
       .enc-badge { position:absolute; left:24px; top:640px; width:436px; height:150px; display:flex; align-items:center; justify-content:center; opacity:0; }
       .enc-preco { padding:2px 30px 4px; border-radius:30px; background:#FFD400; border:5px solid #fff; box-shadow:0 8px 0 rgba(0,0,0,.4); font:400 110px/1 Anton, sans-serif; color:#E30613; text-shadow:0 4px 0 rgba(0,0,0,.16); }
-      .enc-preco.g { font-size:88px; } .enc-preco.gg { font-size:70px; }
+      .enc-preco.g { font-size:88px; } .enc-preco.gg { font-size:74px; }
       .enc-preco .vt-un { color:#1a0000; text-shadow:none; font-size:.19em; }
 
       /* abertura */
@@ -85,7 +85,7 @@
       .enc-fc-data { position:absolute; left:0; width:484px; text-align:center; font:400 112px/1 Anton, sans-serif; color:#E30613; -webkit-text-stroke:8px #fff; paint-order:stroke fill; text-shadow:0 8px 0 rgba(0,0,0,.3); }
       .enc-fc-card { position:absolute; left:24px; width:436px; top:488px; padding:16px 14px; border-radius:18px; background:#fff; border:5px solid #E30613; text-align:center; font:900 25px/1.2 Inter, sans-serif; color:#111; box-shadow:0 8px 0 rgba(0,0,0,.3); }
       .enc-fc-card small { display:block; margin-top:6px; font:700 19px/1.2 Inter, sans-serif; color:#555; }
-      .enc-fc-wa { position:absolute; left:24px; width:436px; top:662px; display:flex; align-items:center; justify-content:center; gap:10px; height:84px; border-radius:999px; background:#16A34A; border:5px solid #fff; color:#fff; font:900 29px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 8px 0 rgba(0,0,0,.35); }
+      .enc-fc-wa { position:absolute; box-sizing:border-box; left:36px; width:412px; top:662px; display:flex; align-items:center; justify-content:center; gap:10px; height:84px; border-radius:999px; background:#16A34A; border:5px solid #fff; color:#fff; font:900 29px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 8px 0 rgba(0,0,0,.35); }
     `,
     fixo: {
       html: (lojaDados, campanha, marca) => {

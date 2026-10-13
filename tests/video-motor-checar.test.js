@@ -63,3 +63,24 @@ test('a price said too late for the stamp to settle fails as preço chega tarde 
     assert.ok(!r.falhas.some((f) => /Cena 2 .*(sai da área segura|preço não está visível)/.test(f)), r.falhas.join('\n'));
   } finally { await limpar(dir); }
 });
+
+// R$ 9,99 is the classic: "nove e noventa e nove" repeats its first word, and the padrão fala ends with the price.
+for (const moldura of ['encarte', 'diagonal', 'neon']) {
+  test(`the ${moldura} VT padrão passes the check with a R$ 9,99 price said last (segura 0.8, as the job forces it)`, async () => {
+    const dir = await fixtureVt(moldura);
+    try {
+      const ler = async (f) => JSON.parse(await readFile(join(dir, f), 'utf8'));
+      const roteiro = await ler('roteiro.json');
+      roteiro.cenas[1].fala = roteiro.cenas[1].fala.replace('por treze', 'por nove').replace('treze', 'nove');
+      roteiro.cenas[1].segura = 0.8;
+      await writeFile(join(dir, 'roteiro.json'), JSON.stringify(roteiro));
+      const produtos = await ler('produtos.json');
+      Object.assign(produtos.produtos[0], { precoTela: 'R$ 9,99', preco: 'R$ 9,99', precoFalado: 'nove e noventa e nove' });
+      await writeFile(join(dir, 'produtos.json'), JSON.stringify(produtos));
+      const tempos = await ler('voz/tempos.json');
+      for (const w of tempos.cenas[1].words) if (w.w === 'treze') w.w = 'nove';
+      await writeFile(join(dir, 'voz', 'tempos.json'), JSON.stringify(tempos));
+      assert.deepEqual(await checarVideo({ videoDir: dir }), { ok: true, falhas: [] });
+    } finally { await limpar(dir); }
+  });
+}

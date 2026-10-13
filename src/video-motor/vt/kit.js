@@ -81,13 +81,17 @@
     return formatar(Math.round(total * ease.softLand(Math.min(1, f / quadros))));
   }
 
-  // The new price is said last ("de dezesseis… por treze…"): last mention of its first word.
+  // The new price is said last ("de dezesseis… por treze…"): the start of its last full mention.
+  // The price may repeat its first word ("nove e noventa e nove"): k = how many times it does,
+  // so with N hits in the line the last full mention starts at hit N - k + 1.
   function momentoPreco(A, produto, fallback) {
-    const w = String(produto?.precoFalado || '').split(' ')[0];
+    const palavras = String(produto?.precoFalado || '').split(' ').filter(Boolean);
+    const w = palavras[0];
     if (!w) return fallback;
-    let ultimo = null;
-    for (let n = 1; n < 20; n += 1) { try { ultimo = A(w, n); } catch { break; } }
-    return ultimo ?? fallback;
+    const k = palavras.filter((x) => x === w).length;
+    const hits = [];
+    for (let n = 1; n < 20; n += 1) { try { hits.push(A(w, n)); } catch { break; } }
+    return hits.length ? hits[Math.max(0, hits.length - k)] : fallback;
   }
 
   // Transitions with the player's VIDEO.transicao(t, s, next, i) signature.

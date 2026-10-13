@@ -211,6 +211,7 @@ test('pace: seconds per product and the products that fit each duration', () => 
   assert.deepEqual([15, 30, 45, 60].map((d) => produtosPorDuracao(d, 'rapido')), [3, 8, 12, 12]);
   assert.deepEqual([15, 30, 45, 60].map((d) => produtosPorDuracao(d, 'calmo')), [2, 6, 9, 12]);
   assert.equal(produtosPorDuracao('auto', 'calmo'), 12);
+  assert.equal(produtosPorDuracao(30, 'xyz'), 8, 'unknown pace falls back to rapido');
 });
 
 test('MOLDURAS lists encarte, diagonal and neon with their tracks', () => {

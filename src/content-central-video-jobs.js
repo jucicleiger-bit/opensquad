@@ -12,7 +12,7 @@ import {
   STATUS, requireVideoProject, readVideo, updateVideo, videoDir, validateRoteiro, buildMarca, buildMaterialInventory, normalizeVideoAnimado,
 } from './content-central-video.js';
 import {
-  MOLDURAS, SEGUNDOS_POR_PRODUTO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso, legendaPostOferta,
+  MOLDURAS, SEGUNDOS_POR_PRODUTO, CAMPANHA_PADRAO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso, legendaPostOferta,
 } from './content-central-video-produtos.js';
 
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
@@ -186,9 +186,11 @@ function forcarRoteiro(roteiro, briefing, marca, moldura) {
   delete roteiro.legendas;
   if (briefing.legenda === 'sem') roteiro.legendas = false;
   else if (briefing.legenda !== 'do-video') roteiro.legenda = briefing.legenda;
-  // Oferta videos made before frames existed have no moldura: they stay as they were.
-  if (briefing.oferta?.moldura) {
-    const o = briefing.oferta;
+  const padrao = briefing.oferta?.criacao === 'padrao';
+  // The old padrão template no longer exists: a padrão video made before frames existed is an encarte.
+  // A nova one made before frames existed has no moldura and stays as it was.
+  const o = padrao && !briefing.oferta.moldura ? { ...briefing.oferta, moldura: 'encarte', ritmo: 'rapido', campanha: CAMPANHA_PADRAO } : briefing.oferta;
+  if (o?.moldura) {
     // "auto": stage 1 keeps Claude's validated pick, stage 2 restores the approved one; anything else comes from the briefing.
     if (o.moldura !== 'auto') roteiro.moldura = o.moldura;
     else if (moldura) roteiro.moldura = moldura;
@@ -196,6 +198,8 @@ function forcarRoteiro(roteiro, briefing, marca, moldura) {
     roteiro.ritmo = o.ritmo;
     roteiro.trilha = (MOLDURAS.find((m) => m.id === roteiro.moldura) || MOLDURAS[0]).trilha;
   }
+  // The padrão fala ends with the price: hold the picture so the stamp has time to settle.
+  if (padrao) for (const c of roteiro.cenas || []) if (c?.produto) c.segura = 0.8;
   return roteiro;
 }
 
@@ -306,10 +310,11 @@ ${stagePrompt('PEDIDO-producao.md', video, temLogo, erro, aprovado.moldura)}`, c
       await finalizar(inicio, ajuste);
     } else await produzir(erroAnterior, inicio, ajuste);
     // Oferta: measure the rendered scenes. Claude gets one retry with the failures (the voice is kept); the template has no one to retry.
-    if (oferta) {
+    // Only videos with a frame have the kit and the data-papel marks the check reads.
+    if (oferta && (await readJson(join(dir, 'roteiro.json'), null))?.moldura) {
       let r = await checador({ videoDir: dir });
       if (!r.ok && !padrao) {
-        await produzir(`Conferência automática reprovou:\n${r.falhas.join('\n')}`, Date.now(), true);
+        await produzir(`Conferência automática reprovou:\n${r.falhas.join('\n')}\nNão rode o tts de novo: a voz já está pronta (voz/tempos.json).`, Date.now(), true);
         r = await checador({ videoDir: dir });
       }
       if (!r.ok) throw new Error(`A conferência automática reprovou a prévia:\n${r.falhas.join('\n')}`);

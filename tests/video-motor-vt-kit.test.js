@@ -77,3 +77,16 @@ test('momentoPreco takes the last mention of the first spoken price word', async
   assert.equal(VT.momentoPreco(A, { precoFalado: 'treze e noventa e nove' }, 9), 3.5);
   assert.equal(VT.momentoPreco(A, { precoFalado: 'dez e noventa' }, 9), 9);
 });
+
+test('momentoPreco: a price that repeats its first word is found at the start of the last full mention', async () => {
+  const VT = await carregarKit();
+  const com = (ditas) => (w, n = 1) => { const h = ditas[w]; if (!h || !h[n - 1]) throw new Error('não'); return h[n - 1]; };
+  // "nove e noventa e nove" said once: its own two "nove" -> the first one
+  assert.equal(VT.momentoPreco(com({ nove: [2.0, 2.9] }), { precoFalado: 'nove e noventa e nove' }, 9), 2.0);
+  // "de nove e noventa e nove por nove e noventa e nove": the start of the second (new price) mention
+  assert.equal(VT.momentoPreco(com({ nove: [1.0, 1.9, 3.0, 3.9] }), { precoFalado: 'nove e noventa e nove' }, 9), 3.0);
+  // "quatro e noventa e quatro" with the de price sharing the word
+  assert.equal(VT.momentoPreco(com({ quatro: [1.0, 1.8, 3.2, 4.1] }), { precoFalado: 'quatro e noventa e quatro' }, 9), 3.2);
+  // fewer hits than the price has words: the first hit, never a crash
+  assert.equal(VT.momentoPreco(com({ nove: [2.0] }), { precoFalado: 'nove e noventa e nove' }, 9), 2.0);
+});

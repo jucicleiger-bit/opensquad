@@ -1,8 +1,8 @@
 /* global window, R, asset, esc, st, p, lerp, flick */
 // Neon Premium: black textured ground, red and gold neon, rising sparks, a stamped neon price
 // (reference "Esquadrão da Economia"). Stage 540×960. Zones: fixed top band y 20–104, name 112–160,
-// photo box 460×440 at y 165–605, "de" line ~616, price 640–790 (x 24–460), payment strip and
-// legal footer 805–900. Every frame function is pure in t (sparks included: seeded, no Math.random).
+// photo box 460×440 at y 165–605, "de" line ~616, price 640–790 (x 24–460), legal footer (the line at 803 and
+// the legal text under it, ~828). Every frame function is pure in t (sparks included: seeded, no Math.random).
 (() => {
   const VT = window.VT;
   const E = VT.ease;
@@ -80,16 +80,7 @@
       .neo-selo { position:absolute; left:112px; right:150px; top:28px; height:72px; display:flex; align-items:center; justify-content:center; text-align:center; font:400 32px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:1.5px; color:#fff3c9; text-shadow:0 0 3px #fff, 0 0 10px #FFC400, 0 0 22px #FF9A00, 0 0 40px #FF9A00; }
       .neo-selo.m { font-size:26px; } .neo-selo.s { font-size:21px; letter-spacing:1px; }
       .neo-data { position:absolute; right:20px; top:44px; padding:8px 14px 7px; border-radius:999px; background:#d6122f; border:2px solid #ff6b80; color:#fff; font:900 15px/1 Inter, sans-serif; text-transform:uppercase; letter-spacing:.5px; white-space:nowrap; box-shadow:0 0 8px #ff1f3d, 0 0 20px rgba(255,31,61,.7); }
-      .neo-pag { position:absolute; left:0; right:0; top:814px; display:flex; align-items:center; justify-content:center; gap:7px; font:700 13px/1 Inter, sans-serif; color:#c9c9d3; letter-spacing:.5px; text-transform:uppercase; }
-      .neo-pag b { display:block; position:relative; width:34px; height:22px; border-radius:4px; box-shadow:0 0 6px rgba(255,255,255,.18); }
-      .neo-pag b::before { content:''; position:absolute; left:0; right:0; top:4px; height:4px; background:rgba(0,0,0,.65); }
-      .neo-pag b::after { content:''; position:absolute; left:4px; bottom:4px; width:8px; height:6px; border-radius:1px; background:rgba(255,230,160,.9); }
-      .neo-pag b:nth-of-type(1) { background:linear-gradient(135deg,#d6122f,#7a0a14); }
-      .neo-pag b:nth-of-type(2) { background:linear-gradient(135deg,#3c4a6b,#1b2236); }
-      .neo-pag b:nth-of-type(3) { background:linear-gradient(135deg,#FFC83D,#b9770e); }
-      .neo-pag b:nth-of-type(4) { background:linear-gradient(135deg,#8b8f9c,#41444f); }
-      .neo-pag span { margin-right:6px; }
-      .neo-legal { position:absolute; left:24px; right:24px; top:852px; text-align:center; font:700 13px/1.35 Inter, sans-serif; color:#9a9aa8; }
+      .neo-legal { position:absolute; left:24px; right:24px; top:828px; text-align:center; font:700 13px/1.35 Inter, sans-serif; color:#9a9aa8; }
 
       /* produto */
       .neo-spot { position:absolute; left:20px; top:145px; width:500px; height:480px; background: radial-gradient(ellipse at center, rgba(255,255,255,.34) 0%, rgba(255,255,255,.12) 38%, rgba(255,255,255,0) 68%); }
@@ -144,7 +135,6 @@
           <div class="neo-logo" data-k="logo">${logo}</div>
           <div class="neo-selo ${texto.length > 24 ? 's' : texto.length > 14 ? 'm' : ''}" data-k="selo"><span>${esc(texto)}</span></div>
           ${ate ? `<div class="neo-data" data-k="data">${esc(ate)}</div>` : ''}
-          <div class="neo-pag" data-k="pag"><span>Aceitamos cartões</span><b></b><b></b><b></b><b></b></div>
           <div class="neo-legal" data-k="legal">${dd ? `Ofertas válidas até ${dd} ou enquanto durarem os estoques.` : 'Ofertas válidas enquanto durarem os estoques.'}</div>`;
       },
       // Entry in the first 0.6 s (the seal flickers on), then it only breathes.
@@ -155,7 +145,6 @@
         st(e('logo'), aparece(t, 0, 0.1), `scale(${lerp(3.5, 1, kl) * (1 + Math.sin(t * 2.4) * 0.018)})`);
         st(e('selo'), flick(t, 0.15) * (0.94 + 0.06 * Math.sin(t * 5)), 'none');
         if (e('data')) st(e('data'), 1, `translateX(${lerp(260, 0, E.whip(p(t, 0.1, 0.5)))}px) scale(${1 + Math.sin(t * 2.6) * 0.015})`);
-        st(e('pag'), aparece(t, 0.3, 0.55));
         st(e('legal'), aparece(t, 0.35, 0.6));
       },
     },

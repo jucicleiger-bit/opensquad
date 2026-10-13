@@ -672,6 +672,7 @@ test('Oferta nova: a failed check reruns stage 2 once with the failures, then pa
     const etapa2 = calls.filter((p) => /# Etapa 2/.test(p));
     assert.equal(etapa2.length, 2);
     assert.match(etapa2[1], /Conferência automática reprovou:[\s\S]*produto pequeno/);
+    assert.match(etapa2[1], /Não rode o tts de novo: a voz já está pronta \(voz\/tempos\.json\)\./);
   });
 });
 
@@ -715,5 +716,72 @@ test('non-Oferta videos never run the check', async () => {
     await jobs.enqueue('king', video.id, 'producao');
     await jobs.idle();
     assert.equal(chamadas, 0);
+  });
+});
+
+// A padrão roteiro by hand: opening, one product, closing.
+const roteiroPadrao = { cenas: [{ tipo: 'abertura', fala: 'Ofertas!', descricao: 'a' }, { tipo: 'produto', produto: 'fralda', fala: 'Fralda por {preco}!', descricao: 'b' }, { tipo: 'fechamento', fala: 'Chama no WhatsApp!', descricao: 'c' }] };
+const padraoBriefing = { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, criacao: 'padrao' } };
+async function roteiroDe(dir, id) { return JSON.parse(await readFile(join(videoDir(dir, 'king', id), 'roteiro.json'), 'utf8')); }
+async function semMoldura(dir, video) {
+  const { briefing: atual } = await readVideo('king', video.id, dir);
+  const legado = { ...atual.oferta };
+  for (const k of ['moldura', 'ritmo', 'campanha']) delete legado[k];
+  await updateVideo('king', video.id, { briefing: { ...atual, oferta: legado } }, dir);
+}
+
+test('VT padrão forces segura 0.8 on the product scenes only, in both stages; nova is left alone', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const runner = async ({ cwd }) => { await writeFile(join(cwd, 'roteiro.json'), JSON.stringify(roteiroPadrao)); return { text: 'ok' }; };
+    const narrador = async (vdir) => { await mkdir(join(vdir, 'voz'), { recursive: true }); await writeFile(join(vdir, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'Ofertas', t: 0.05, d: 0.3 }] }, { words: [{ w: 'Fralda', t: 1, d: 0.3 }] }, { words: [{ w: 'Chama', t: 3, d: 0.3 }] }] })); };
+    const jobs = createVideoJobs({ targetDir: dir, runner, narrador, renderer: async () => ({}), checador: async () => ({ ok: true, falhas: [] }) });
+    const video = await createVideo('king', padraoBriefing, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    const verSegura = (r) => assert.deepEqual(r.cenas.map((c) => c.segura), [undefined, 0.8, undefined]);
+    verSegura(await roteiroDe(dir, video.id));
+    await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    await jobs.enqueue('king', video.id, 'producao');
+    await jobs.idle();
+    verSegura(await roteiroDe(dir, video.id));
+    const nova = await createVideo('king', ofertaBriefing, dir);
+    await jobs.enqueue('king', nova.id, 'roteiro');
+    await jobs.idle();
+    assert.deepEqual((await roteiroDe(dir, nova.id)).cenas.map((c) => c.segura), [undefined, undefined, undefined]);
+  });
+});
+
+test('legacy VT padrão (no moldura in the briefing) is treated as encarte', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const runner = async ({ cwd }) => { await writeFile(join(cwd, 'roteiro.json'), JSON.stringify(roteiroPadrao)); return { text: 'ok' }; };
+    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) });
+    const video = await createVideo('king', padraoBriefing, dir);
+    await semMoldura(dir, video);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    const r = await roteiroDe(dir, video.id);
+    assert.equal(r.moldura, 'encarte');
+    assert.equal(r.trilha, 'funkee-monkeee.mp3');
+    assert.equal(r.ritmo, 'rapido');
+    assert.equal(r.campanha, 'Ofertas da Semana');
+  });
+});
+
+test('legacy Oferta nova (no moldura) skips the render check in stage 2', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    let chamadas = 0;
+    const jobs = createVideoJobs({ targetDir: dir, runner: producaoOferta([]), renderer: async () => ({}), checador: async () => { chamadas += 1; return { ok: false, falhas: ['x'] }; } });
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await semMoldura(dir, video);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    await jobs.enqueue('king', video.id, 'producao');
+    await jobs.idle();
+    assert.equal(chamadas, 0);
+    assert.equal((await readVideo('king', video.id, dir)).status, STATUS.PREVIA_PRONTA);
   });
 });
