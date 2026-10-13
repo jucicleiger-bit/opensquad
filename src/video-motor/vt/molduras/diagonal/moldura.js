@@ -18,6 +18,10 @@
     return { dd: `${m[3]}/${m[2]}`, dia, curto: dia.slice(0, 3) };
   };
   const iniciais = (nome) => String(nome || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  // Scale (<= 1) that fits a line into max px; its first child is an inline-block span (pure: reads the unscaled width).
+  const cabe = (el, max) => { const w = el.firstElementChild ? el.firstElementChild.offsetWidth : 0; return w > max ? max / w : 1; };
+  // Anton size (px) so a one-line text of n chars fits 436 px, capped.
+  const tam = (n, teto) => Math.min(teto, Math.floor(436 / (Math.max(1, n) * 0.47)));
   const aparece = (t, a, b) => (t >= a ? Math.min(1, (t - a) / (b - a)) : 0);
 
   // Brand colors: the vivid brand red, and it darkened ~35% for the red ground.
@@ -40,7 +44,12 @@
       if (w.length > 3) { out.push(pend); pend = ''; }
     }
     if (pend) { if (out.length) out[out.length - 1] += ` ${pend}`; else out.push(pend); }
-    while (out.length > max) out.splice(max - 1, 2, `${out[max - 1]} ${out[max]}`);
+    // Too many lines: merge the adjacent pair with the shortest combined text until max remain.
+    while (out.length > max) {
+      let k = 0;
+      for (let i = 1; i < out.length - 1; i += 1) if (out[i].length + out[i + 1].length < out[k].length + out[k + 1].length) k = i;
+      out.splice(k, 2, `${out[k]} ${out[k + 1]}`);
+    }
     return out;
   };
 
@@ -82,17 +91,16 @@
       /* fixed layer */
       .dg-logo { position:absolute; left:24px; top:24px; width:76px; height:76px; border-radius:16px; background:#fff; display:grid; place-items:center; box-shadow:0 6px 0 rgba(0,0,0,.3); overflow:hidden; font:400 30px/1 Anton, sans-serif; color:var(--vm); }
       .dg-logo img { max-width:82%; max-height:82%; }
-      .dg-selo { position:absolute; right:22px; top:26px; max-width:330px; padding:7px 16px 11px; border-radius:6px; background:var(--vm2); border:3px solid #fff; color:#fff; font:400 28px/1.02 Anton, sans-serif; text-transform:uppercase; letter-spacing:1px; text-align:center; box-shadow:0 6px 0 rgba(0,0,0,.35); }
-      .dg-selo.longo { font-size:22px; }
+      .dg-selo { position:absolute; right:22px; top:26px; padding:7px 16px 11px; white-space:nowrap; border-radius:6px; background:var(--vm2); border:3px solid #fff; color:#fff; font:400 28px/1.02 Anton, sans-serif; text-transform:uppercase; letter-spacing:1px; text-align:center; box-shadow:0 6px 0 rgba(0,0,0,.35); }
       .dg-selo i { display:block; font-style:normal; }
       .dg-selo b { position:absolute; left:14px; right:14px; bottom:5px; height:5px; border-radius:3px; background:#FFC400; }
       .dg-valid { position:absolute; left:24px; top:810px; padding:9px 20px 8px; border-radius:999px; background:var(--vv); border:3px solid #fff; color:#fff; font:900 17px/1 Inter, sans-serif; text-transform:uppercase; letter-spacing:.5px; box-shadow:0 5px 0 rgba(0,0,0,.35); }
       .dg-legal { position:absolute; left:0; right:0; top:868px; height:44px; padding:0 24px; display:flex; align-items:center; justify-content:center; background:rgba(26,0,6,.86); color:#fff; font:700 13px/1.3 Inter, sans-serif; text-align:center; }
 
       /* produto */
-      .dg-nome { position:absolute; left:16px; top:112px; max-width:482px; min-height:48px; display:flex; align-items:center; padding-left:10px; border-left:6px solid #FFC400; color:#fff; font:900 34px/1 Inter, sans-serif; text-transform:uppercase; text-shadow:0 3px 0 rgba(0,0,0,.35); }
+      .dg-nome { position:absolute; left:16px; top:112px; max-width:428px; min-height:48px; display:flex; align-items:center; padding-left:10px; border-left:6px solid #FFC400; color:#fff; font:900 34px/1 Inter, sans-serif; text-transform:uppercase; text-shadow:0 3px 0 rgba(0,0,0,.35); }
       .dg-nome.m { font-size:28px; } .dg-nome.s { font-size:23px; } .dg-nome.xs { font-size:19px; line-height:1.02; }
-      .dg-halo { position:absolute; left:20px; top:175px; width:500px; height:420px; border-radius:50%; background: radial-gradient(circle, rgba(255,255,255,.5) 0%, rgba(255,255,255,0) 68%); }
+      .dg-halo { position:absolute; left:20px; top:175px; width:500px; height:420px; border-radius:50%; background: radial-gradient(circle, rgba(255,255,255,.35) 0%, rgba(255,255,255,0) 68%); }
       .dg-foto { position:absolute; left:40px; top:165px; width:460px; height:440px; display:flex; align-items:center; justify-content:center; }
       .dg-foto img { display:block; max-width:460px; max-height:440px; min-height:440px; object-fit:contain; filter: drop-shadow(0 16px 14px rgba(0,0,0,.4)); }
       .dg-foto.card img { box-sizing:border-box; padding:8px; background:#fff; border-radius:10px; filter:none; box-shadow:0 14px 26px rgba(0,0,0,.42); }
@@ -107,19 +115,21 @@
       .dg-preco .vt-un { color:#fff; text-shadow:none; font-size:.17em; max-width:96px; white-space:normal; }
 
       /* abertura */
-      .dg-ab-t { position:absolute; left:30px; width:500px; font-family:Anton, sans-serif; color:#fff; text-transform:uppercase; line-height:.95; letter-spacing:1px; -webkit-text-stroke:8px var(--vm2); paint-order:stroke fill; text-shadow:0 9px 0 rgba(0,0,0,.3); white-space:nowrap; }
-      .dg-ab-loja { position:absolute; left:26px; top:566px; max-width:330px; padding:10px 22px 8px; border-radius:8px; background:#fff; color:var(--vm); font:400 38px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:1px; box-shadow:0 7px 0 var(--vm2); }
-      .dg-ab-selo { position:absolute; left:340px; top:548px; width:176px; height:176px; border-radius:50%; background:var(--vv); border:6px solid #fff; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; font:400 34px/1.02 Anton, sans-serif; text-transform:uppercase; text-align:center; box-shadow:0 8px 0 var(--vm2); }
+      .dg-ab-t { position:absolute; left:24px; width:436px; text-align:center; font-family:Anton, sans-serif; color:#fff; text-transform:uppercase; line-height:.95; letter-spacing:1px; -webkit-text-stroke:8px var(--vm2); paint-order:stroke fill; text-shadow:0 9px 0 rgba(0,0,0,.3); white-space:nowrap; }
+      .dg-ab-t span { display:inline-block; }
+      .dg-ab-loja { position:absolute; left:26px; top:560px; max-width:408px; box-sizing:border-box; padding:10px 22px 8px; border-radius:8px; background:#fff; color:var(--vm); font:400 38px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:1px; box-shadow:0 7px 0 var(--vm2); }
+      .dg-ab-selo { position:absolute; left:276px; top:632px; width:164px; height:164px; border-radius:50%; background:var(--vv); border:6px solid #fff; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; font:400 34px/1.02 Anton, sans-serif; text-transform:uppercase; text-align:center; box-shadow:0 8px 0 var(--vm2); }
       .dg-ab-selo small { font:900 15px/1 Inter, sans-serif; letter-spacing:1px; color:#FFC400; margin-bottom:4px; }
 
       /* fechamento */
-      .dg-fc-so { position:absolute; left:26px; top:128px; padding:8px 22px 6px; border-radius:8px; background:var(--vv); border:3px solid #fff; color:#fff; font:400 44px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:2px; box-shadow:0 6px 0 var(--vm2); }
-      .dg-fc-dia { position:absolute; left:26px; right:20px; top:190px; font:400 124px/1 Anton, sans-serif; color:var(--vm); text-transform:uppercase; text-shadow:0 6px 0 #fff; white-space:nowrap; }
-      .dg-fc-data { position:absolute; left:26px; right:20px; top:318px; font:400 116px/1 Anton, sans-serif; color:var(--vv); -webkit-text-stroke:8px #fff; paint-order:stroke fill; text-shadow:0 8px 0 rgba(0,0,0,.25); white-space:nowrap; }
+      .dg-fc-so { position:absolute; left:24px; width:436px; top:128px; text-align:center; }
+      .dg-fc-so span { display:inline-block; padding:8px 22px 6px; border-radius:8px; background:var(--vv); border:3px solid #fff; color:#fff; font:400 44px/1 Anton, sans-serif; text-transform:uppercase; letter-spacing:2px; box-shadow:0 6px 0 var(--vm2); }
+      .dg-fc-dia { position:absolute; left:24px; width:436px; text-align:center; line-height:1; font-family:Anton, sans-serif; color:var(--vm); text-transform:uppercase; text-shadow:0 6px 0 #fff; white-space:nowrap; }
+      .dg-fc-data { position:absolute; left:24px; width:436px; text-align:center; line-height:1; font-family:Anton, sans-serif; color:var(--vv); text-transform:uppercase; -webkit-text-stroke:8px #fff; paint-order:stroke fill; text-shadow:0 8px 0 rgba(0,0,0,.25); white-space:nowrap; }
+      .dg-fc-dia span, .dg-fc-data span { display:inline-block; }
       .dg-fc-card { position:absolute; left:24px; width:436px; top:470px; box-sizing:border-box; padding:16px 18px; border-radius:10px; background:#fff; border-left:10px solid var(--vv); color:#1a0006; font:900 25px/1.2 Inter, sans-serif; box-shadow:0 8px 0 rgba(0,0,0,.3); }
       .dg-fc-card small { display:block; margin-top:6px; font:700 19px/1.2 Inter, sans-serif; color:#5a4a4d; }
-      .dg-fc-wa { position:absolute; left:24px; width:436px; top:702px; box-sizing:border-box; display:flex; align-items:center; justify-content:center; gap:10px; height:76px; border-radius:999px; background:#16A34A; border:5px solid #fff; color:#fff; font:900 28px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 7px 0 rgba(0,0,0,.35); }
-      .dg-fc-ig { position:absolute; right:24px; top:816px; color:#fff; font:400 26px/1 Anton, sans-serif; letter-spacing:1px; }
+      .dg-fc-wa { position:absolute; left:32px; width:420px; top:702px; box-sizing:border-box; display:flex; align-items:center; justify-content:center; gap:10px; height:76px; border-radius:999px; background:#16A34A; border:5px solid #fff; color:#fff; font:900 22px/1 Inter, sans-serif; white-space:nowrap; box-shadow:0 7px 0 rgba(0,0,0,.35); }
     `,
     fixo: {
       html: (lojaDados, campanha, marca) => {
@@ -129,7 +139,7 @@
         const valido = v ? `Válido até ${v.curto}, ${v.dd}` : (lojaDados.validade ? `Válido até ${lojaDados.validade}` : '');
         return raiz(marca, `
           <div class="dg-logo" data-k="logo">${logo}</div>
-          <div class="dg-selo ${Math.max(...ls.map((l) => l.length)) > 12 ? 'longo' : ''}" data-k="selo">${ls.map((l) => `<i>${esc(l)}</i>`).join('')}<b></b></div>
+          <div class="dg-selo" style="font-size:${((n) => (n <= 12 ? 28 : n <= 16 ? 22 : n <= 22 ? 17 : 14))(Math.max(...ls.map((l) => l.length)))}px" data-k="selo">${ls.map((l) => `<i>${esc(l)}</i>`).join('')}<b></b></div>
           ${valido ? `<div class="dg-valid" data-k="validade">${esc(valido)}</div>` : ''}
           <div class="dg-legal" data-k="legal">${v ? `Ofertas válidas até ${v.dd} ou enquanto durarem os estoques.` : 'Ofertas válidas enquanto durarem os estoques.'}</div>`);
       },
@@ -148,11 +158,11 @@
         html: () => {
           const m = R.marca || {};
           const ls = linhas(R.campanha || 'Ofertas', 3);
-          const mx = Math.max(...ls.map((l) => l.length));
-          const fs = mx <= 7 ? 132 : mx <= 9 ? 112 : mx <= 11 ? 94 : mx <= 13 ? 78 : 62;
-          const nome = loja().nome || m.nome || '';
+          let y = 150;
+          const tit = ls.map((l, n) => { const fs = tam(l.length, 132); const top = y; y += fs * 0.98; return `<div class="dg-ab-t" data-k="t${n}" style="top:${top.toFixed(0)}px;font-size:${fs}px"><span>${esc(l)}</span></div>`; }).join('');
+                    const nome = loja().nome || m.nome || '';
           return raiz(m, `${fundo()}
-            ${ls.map((l, n) => `<div class="dg-ab-t" data-k="t${n}" style="top:${150 + n * fs * 0.98}px;font-size:${fs}px">${esc(l)}</div>`).join('')}
+            ${tit}
             ${nome ? `<div class="dg-ab-loja" data-k="loja">${esc(nome)}</div>` : ''}
             <div class="dg-ab-selo" data-k="sel"><small>CONFIRA</small>agora</div>`);
         },
@@ -161,7 +171,7 @@
           chao(q, 'a', kd);
           for (let n = 0; q(`t${n}`); n += 1) {
             const k = E.snapSettle(p(t, s.start + 0.35 + n * 0.14, s.start + 0.8 + n * 0.14));
-            st(q(`t${n}`), aparece(t, s.start + 0.35 + n * 0.14, s.start + 0.42 + n * 0.14), `translateX(${lerp(-60, 0, k)}px) scale(${lerp(2.6, 1, k)}) rotate(-5deg)`);
+            st(q(`t${n}`), aparece(t, s.start + 0.35 + n * 0.14, s.start + 0.42 + n * 0.14), `translateX(${lerp(-60, 0, k)}px) scale(${lerp(2.6, 1, k) * cabe(q(`t${n}`), 420)}) rotate(-5deg)`);
           }
           if (q('loja')) st(q('loja'), 1, `translateX(${lerp(-600, 0, E.whip(p(t, s.start + 0.9, s.start + 1.3)))}px) rotate(-3deg)`);
           const ke = E.snapSettle(p(t, s.start + 1.1, s.start + 1.5));
@@ -177,7 +187,7 @@
           const reais = VT.precoPartes(pr.precoTela).reais;
           return raiz(R.marca, `${fundo()}
             <div class="dg-halo"></div>
-            <div class="dg-nome ${nome.length > 28 ? 'xs' : nome.length > 22 ? 's' : nome.length > 16 ? 'm' : ''}" data-k="nome" data-papel="nome">${esc(nome)}</div>
+            <div class="dg-nome ${nome.length > 24 ? 'xs' : nome.length > 18 ? 's' : nome.length > 14 ? 'm' : ''}" data-k="nome" data-papel="nome">${esc(nome)}</div>
             <div class="dg-foto ${pr.fotoTipo === 'moldura' ? 'card' : ''}" data-k="foto"><img data-papel="produto" src="${asset(pr.foto)}"></div>
             <div class="dg-dew" data-k="de">${VT.deHtml(pr, { classe: 'dg-de' })}</div>
             <div class="dg-balao" data-k="preco"><svg class="dg-cauda" viewBox="0 0 62 42"><polyline points="4.4,39 22,3 55.4,39" fill="none" stroke="#fff" stroke-width="5" stroke-linejoin="round"/><polygon points="4.4,39 22,3 55.4,39 55.4,47 4.4,47" style="fill:var(--vv)"/></svg>${VT.precoHtml(pr, { classe: `dg-preco ${reais.length > 6 ? 'gg' : reais.length > 5 ? 'g' : ''}` })}</div>`);
@@ -210,21 +220,25 @@
         html: () => {
           const l = loja(), m = R.marca || {};
           const v = validade(l.validoAte);
-          const ate = v ? `<div class="dg-fc-so" data-k="so">Só até</div>
-            <div class="dg-fc-dia" data-k="dia">${esc(v.dia)}</div>
-            <div class="dg-fc-data" data-k="data">${esc(v.dd)}</div>`
-            : `<div class="dg-fc-dia" data-k="dia" style="top:230px;font-size:96px">${esc(l.validade ? `Só até ${l.validade}` : 'Corre pra cá!')}</div>`;
+          // Headline: day + date, or (no date) the fallback line broken in two; each line sized to fit 436 px.
+          const [h1, h2] = v ? [v.dia, v.dd] : linhas(l.validade ? `Só até ${l.validade}` : 'Corre pra cá!', 2);
+          const f1 = tam(h1.length, 124), f2 = h2 ? tam(h2.length, 116) : 0;
+          const y1 = v ? 190 : 200;
+          const ate = `${v ? '<div class="dg-fc-so" data-k="so"><span>Só até</span></div>' : ''}
+            <div class="dg-fc-dia" data-k="dia" style="top:${y1}px;font-size:${f1}px"><span>${esc(h1)}</span></div>
+            ${h2 ? `<div class="dg-fc-data" data-k="data" style="top:${Math.round(y1 + f1 * 0.98 + 4)}px;font-size:${f2}px"><span>${esc(h2)}</span></div>` : ''}`;
+          const wa = String(l.whatsapp || '');
+          const fn = wa.length <= 13 ? 30 : wa.length <= 15 ? 27 : wa.length <= 17 ? 24 : 21;
           return raiz(m, `${fundo()}${ate}
             <div class="dg-fc-card" data-k="end">${esc(l.endereco || '')}${l.horario ? `<small>${esc(l.horario)}</small>` : ''}</div>
-            ${l.whatsapp ? `<div class="dg-fc-wa" data-k="wa"><span>WhatsApp</span><span>${esc(l.whatsapp)}</span></div>` : ''}
-            ${m.instagram ? `<div class="dg-fc-ig">${esc(m.instagram)}</div>` : ''}`);
+            ${wa ? `<div class="dg-fc-wa" data-k="wa"><span>WhatsApp</span><span style="font-size:${fn}px">${esc(wa)}</span></div>` : ''}`);
         },
         frame(t, c, q, A, s) {
           chao(q, 'b', E.softLand(p(t, s.start, s.start + 0.6)));
           if (q('so')) st(q('so'), 1, `translateX(${lerp(-560, 0, E.whip(p(t, s.start + 0.1, s.start + 0.45)))}px) rotate(-3deg)`);
           const kd = E.snapSettle(p(t, s.start + 0.15, s.start + 0.55));
-          st(q('dia'), aparece(t, s.start + 0.15, s.start + 0.22), `scale(${lerp(3, 1, kd)}) rotate(${lerp(-6, -2, kd)}deg)`);
-          if (q('data')) st(q('data'), 1, `translateX(${lerp(600, 0, E.whip(p(t, s.start + 0.3, s.start + 0.65)))}px) rotate(-2deg)`);
+          st(q('dia'), aparece(t, s.start + 0.15, s.start + 0.22), `scale(${lerp(3, 1, kd) * cabe(q('dia'), 420)}) rotate(${lerp(-6, -2, kd)}deg)`);
+          if (q('data')) st(q('data'), 1, `translateX(${lerp(600, 0, E.whip(p(t, s.start + 0.3, s.start + 0.65)))}px) scale(${cabe(q('data'), 420)}) rotate(-2deg)`);
           st(q('end'), aparece(t, s.start + 0.5, s.start + 0.65), `translateY(${lerp(120, 0, E.softLand(p(t, s.start + 0.5, s.start + 0.9)))}px)`);
           if (q('wa')) {
             const kw = E.snapSettle(p(t, s.start + 0.7, s.start + 1.1));
