@@ -172,7 +172,8 @@ export function VideoAnimado() {
   useEffect(() => { reload(); }, [reload]);
   const open = (id: string | null) => setParams(id ? { v: id } : {});
   // The list comes newest first, but sort anyway so the default never depends on it.
-  const ultimaMoldura = ([...(videos || [])].filter((v) => v.objetivo === "oferta" && v.moldura).sort((a, b) => b.criadoEm.localeCompare(a.criadoEm))[0]?.moldura || null) as VideoOfertaInput["moldura"] | null;
+  const ultima = ([...(videos || [])].filter((v) => v.objetivo === "oferta" && v.moldura).sort((a, b) => b.criadoEm.localeCompare(a.criadoEm))[0]?.moldura || null);
+  const ultimaMoldura = (ultima && (ultima === "auto" || MOLDURAS.some((m) => m.v === ultima)) ? ultima : null) as VideoOfertaInput["moldura"] | null;
   const comecar = () => { setNovo(true); open(null); };
 
   return (
@@ -410,6 +411,7 @@ function NovoVideo({ project, ultimaMoldura, onCreated, onCancel }: { project: W
               </label>
             ))}
           </div>
+          <span className={styles.suggestLabel} aria-hidden="true">Moldura</span>
           <div role="radiogroup" aria-label="Moldura" className={styles.gallery}>
             {[...MOLDURAS, { v: "auto", nome: "✨ A IA escolhe", ajuda: "A IA escolhe pela época e pelo assunto" }].map((m) => (
               <label key={m.v} className={styles.tile}>
@@ -425,6 +427,7 @@ function NovoVideo({ project, ultimaMoldura, onCreated, onCancel }: { project: W
               </label>
             ))}
           </div>
+          <span className={styles.suggestLabel} aria-hidden="true">Ritmo</span>
           <div role="radiogroup" aria-label="Ritmo" className={styles.segmented}>
             {([["rapido", "Rápido"], ["calmo", "Calmo"]] as const).map(([v, nome]) => (
               <label key={v} className={styles.segment}>

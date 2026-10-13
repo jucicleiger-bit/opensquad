@@ -358,7 +358,7 @@ describe("Vídeo animado", () => {
   });
 
   it("the frame defaults to the last Oferta video's frame", async () => {
-    stubOferta([resumoVideo("v9", "diagonal", "2026-10-12T10:00:00Z"), resumoVideo("v8", "neon", "2026-10-01T10:00:00Z")]);
+    stubOferta([resumoVideo("v8", "neon", "2026-10-01T10:00:00Z"), resumoVideo("v9", "diagonal", "2026-10-12T10:00:00Z")]);
     renderAt("/projects/king/video");
     await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
     await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
