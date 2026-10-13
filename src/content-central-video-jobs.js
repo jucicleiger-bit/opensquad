@@ -137,11 +137,11 @@ const LEGENDA_TEXTO = {
 const ESTILO_TEXTO = { dinamico: 'dinamico', mercado: 'mercado', premium: 'premium', informativo: 'informativo' };
 
 function duracaoTexto(b) {
+  if (b.duracao !== 'auto') return `${b.duracao}s`;
   if (b.oferta) {
     const n = b.oferta.produtos.length;
     return `automática (cerca de ${SEGUNDOS_POR_PRODUTO}s por produto × ${n} + uns 8s de abertura e fechamento ≈ ${n * SEGUNDOS_POR_PRODUTO + 8}s)`;
   }
-  if (b.duracao !== 'auto') return `${b.duracao}s`;
   return b.formato === 'status' ? 'automática (15 a 30s)' : 'automática (20 a 45s, o que o assunto pedir)';
 }
 

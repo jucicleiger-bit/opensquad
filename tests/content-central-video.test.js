@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Jimp } from 'jimp';
@@ -252,5 +253,18 @@ test('readVideoState lists the Oferta products from the snapshot before the fold
     assert.deepEqual(state.produtos.map((p) => [p.id, p.precoTela, p.precoDeTela, p.fotoTipo]), [['fralda', 'R$ 13,99', 'R$ 16,99', 'recorte']]);
     const outro = await createVideo('king', briefing, dir);
     assert.deepEqual((await readVideoState('king', outro.id, dir)).produtos, []);
+  });
+});
+
+test('saveRoteiroCenas on an Oferta drops the stale roteiro-modelo.json', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const modelo = join(videoDir(dir, 'king', video.id), 'roteiro-modelo.json');
+    await writeFile(modelo, '{"cenas":[]}');
+    await saveRoteiroCenas('king', video.id, [{ tipo: 'p', produto: 'fralda', fala: 'Fralda por treze e noventa e nove!', descricao: 'x' }], dir);
+    assert.equal(existsSync(modelo), false);
   });
 });

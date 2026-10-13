@@ -3,7 +3,7 @@
 // Running Claude Code and the renderer lives in content-central-video-jobs.js.
 import { mkdir, readdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { getCentralPaths, loadProject, readJson, writeJson } from './content-central.js';
 import { listarProdutosVideo, normalizeOferta, precosMantidos, precoNaTela } from './content-central-video-produtos.js';
@@ -160,6 +160,8 @@ export async function saveRoteiroCenas(projectId, videoId, cenas, targetDir) {
   const path = join(videoDir(targetDir, projectId, videoId), 'roteiro.json');
   const roteiro = { ...(await readJson(path, {})), cenas: limpas };
   await writeJson(path, roteiro);
+  // The placeholder version no longer matches the edited text; a later ajuste starts from roteiro.json.
+  if (video.briefing.oferta) await rm(join(dirname(path), 'roteiro-modelo.json'), { force: true });
   return roteiro;
 }
 

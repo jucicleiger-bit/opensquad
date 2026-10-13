@@ -441,3 +441,20 @@ test('Oferta stage 1 retry succeeds when Claude fixes the roteiro', async () => 
     assert.equal((await readVideo('king', video.id, dir)).status, STATUS.ROTEIRO_PRONTO);
   });
 });
+
+test('Oferta prompt: a fixed duration is kept, only auto uses the per-product formula', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda por {preco}!']), renderer: async () => ({}) });
+    const fixo = await createVideo('king', { ...ofertaBriefing, duracao: 15 }, dir);
+    await jobs.enqueue('king', fixo.id, 'roteiro');
+    await jobs.idle();
+    assert.match(calls[0].prompt, /Duração alvo: 15s/);
+    assert.doesNotMatch(calls[0].prompt, /por produto/);
+    const auto = await createVideo('king', { ...ofertaBriefing, duracao: 'auto' }, dir);
+    await jobs.enqueue('king', auto.id, 'roteiro');
+    await jobs.idle();
+    assert.match(calls[1].prompt, /Duração alvo: automática .*por produto/);
+  });
+});
