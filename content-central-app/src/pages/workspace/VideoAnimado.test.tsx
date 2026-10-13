@@ -172,7 +172,7 @@ describe("Vídeo animado", () => {
   });
 
   async function abrirForm() {
-    stubApi((url) => (url === "/api/state" ? project(true) : { videos: [] }));
+    stubApi((url) => (url === "/api/state" ? project(true) : url.endsWith("/videos/produtos") ? { produtos: [] } : { videos: [] }));
     renderAt("/projects/king/video");
     await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
   }
@@ -211,5 +211,107 @@ describe("Vídeo animado", () => {
     await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
     const post = calls.find((c) => c.init?.method === "POST");
     expect(JSON.parse(String(post?.init?.body))).toMatchObject({ formato: "status", duracao: "auto", estilo: "premium" });
+  });
+
+  const PRODUTOS = [
+    { id: "a", nome: "Fralda", precoTela: "R$ 13,99", precoDeTela: "R$ 16,99", unidade: "un", validoAte: "2026-10-19", previewUrl: "/p/a.jpg", foto: "/p/a.jpg", fotoTipo: "branco", motivo: null },
+    { id: "b", nome: "Café", precoTela: "R$ 9,90", precoDeTela: "", unidade: "un", validoAte: "2026-10-18", previewUrl: "/p/b.jpg", foto: "/p/b.jpg", fotoTipo: "fundo", motivo: null },
+    { id: "c", nome: "Leite", precoTela: "R$ 4,50", precoDeTela: "", unidade: "un", validoAte: "2026-10-20", previewUrl: "/p/c.png", foto: "/p/c.png", fotoTipo: "transparente", motivo: null },
+    { id: "x", nome: "Ruim", precoTela: "", precoDeTela: "", unidade: "", validoAte: "", previewUrl: "", foto: null, fotoTipo: null, motivo: "preço inválido" },
+  ];
+  function stubOferta() {
+    return stubApi((url, init) => {
+      if (url === "/api/state") return project(true);
+      if (url.endsWith("/videos/produtos")) return { produtos: PRODUTOS };
+      if (url.endsWith("/videos") && init?.method === "POST") return { video: { ...roteiroPronto.video, id: "v2", status: "roteiro_gerando" } };
+      if (url.endsWith("/videos")) return { videos: [] };
+      return { ...roteiroPronto, video: { ...roteiroPronto.video, id: "v2", status: "roteiro_gerando" }, roteiro: null, ocupado: true };
+    });
+  }
+
+  it("Oferta shows the product picker with reasons, the moldura note and the validity", async () => {
+    stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    const lista = await screen.findByRole("group", { name: "Produtos" });
+    expect(await within(lista).findByRole("checkbox", { name: /Ruim/ })).toBeDisabled();
+    expect(within(lista).getByText("preço inválido")).toBeInTheDocument();
+    expect(within(lista).getByText("vai em moldura")).toBeInTheDocument();
+    await userEvent.click(within(lista).getByRole("checkbox", { name: /Fralda/ }));
+    await userEvent.click(within(lista).getByRole("checkbox", { name: /Café/ }));
+    expect(screen.getByLabelText("Válido até")).toHaveValue("2026-10-18");
+    expect(screen.getByRole("radio", { name: "Recortar" })).toBeChecked();
+    expect(screen.getByLabelText("Assunto")).toHaveValue("Ofertas da semana");
+  });
+
+  it("blocks more products than the duration fits and posts the oferta body", async () => {
+    const calls = stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    const lista = await screen.findByRole("group", { name: "Produtos" });
+    for (const nome of [/Fralda/, /Café/, /Leite/]) await userEvent.click(await within(lista).findByRole("checkbox", { name: nome }));
+    await userEvent.click(screen.getByRole("radio", { name: "15s" }));
+    expect(screen.getByText("3 de 2")).toBeInTheDocument();
+    expect(screen.getByText("15s cabe até 2 produtos.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Gerar roteiro" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("radio", { name: "Automático" }));
+    expect(screen.getByRole("button", { name: "Gerar roteiro" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
+    const post = calls.find((c) => c.init?.method === "POST");
+    expect(JSON.parse(String(post?.init?.body)).oferta).toEqual({
+      produtos: [{ id: "a", foto: "recorte" }, { id: "b", foto: "moldura" }, { id: "c", foto: "recorte" }], validoAte: "2026-10-18", criacao: "nova",
+    });
+  });
+
+  it("VT padrão hides the style section and posts criacao padrao", async () => {
+    const calls = stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    expect(screen.getByRole("radiogroup", { name: "Estilo" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "VT padrão" }));
+    expect(screen.queryByRole("radiogroup", { name: "Estilo" })).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("checkbox", { name: /Fralda/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Gerar roteiro" }));
+    const post = JSON.parse(String(calls.find((c) => c.init?.method === "POST")?.init?.body));
+    expect(post).toMatchObject({ estilo: "livre", oferta: { criacao: "padrao" } });
+  });
+
+  it("needs at least one product to generate an Oferta", async () => {
+    stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    expect(screen.getByRole("button", { name: "Gerar roteiro" })).toBeDisabled();
+  });
+
+  const ofertaVideo = (status: string, criacao: "nova" | "padrao") => ({
+    ...roteiroPronto,
+    video: { ...roteiroPronto.video, status, briefing: { assunto: "Ofertas", objetivo: "oferta", duracao: 15, tom: "locutor", legenda: "pop", oferta: { produtos: [], validoAte: "2026-10-18", criacao, precosEm: "2026-10-12" } } },
+    roteiro: { cenas: [{ tipo: "abertura", fala: "Ofertas!", descricao: "Abre" }, { tipo: "produto", produto: "a", fala: "Fralda por {preco}", descricao: "Fralda" }] },
+    produtos: [{ id: "a", nome: "Fralda", precoTela: "R$ 13,99", precoDeTela: "R$ 16,99", foto: "fotos/produto-a.png", fotoTipo: "branco" }],
+  });
+
+  it("roteiro review shows product thumbnails and prices on product scenes, and the price date", async () => {
+    stubApi((url) => (url === "/api/state" ? project(true) : url.endsWith("/videos") ? { videos: [] } : ofertaVideo("roteiro_pronto", "nova")));
+    renderAt("/projects/king/video?v=v1");
+    const cards = await screen.findAllByTestId("cena");
+    expect(within(cards[1]).getByRole("img", { name: "Fralda" })).toHaveAttribute("src", "/api/projects/king/videos/v1/arquivo/fotos/produto-a.png");
+    expect(within(cards[1]).getByText("R$ 13,99")).toBeInTheDocument();
+    expect(within(cards[0]).queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("preços de 12/10")).toBeInTheDocument();
+    expect(screen.queryByText("VT padrão")).not.toBeInTheDocument();
+  });
+
+  it("a VT padrão preview has no visual ajuste", async () => {
+    stubApi((url) => (url === "/api/state" ? project(true) : url.endsWith("/videos") ? { videos: [] } : ofertaVideo("previa_pronta", "padrao")));
+    renderAt("/projects/king/video?v=v1");
+    expect(await screen.findByText("VT padrão: para mudar o visual, use Criação nova.")).toBeInTheDocument();
+    expect(screen.getByText("VT padrão")).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /Pedir ajuste/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pedir ajuste" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aprovar prévia" })).toBeInTheDocument();
   });
 });
