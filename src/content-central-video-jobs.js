@@ -12,7 +12,7 @@ import {
   STATUS, requireVideoProject, readVideo, updateVideo, videoDir, validateRoteiro, buildMarca, buildMaterialInventory, normalizeVideoAnimado,
 } from './content-central-video.js';
 import {
-  SEGUNDOS_POR_PRODUTO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso, legendaPostOferta,
+  MOLDURAS, SEGUNDOS_POR_PRODUTO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso, legendaPostOferta,
 } from './content-central-video-produtos.js';
 
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
@@ -147,6 +147,17 @@ function duracaoTexto(b) {
   return b.formato === 'status' ? 'automática (15 a 30s)' : 'automática (20 a 45s, o que o assunto pedir)';
 }
 
+const NOMES_RITMO = { rapido: 'rápido', calmo: 'calmo' };
+function linhaMoldura(o) {
+  const ritmo = `ritmo ${NOMES_RITMO[o.ritmo] || 'rápido'} (${SEGUNDOS_POR_PRODUTO[o.ritmo] || 3}s por produto)`;
+  const selo = `selo da campanha "${o.campanha || 'Ofertas da Semana'}"`;
+  if (o.moldura === 'auto') {
+    return `Moldura: você escolhe pelo assunto, a observação e a época; escreva "moldura": "<id>" no roteiro.json, um de: ${MOLDURAS.map((m) => `${m.id}: ${m.descricao}`).join('; ')}. ${ritmo}, ${selo}.`;
+  }
+  const m = MOLDURAS.find((x) => x.id === o.moldura) || MOLDURAS[0];
+  return `Moldura: ${m.nome} (${m.id}), ${ritmo}, ${selo}.`;
+}
+
 function stagePrompt(nome, video, temLogo, erroAnterior) {
   const b = video.briefing;
   return [
@@ -154,6 +165,7 @@ function stagePrompt(nome, video, temLogo, erroAnterior) {
     `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${duracaoTexto(b)}.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
     `Formato: ${b.formato === 'status' ? 'Story/Status do WhatsApp (REGRAS.md § Formato)' : 'Reels'}.`,
     ...(b.oferta ? [`Oferta: ${b.oferta.produtos.length} produto${b.oferta.produtos.length > 1 ? 's' : ''} em produtos.json, criação ${b.oferta.criacao === 'padrao' ? 'VT padrão' : 'nova'} (REGRAS.md § Oferta).`] : []),
+    ...(b.oferta ? [linhaMoldura(b.oferta)] : []),
     ...(ESTILO_TEXTO[b.estilo] ? [`Estilo: ${ESTILO_TEXTO[b.estilo]} (REGRAS.md § Estilo).`] : []),
     LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
     temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
@@ -172,6 +184,14 @@ function forcarRoteiro(roteiro, briefing, marca) {
   delete roteiro.legendas;
   if (briefing.legenda === 'sem') roteiro.legendas = false;
   else if (briefing.legenda !== 'do-video') roteiro.legenda = briefing.legenda;
+  if (briefing.oferta) {
+    const o = briefing.oferta;
+    // "auto" keeps Claude's pick (validated before this); anything else comes from the briefing.
+    if (o.moldura !== 'auto') roteiro.moldura = o.moldura;
+    roteiro.campanha = o.campanha;
+    roteiro.ritmo = o.ritmo;
+    roteiro.trilha = (MOLDURAS.find((m) => m.id === roteiro.moldura) || MOLDURAS[0]).trilha;
+  }
   return roteiro;
 }
 

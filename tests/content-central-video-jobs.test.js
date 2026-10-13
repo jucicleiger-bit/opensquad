@@ -460,7 +460,7 @@ test('Oferta prompt: a fixed duration is kept, only auto uses the per-product fo
     await jobs.enqueue('king', fixo.id, 'roteiro');
     await jobs.idle();
     assert.match(calls[0].prompt, /Duração alvo: 15s/);
-    assert.doesNotMatch(calls[0].prompt, /por produto/);
+    assert.doesNotMatch(calls[0].prompt, /cerca de .* por produto/);
     const auto = await createVideo('king', { ...ofertaBriefing, duracao: 'auto' }, dir);
     await jobs.enqueue('king', auto.id, 'roteiro');
     await jobs.idle();
@@ -529,5 +529,60 @@ test('Oferta nova stage 2: Claude cannot change produtos.json, and legenda-post.
     const legenda = await readFile(join(vdir, 'legenda-post.txt'), 'utf8');
     assert.match(legenda, /R\$ 13,99/);
     assert.doesNotMatch(legenda, /0,01/);
+  });
+});
+
+test('Oferta stage 1 forces frame, campaign, pace and the frame track into roteiro.json', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda por {preco}!']), renderer: async () => ({}) });
+    const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, moldura: 'neon', ritmo: 'calmo', campanha: 'Mês da Economia' } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    const r = JSON.parse(await readFile(join(videoDir(dir, 'king', video.id), 'roteiro.json'), 'utf8'));
+    assert.equal(r.moldura, 'neon');
+    assert.equal(r.campanha, 'Mês da Economia');
+    assert.equal(r.ritmo, 'calmo');
+    assert.equal(r.trilha, 'trap-electro-vibes.mp3');
+    assert.match(calls[0].prompt, /Moldura: Neon Premium/);
+    assert.match(calls[0].prompt, /ritmo calmo \(4s por produto\)/);
+    assert.match(calls[0].prompt, /selo da campanha "Mês da Economia"/);
+  });
+});
+
+test('Oferta with moldura auto: the prompt lists the frames, Claude picks one, the track follows it', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const runner = async (args) => {
+      await ofertaRunner(calls, ['Fralda por {preco}!'])(args);
+      const p = join(args.cwd, 'roteiro.json');
+      const r = JSON.parse(await readFile(p, 'utf8'));
+      await writeFile(p, JSON.stringify({ ...r, moldura: 'diagonal' }));
+      return { text: 'ok' };
+    };
+    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) });
+    const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, moldura: 'auto' } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    assert.match(calls[0].prompt, /Moldura: você escolhe/);
+    assert.match(calls[0].prompt, /encarte: encarte clássico/);
+    const r = JSON.parse(await readFile(join(videoDir(dir, 'king', video.id), 'roteiro.json'), 'utf8'));
+    assert.equal(r.moldura, 'diagonal');
+    assert.equal(r.trilha, 'midnight-funk.mp3');
+  });
+});
+
+test('Oferta with moldura auto and no pick: one retry, then erro', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const calls = [];
+    const jobs = createVideoJobs({ targetDir: dir, runner: ofertaRunner(calls, ['Fralda por {preco}!']), renderer: async () => ({}) });
+    const video = await createVideo('king', { ...ofertaBriefing, oferta: { ...ofertaBriefing.oferta, moldura: 'auto' } }, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    assert.equal(calls.length, 2);
+    assert.match((await readVideo('king', video.id, dir)).erro, /moldura/);
   });
 });
