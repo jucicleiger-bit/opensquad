@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { Jimp } from 'jimp';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import { STATUS, createVideo, readVideo, updateVideo, videoDir } from '../src/content-central-video.js';
-import { createVideoJobs, isUsageLimit, runClaudeCode, DIRECOES } from '../src/content-central-video-jobs.js';
+import { createVideoJobs, isUsageLimit, runClaudeCode, narrarComTts, DIRECOES } from '../src/content-central-video-jobs.js';
 
 const briefing = { assunto: 'Bio do Instagram', objetivo: 'alcance', duracao: 15, tom: 'vendedor', legenda: 'sem', observacao: 'usar Carvalho' };
 
@@ -264,6 +264,14 @@ test('runClaudeCode rejects on timeout', async () => {
   await assert.rejects(runClaudeCode({ prompt: 'x', cwd: tmpdir(), timeoutMs: 300, bin: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'] }), /interrompido/);
 });
 
+test('narrarComTts rejects with the timeout message when the TTS never exits', async () => {
+  await assert.rejects(narrarComTts(tmpdir(), { timeoutMs: 300, bin: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'] }), /A voz passou de 10 minutos e foi interrompida\./);
+});
+
+test('narrarComTts runs python with UTF-8 output so the error text has no mojibake', async () => {
+  await assert.rejects(narrarComTts(tmpdir(), { bin: process.execPath, args: ['-e', 'console.error(process.env.PYTHONIOENCODING); process.exit(3)'] }), /^Error: utf-8/);
+});
+
 test('runClaudeCode timeout kills the whole process tree on Windows', { skip: process.platform !== 'win32' }, async () => {
   const dir = await mkdtemp(join(tmpdir(), 'opensquad-video-kill-'));
   try {
@@ -489,5 +497,36 @@ test('VT padrão stage 2 never calls Claude: it narrates, copies the template, w
     assert.match(await readFile(join(vdir, 'legenda-post.txt'), 'utf8'), /R\$ 13,99/);
     assert.ok(renders[0].stills.length >= 2);
     assert.equal((await readVideo('king', video.id, dir)).status, STATUS.PREVIA_PRONTA);
+  });
+});
+
+test('Oferta nova stage 2: Claude cannot change produtos.json, and legenda-post.txt is rebuilt with the catalog price', async () => {
+  await withProject(async (dir) => {
+    await comOferta(dir);
+    const runner = async ({ prompt, cwd }) => {
+      if (/# Etapa 1/.test(prompt)) return ofertaRunner([], ['Fralda por {preco}!'])({ prompt, cwd });
+      const p = JSON.parse(await readFile(join(cwd, 'produtos.json'), 'utf8'));
+      p.produtos[0].precoTela = 'R$ 0,01';
+      await writeFile(join(cwd, 'produtos.json'), JSON.stringify(p));
+      await writeFile(join(cwd, 'legenda-post.txt'), 'Fralda por R$ 0,01!');
+      await writeFile(join(cwd, 'cenas.js'), '// cenas');
+      await mkdir(join(cwd, 'voz'), { recursive: true });
+      await writeFile(join(cwd, 'voz', 'tempos.json'), JSON.stringify({ cenas: [{ words: [{ w: 'a', t: 0.1, d: 0.2 }] }] }));
+      return { text: 'ok' };
+    };
+    const jobs = createVideoJobs({ targetDir: dir, runner, renderer: async () => ({}) });
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await jobs.enqueue('king', video.id, 'roteiro');
+    await jobs.idle();
+    const vdir = videoDir(dir, 'king', video.id);
+    const original = await readFile(join(vdir, 'produtos.json'), 'utf8');
+    await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
+    await jobs.enqueue('king', video.id, 'producao');
+    await jobs.idle();
+    assert.equal((await readVideo('king', video.id, dir)).status, STATUS.PREVIA_PRONTA);
+    assert.equal(await readFile(join(vdir, 'produtos.json'), 'utf8'), original);
+    const legenda = await readFile(join(vdir, 'legenda-post.txt'), 'utf8');
+    assert.match(legenda, /R\$ 13,99/);
+    assert.doesNotMatch(legenda, /0,01/);
   });
 });

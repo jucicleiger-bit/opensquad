@@ -306,7 +306,7 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   const objetivo = OBJETIVOS.find((o) => o.v === b.objetivo)!;
   const foraDoIdeal = b.duracao !== "auto" && (b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1]);
   const resumo = [objetivo.nome, nomeDuracao(b.duracao), FORMATOS.find((f) => f.v === b.formato)!.nome, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
-  const resumoCompleto = [resumo, oferta ? `${escolhidos.length} produtos` : "", padrao ? "VT padrão" : ""].filter(Boolean).join(" · ");
+  const resumoCompleto = [resumo, oferta ? `${escolhidos.length} produto${escolhidos.length === 1 ? "" : "s"}` : "", padrao ? "VT padrão" : ""].filter(Boolean).join(" · ");
 
   return (
     <Card className={styles.form}>

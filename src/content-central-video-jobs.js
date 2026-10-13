@@ -18,6 +18,7 @@ import {
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
 const MOTOR_PROMPT = MOTOR_DIR.replaceAll('\\', '/').replace(/\/+$/, ''); // Git Bash loses backslashes
 const CLAUDE_TIMEOUT_MS = 45 * 60 * 1000;
+const TTS_TIMEOUT_MS = 10 * 60 * 1000;
 const CLOCK_SLACK_MS = 2000; // coarse filesystem timestamps
 
 export const DIRECOES = {
@@ -181,14 +182,17 @@ async function escritoDepois(path, inicio) {
 const falas = (roteiro) => JSON.stringify((roteiro?.cenas || []).map((c) => [c.tipo, c.fala]));
 
 // Runs the motor's TTS directly (VT padrão has no Claude in stage 2).
-function narrarComTts(dir) {
+// `bin`/`args`/`timeoutMs` exist only so tests can run a stand-in process.
+export function narrarComTts(dir, { timeoutMs = TTS_TIMEOUT_MS, bin = process.env.PYTHON_BIN || 'python', args = [join(MOTOR_DIR, 'tts.py'), dir] } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.env.PYTHON_BIN || 'python', [join(MOTOR_DIR, 'tts.py'), dir], { cwd: dir, windowsHide: true });
+    const child = spawn(bin, args, { cwd: dir, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    // The queue runs one job at a time: a stalled Gemini stream would block every project.
+    const timer = setTimeout(() => { killTree(child); reject(new Error('A voz passou de 10 minutos e foi interrompida.')); }, timeoutMs);
     let saida = '';
     child.stdout.on('data', (c) => { saida += c; });
     child.stderr.on('data', (c) => { saida += c; });
-    child.on('error', (err) => reject(new Error(`Não consegui gerar a voz: ${err.message}`)));
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(saida.trim().slice(-600) || `A voz saiu com código ${code}.`))));
+    child.on('error', (err) => { clearTimeout(timer); reject(new Error(`Não consegui gerar a voz: ${err.message}`)); });
+    child.on('close', (code) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(saida.trim().slice(-600) || `A voz saiu com código ${code}.`)); });
   });
 }
 
@@ -242,13 +246,19 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erro)}`, cwd: dir, addDirs })
       // Fixed template: narration and stills are mechanical, no Claude.
       await narrador(dir);
       await copyFile(join(MOTOR_DIR, 'modelos', 'vt-padrao', 'cenas.js'), join(dir, 'cenas.js'));
-      const { loja } = await readJson(join(dir, 'produtos.json'), { loja: {} });
-      await writeFile(join(dir, 'legenda-post.txt'), legendaPostOferta(oferta, loja));
     } else {
       const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
+      // Prices come from the catalog, never from Claude: produtos.json comes back as it was.
+      const produtosOriginal = oferta ? await readJson(join(dir, 'produtos.json'), null) : null;
       await runner({ prompt: `# Etapa 2
 ${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+      if (produtosOriginal) await writeJson(join(dir, 'produtos.json'), produtosOriginal);
       if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
+    }
+    // Oferta: the post caption is mechanical too, so no hand-typed price reaches it.
+    if (oferta) {
+      const { loja } = await readJson(join(dir, 'produtos.json'), { loja: {} });
+      await writeFile(join(dir, 'legenda-post.txt'), legendaPostOferta(oferta, loja));
     }
     // An adjustment may reuse the existing voice (saves quota): tempos.json then only has to exist.
     const temposPath = join(dir, 'voz', 'tempos.json');

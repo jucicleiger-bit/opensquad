@@ -158,7 +158,7 @@ export function normalizeOferta(input, disponiveis, duracao) {
     produtos,
     validoAte: /^\d{4}-\d{2}-\d{2}$/.test(String(input?.validoAte || '')) ? input.validoAte : '',
     criacao: input?.criacao === 'padrao' ? 'padrao' : 'nova',
-    precosEm: new Date().toISOString().slice(0, 10),
+    precosEm: new Date().toLocaleDateString('sv-SE'),
   };
 }
 
@@ -182,6 +182,8 @@ export function validateRoteiroOferta(roteiro, oferta) {
       else if (nome === 'precoDe' && !p.precoDe) erros.push(`Cena ${i + 1}: ${p.nome} não tem preço "de".`);
       else if (nome === 'unidade' && !p.unidade) erros.push(`Cena ${i + 1}: ${p.nome} não tem unidade.`);
     }
+    // {preço} or { preco } slip past MARCADOR and would be spoken as literal text.
+    if (/[{}]/.test(fala.replace(MARCADOR, ''))) erros.push(`Cena ${i + 1}: marcador malformado; use {preco}, {precoDe}, {unidade} ou {validade}.`);
   });
   for (const p of oferta.produtos) {
     if (!cenas.some((c) => String(c.produto) === p.id && /\{preco\}/.test(String(c.fala || '')))) erros.push(`Falta a cena de ${p.nome} com {preco}.`);

@@ -268,3 +268,21 @@ test('saveRoteiroCenas on an Oferta drops the stale roteiro-modelo.json', async 
     assert.equal(existsSync(modelo), false);
   });
 });
+
+test('saveRoteiroCenas on an Oferta keeps roteiro-modelo.json when the scenes are unchanged, drops it when a fala is edited', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const vdir = videoDir(dir, 'king', video.id);
+    const cenas = [{ tipo: 'p', produto: 'fralda', fala: 'Fralda por treze e noventa e nove!', descricao: 'x' }];
+    await writeFile(join(vdir, 'roteiro.json'), JSON.stringify({ cenas }));
+    const modelo = join(vdir, 'roteiro-modelo.json');
+    await writeFile(modelo, '{"cenas":[]}');
+    await saveRoteiroCenas('king', video.id, cenas, dir);
+    assert.equal(existsSync(modelo), true);
+    await saveRoteiroCenas('king', video.id, [{ ...cenas[0], fala: 'A fralda sai por treze e noventa e nove!' }], dir);
+    assert.equal(existsSync(modelo), false);
+  });
+});

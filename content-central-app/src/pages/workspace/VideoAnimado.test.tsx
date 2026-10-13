@@ -245,6 +245,18 @@ describe("Vídeo animado", () => {
     expect(screen.getByLabelText("Assunto")).toHaveValue("Ofertas da semana");
   });
 
+  it("summary uses the singular for one product", async () => {
+    stubOferta();
+    renderAt("/projects/king/video");
+    await userEvent.click(await screen.findByRole("button", { name: "Novo vídeo" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Oferta" }));
+    const lista = await screen.findByRole("group", { name: "Produtos" });
+    await userEvent.click(await within(lista).findByRole("checkbox", { name: /Fralda/ }));
+    expect(screen.getByText(/ · 1 produto(?!s)/)).toBeInTheDocument();
+    await userEvent.click(within(lista).getByRole("checkbox", { name: /Café/ }));
+    expect(screen.getByText(/ · 2 produtos/)).toBeInTheDocument();
+  });
+
   it("blocks more products than the duration fits and posts the oferta body", async () => {
     const calls = stubOferta();
     renderAt("/projects/king/video");

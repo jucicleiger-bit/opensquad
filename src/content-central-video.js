@@ -158,10 +158,13 @@ export async function saveRoteiroCenas(projectId, videoId, cenas, targetDir) {
     if (faltando.length) throw httpError(400, faltando.join(' '));
   }
   const path = join(videoDir(targetDir, projectId, videoId), 'roteiro.json');
-  const roteiro = { ...(await readJson(path, {})), cenas: limpas };
+  const atual = await readJson(path, {});
+  const roteiro = { ...atual, cenas: limpas };
   await writeJson(path, roteiro);
-  // The placeholder version no longer matches the edited text; a later ajuste starts from roteiro.json.
-  if (video.briefing.oferta) await rm(join(dirname(path), 'roteiro-modelo.json'), { force: true });
+  // The placeholder version no longer matches edited text; a later ajuste starts from roteiro.json.
+  // The UI saves before every ajuste, so unchanged scenes must keep it.
+  const chave = (cs) => JSON.stringify((cs || []).map((c) => [c.tipo, c.fala, c.produto]));
+  if (video.briefing.oferta && chave(atual.cenas) !== chave(limpas)) await rm(join(dirname(path), 'roteiro-modelo.json'), { force: true });
   return roteiro;
 }
 

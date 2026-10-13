@@ -135,6 +135,13 @@ test('validateRoteiroOferta checks every product, placeholder and digit', () => 
   for (const re of [/dígitos|número/, /\{brinde\}/, /Café não tem preço "de"/, /produto desconhecido "zz"/, /\{preco\} fora de uma cena de produto/, /Falta a cena de Fralda/]) assert.match(erros, re);
 });
 
+test('validateRoteiroOferta rejects malformed braces that MARCADOR would miss', () => {
+  for (const fala of ['Fralda por {preço}!', 'Fralda por { preco }!', 'Fralda por {preco!']) {
+    const erros = validateRoteiroOferta({ cenas: [{ tipo: 'p', produto: 'a', fala: `${fala} {preco}` }, { tipo: 'p', produto: 'b', fala: 'Café {preco}' }] }, oferta);
+    assert.match(erros.join(' '), /Cena 1: marcador malformado; use \{preco\}, \{precoDe\}, \{unidade\} ou \{validade\}\./, fala);
+  }
+});
+
 test('VT padrão requires abertura, one produto per product in order, fechamento', () => {
   const padrao = { ...oferta, criacao: 'padrao' };
   const bom = { cenas: [
