@@ -55,6 +55,13 @@ interface SlideActionState {
 }
 
 const IDLE_SLIDE_STATE: SlideActionState = { busy: false, error: null };
+const SLIDE_GENERATION_STALE_MS = 6 * 60 * 1000;
+
+function slideGenerationIsStale(carousel: Carousel, slide: CarouselSlide): boolean {
+  if (!slide.image.generating) return false;
+  const startedAt = Date.parse(slide.image.generationStartedAt || carousel.updatedAt);
+  return Number.isFinite(startedAt) && Date.now() - startedAt >= SLIDE_GENERATION_STALE_MS;
+}
 
 function tomorrowIso(): string {
   const date = new Date();
@@ -261,7 +268,6 @@ export function Carousels() {
     setSlideState((current) => ({ ...current, [slideId]: { busy: true, error: null } }));
     try {
       await regenerateCarouselSlide(project.projectId, carouselId, slideId, note);
-      setSlideNotes((current) => ({ ...current, [slideId]: "" }));
       await refresh();
       setSlideState((current) => ({ ...current, [slideId]: IDLE_SLIDE_STATE }));
     } catch (err) {
@@ -437,6 +443,9 @@ export function Carousels() {
                     const src = slideSource(slide);
                     const state = stateFor(slide.slideId);
                     const note = slideNotes[slide.slideId] || "";
+                    const generationStale = slideGenerationIsStale(carousel, slide);
+                    const generationActive = Boolean(slide.image.generating) && !generationStale;
+                    const actionDisabled = state.busy || generationActive || carousel.status === "generating";
                     return (
                       <div key={slide.slideId} className={styles.slide}>
                         <div className={styles.slidePhoto}>
@@ -467,22 +476,32 @@ export function Carousels() {
                             value={note}
                             onChange={(e) => setSlideNotes((current) => ({ ...current, [slide.slideId]: e.target.value }))}
                           />
+                          {generationActive ? (
+                            <div className={styles.slideStatus} role="status">
+                              {slide.image.generationKind === "correction" ? "Aplicando sua correção" : "Gerando uma nova imagem"}. Ela aparecerá aqui automaticamente.
+                            </div>
+                          ) : null}
+                          {generationStale ? (
+                            <div className={`${styles.slideStatus} ${styles.slideStatusWarning}`} role="status">
+                              A geração demorou mais que o esperado. Você já pode tentar novamente.
+                            </div>
+                          ) : null}
                           <Button
                             type="button"
                             variant="secondary"
-                            disabled={state.busy || slide.image.generating || carousel.status === "generating"}
+                            disabled={actionDisabled}
                             onClick={() => handleRegenerateSlide(carousel.carouselId, slide.slideId)}
                           >
-                            {state.busy ? "Regenerando..." : "Regenerar esse slide"}
+                            {state.busy ? "Enviando..." : generationActive ? "Gerando nova imagem..." : "Regenerar esse slide"}
                           </Button>
                           {note.trim() ? (
                             <Button
                               type="button"
                               variant="secondary"
-                              disabled={state.busy || slide.image.generating || carousel.status === "generating"}
+                              disabled={actionDisabled}
                               onClick={() => handleRegenerateSlide(carousel.carouselId, slide.slideId, note.trim())}
                             >
-                              {state.busy ? "Aplicando..." : "Aplicar correção"}
+                              {state.busy ? "Enviando..." : generationActive ? "Aplicando correção..." : "Aplicar correção"}
                             </Button>
                           ) : null}
                           {state.error ? <div className="pill bad">{state.error}</div> : null}

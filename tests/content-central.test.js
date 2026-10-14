@@ -10517,6 +10517,41 @@ test('regenerateCarouselSlide and enqueueCarouselSlideRegeneration replace only 
   });
 });
 
+test('enqueueCarouselSlideRegeneration releases a timed-out slide so the operator can retry', async () => {
+  await withTempProject(async (dir) => {
+    await createCentralProject({ projectId: 'carrossel-timeout', name: 'Boss Pizzaria' }, dir);
+    const carousel = await generateCarousel('carrossel-timeout', { briefing: 'teste', slideCount: 2 }, dir);
+    await new Promise((resolveDone) => {
+      enqueueCarouselGeneration('carrossel-timeout', carousel, {
+        outlineGenerator: async () => ({
+          format: 'listicle',
+          slides: [{ role: 'cover', slideText: 'Capa' }, { role: 'cta', slideText: 'CTA' }],
+        }),
+        imageGenerator: async () => ({ url: 'https://cdn.example.com/original.png', mimeType: 'image/png' }),
+      }, dir);
+      setTimeout(resolveDone, 200);
+    });
+
+    const ready = (await listCarousels('carrossel-timeout', dir))[0];
+    const targetSlideId = ready.slides[0].slideId;
+    await regenerateCarouselSlide('carrossel-timeout', ready.carouselId, targetSlideId, dir);
+    enqueueCarouselSlideRegeneration('carrossel-timeout', ready.carouselId, targetSlideId, {
+      generationTimeoutMs: 20,
+      imageGenerator: async () => new Promise(() => {}),
+    }, dir);
+
+    let released;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      released = (await listCarousels('carrossel-timeout', dir))[0].slides.find((slide) => slide.slideId === targetSlideId);
+      if (released && !released.image.generating && released.imageGenerationError) break;
+      await new Promise((resolveWait) => setTimeout(resolveWait, 20));
+    }
+
+    assert.equal(released.image.generating, false);
+    assert.match(released.imageGenerationError, /demorou mais que o esperado/);
+  });
+});
+
 // Polls disk until `done(carousel)` holds — every planning/generation step
 // below is fire-and-forget, same as the rest of this file's carousel tests.
 async function waitForCarousel(projectId, carouselId, dir, done) {

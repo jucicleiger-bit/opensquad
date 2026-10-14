@@ -923,6 +923,8 @@ export interface CarouselSlide {
     url?: string;
     previewUrl?: string;
     generating?: boolean;
+    generationStartedAt?: string;
+    generationKind?: "correction" | "regeneration";
     aspectRatio?: string;
     dimensions?: { width: number; height: number };
   };
@@ -1876,6 +1878,8 @@ export interface BrainPlan {
   days: number;
   formats: GenerateFormatInput[];
   plan: PlannedContentSchedule;
+  allowOverage?: boolean;
+  overageReason?: string;
   // Set once "Aprovar e gerar" went through; a new plan comes back null.
   approvedAt: string | null;
   updatedAt: string;

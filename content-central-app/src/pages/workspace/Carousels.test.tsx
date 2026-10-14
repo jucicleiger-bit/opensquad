@@ -237,6 +237,42 @@ describe("Carousels", () => {
     expect(screen.getByRole("button", { name: "Aplicar correção" })).toBeDisabled();
   });
 
+  it("releases a stale slide generation for retry and preserves the correction text", async () => {
+    const staleSlide = {
+      ...CAROUSEL_FIXTURE.slides[0],
+      image: {
+        ...CAROUSEL_FIXTURE.slides[0].image,
+        generating: true,
+        generationStartedAt: "2026-10-13T12:00:00.000Z",
+        generationKind: "correction",
+      },
+    };
+    const staleCarousel = {
+      ...CAROUSEL_FIXTURE,
+      updatedAt: "2026-10-13T12:00:00.000Z",
+      slides: [staleSlide, CAROUSEL_FIXTURE.slides[1]],
+    };
+    stubFetchSequence([
+      { body: projectState() },
+      { body: { carousels: [staleCarousel] } },
+      { body: { carousel: staleCarousel } },
+      { body: { carousels: [staleCarousel] } },
+    ]);
+    renderCarousels();
+
+    expect(await screen.findByText("A geração demorou mais que o esperado. Você já pode tentar novamente.")).toBeInTheDocument();
+    const correction = screen.getAllByPlaceholderText(/texto menor/)[0];
+    await userEvent.type(correction, "deixe a lista preta e as letras em branco");
+    const retry = screen.getByRole("button", { name: "Aplicar correção" });
+    expect(retry).toBeEnabled();
+    await userEvent.click(retry);
+
+    const calls = (fetch as unknown as { mock: { calls: [string, RequestInit][] } }).mock.calls;
+    const correctionCall = calls.find(([url]) => url.endsWith("/carousels-regenerate-slide/boss-pizzaria-carrossel-1/boss-pizzaria-carrossel-1-slide-1"));
+    expect(JSON.parse(correctionCall![1].body as string)).toEqual({ note: "deixe a lista preta e as letras em branco" });
+    expect(correction).toHaveValue("deixe a lista preta e as letras em branco");
+  });
+
   it("only offers Agendar when every slide has a published url (a preview alone is not enough)", async () => {
     const previewOnly = {
       ...CAROUSEL_FIXTURE,
@@ -265,7 +301,7 @@ describe("Carousels", () => {
     // followed by an unrelated background enqueue, so the slide isn't done
     // yet by the time the panel's own post-POST refresh() fires.
     const generatingSlide = { ...CAROUSEL_FIXTURE.slides[0], image: { url: CAROUSEL_FIXTURE.slides[0].image.url, generating: true } };
-    const generatingCarousel = { ...CAROUSEL_FIXTURE, slides: [generatingSlide, CAROUSEL_FIXTURE.slides[1]] };
+    const generatingCarousel = { ...CAROUSEL_FIXTURE, updatedAt: new Date().toISOString(), slides: [generatingSlide, CAROUSEL_FIXTURE.slides[1]] };
     const regeneratedSlide = { ...CAROUSEL_FIXTURE.slides[0], image: { url: "/api/projects/boss-pizzaria/assets/assets/generated/slide1-novo.png", generating: false } };
     const regeneratedCarousel = { ...CAROUSEL_FIXTURE, slides: [regeneratedSlide, CAROUSEL_FIXTURE.slides[1]] };
 
@@ -294,7 +330,8 @@ describe("Carousels", () => {
 
       // Still generating right after the POST + its own refresh() — the poll
       // interval must be the thing that eventually picks up the new image.
-      expect(screen.getAllByRole("button", { name: "Regenerar esse slide" })[0]).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Gerando nova imagem..." })).toBeDisabled();
+      expect(screen.getByText("Gerando uma nova imagem. Ela aparecerá aqui automaticamente.")).toBeInTheDocument();
 
       await vi.advanceTimersByTimeAsync(3000);
 

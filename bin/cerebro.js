@@ -27,7 +27,7 @@ function parse(text) {
 }
 
 try {
-  if (!projectId) throw new Error('Uso: cerebro <context|plan|propose> <projeto> [json]');
+  if (!projectId) throw new Error('Uso: cerebro <context|plan|apply|propose> <projeto> [json]');
   if (command === 'context') {
     console.log((await call('/context')).text);
   } else if (command === 'plan') {
@@ -42,6 +42,14 @@ try {
   } else if (command === 'propose') {
     const proposal = await call('/proposals', parse(json));
     console.log(`Proposta criada (${proposal.id}); aguardando o operador aplicar.`);
+  } else if (command === 'apply') {
+    // Keep the same proposal audit trail as the UI, but execute an explicit
+    // operator request immediately so the cérebro can work as their proxy.
+    const proposal = await call('/proposals', parse(json));
+    const resolved = await call(`/proposals/${encodeURIComponent(proposal.id)}/apply`, {});
+    const failed = (resolved.results || []).filter((result) => !result.ok);
+    if (failed.length) throw new Error(failed.map((result) => result.error).filter(Boolean).join(' ') || 'A alteração não pôde ser aplicada.');
+    console.log(`Alteração aplicada (${proposal.id}) e registrada no histórico.`);
   } else {
     throw new Error(`Comando desconhecido: ${command}`);
   }

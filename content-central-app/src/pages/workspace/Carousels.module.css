@@ -55,6 +55,21 @@
   color: var(--muted);
 }
 
+.slideStatus {
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--soft);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.slideStatusWarning {
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+}
+
 .actions {
   display: flex;
   gap: 8px;

@@ -75,11 +75,14 @@ function weekStart(dateKey) {
 // Every way the plan departs from the contract, [] when it matches. Closed
 // days are expected empty (saveBrainPlan empties them first). Feeds are
 // counted per Monday–Sunday week, the plan's plus `existing` ([{ date,
-// channel }]: content already scheduled outside the plan's dates): never more
-// than contracted, and exactly that many when the plan covers every open day
-// of the week from its first date on (earlier days are past or already planned).
-export function contractProblems(plan, contract, hours, existing = []) {
-  if (!contract) return [];
+// channel }]: content already scheduled outside the plan's dates). By default
+// counts are strict. The cérebro may explicitly authorize a one-off exception
+// when the operator asks for a different quantity or channel mix. The contract
+// remains saved as the normal/default delivery for later plans.
+export function contractProblems(plan, contract, hours, existing = [], { allowOverage = false } = {}) {
+  // An explicit operator exception bypasses only the commercial contract.
+  // Channel support and business hours are validated by saveBrainPlan.
+  if (!contract || allowOverage) return [];
   const problems = [];
   const storyChannels = contract.storiesPerDay ? contract.storyChannels : [];
   const feedChannels = contract.feedsPerWeek ? contract.feedChannels : [];
@@ -103,7 +106,8 @@ export function contractProblems(plan, contract, hours, existing = []) {
       for (const channel of feedChannels) {
         const slots = plan.dayPlans.filter((day) => weekDays.includes(day.date)).flatMap((day) => day.regular).filter((slot) => slot.channel === channel);
         const feeds = slots.length + existing.filter((entry) => entry.channel === channel && weekDays.includes(entry.date)).length;
-        if (feeds > contract.feedsPerWeek || (coversWeek && feeds < contract.feedsPerWeek)) {
+        const feedCountProblem = feeds > contract.feedsPerWeek || (coversWeek && feeds < contract.feedsPerWeek);
+        if (feedCountProblem) {
           const ids = feeds > contract.feedsPerWeek && slots.every((slot) => slot.id) ? slots.map((slot) => slot.id) : [];
           const skip = ids.length ? ` — pule ("skip": true) até sobrar ${contract.feedsPerWeek}: ${ids.join(', ')}` : '';
           problems.push(`semana de ${start}: ${feeds} feed(s) em ${channel}, o contratado é ${contract.feedsPerWeek} por semana${skip}`);

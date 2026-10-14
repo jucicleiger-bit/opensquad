@@ -97,6 +97,13 @@ test('the cerebro CLI saves a plan and a proposal through the server', async () 
     assert.equal(state.body.proposals[0].status, 'pending');
     const applied = await call(server, `/api/projects/loja/brain/proposals/${state.body.proposals[0].id}/apply`, {});
     assert.equal(applied.body.proposal.status, 'applied');
+    const direct = await run('apply', 'loja', JSON.stringify({
+      summary: 'Trocar setor conforme pedido',
+      changes: [{ kind: 'offer', offerId: offer.id, field: 'sector', after: 'Grãos' }],
+    }));
+    assert.match(direct.stdout, /Alteração aplicada/);
+    assert.match((await run('context', 'loja')).stdout, /setor: Grãos/);
+    assert.deepEqual((await call(server, '/api/projects/loja/brain')).body.proposals.map((proposal) => proposal.status), ['applied', 'applied']);
     await assert.rejects(run('plan', 'loja', '{"startDate":"2026-10-05","days":1,"formats":[]}'), /formato/);
   });
 });

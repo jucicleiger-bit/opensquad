@@ -22,6 +22,12 @@ import { localDateKey } from "./offerUsageDisplay";
 import styles from "./Brain.module.css";
 
 const OFFER_FIELD_LABELS: Record<string, string> = {
+  name: "nome",
+  price: "preço",
+  items: "itens/detalhes",
+  cta: "chamada para ação",
+  autoGenerateCta: "CTA automático",
+  notes: "observações",
   validFrom: "vale de",
   validUntil: "vale até",
   sector: "setor",
@@ -306,6 +312,12 @@ export function Brain() {
             {stored ? (
               <>
                 <p className="muted" style={{ margin: "2px 0 12px", fontSize: 13 }}>{planTotals(stored.plan.dayPlans)}</p>
+                {stored.allowOverage ? (
+                  <div className={styles.warnings}>
+                    <b>Exceção ao plano contratado</b>
+                    <p style={{ margin: "4px 0 0" }}>{stored.overageReason}</p>
+                  </div>
+                ) : null}
                 {stored.plan.dayPlans.filter((day) => day.regular.length || day.extras.length).map((day) => (
                   <div key={day.date} className={styles.day}>
                     <b>{dayLabel(day.date)}</b>
@@ -345,7 +357,7 @@ export function Brain() {
           <Card className={styles.panel}>
             <h3 style={{ margin: 0 }}>Caderno do cliente</h3>
             <p className="muted" style={{ margin: "2px 0 12px", fontSize: 13 }}>
-              O que vale sempre para este cliente. O cérebro lê toda conversa e propõe mudanças aqui.
+              O que vale sempre para este cliente. O cérebro aplica o que você pedir e propõe ideias quando precisar da sua decisão.
             </p>
             <textarea
               aria-label="Caderno do cliente"

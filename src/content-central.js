@@ -10,6 +10,7 @@ import { isClockTime, isOpenAt, isOpenDay, normalizeBusinessHours, validateBusin
 export { CONTENT_GOAL_LABELS };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CAROUSEL_SLIDE_GENERATION_TIMEOUT_MS = 6 * 60 * 1000;
 const SUPPORTED_MODES = new Set(['manual', 'semi_automatic', 'automatic']);
 // Orthogonal to `mode` (approval workflow): `projectType` decides the
 // content-generation strategy itself. 'marketing' is today's Raio-X +
@@ -3243,7 +3244,7 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
   if (typeof options.imageGenerator !== 'function') {
     slide.image.generating = false;
     carousel.updatedAt = new Date().toISOString();
-    await writeJson(carousel.filePath, carousel);
+    if (options.persistResult !== false) await writeJson(carousel.filePath, carousel);
     return;
   }
   try {
@@ -3281,7 +3282,7 @@ async function enrichCarouselSlideWithRealImage(carousel, slide, project, projec
   }
   slide.image.generating = false;
   carousel.updatedAt = new Date().toISOString();
-  await writeJson(carousel.filePath, carousel);
+  if (options.persistResult !== false) await writeJson(carousel.filePath, carousel);
 }
 
 function findCarouselOffer(project, offerId) {
@@ -3710,17 +3711,65 @@ export async function regenerateCarouselSlide(projectId, carouselId, slideId, ta
   });
 }
 
+async function finishCarouselSlideGeneration(filePath, slideId, requestId, completedSlide) {
+  const latest = await readJson(filePath);
+  const currentSlide = latest.slides.find((entry) => entry.slideId === slideId);
+  if (!currentSlide || currentSlide.image?.generationRequestId !== requestId || !currentSlide.image?.generating) return false;
+
+  Object.assign(currentSlide, completedSlide);
+  currentSlide.image.generating = false;
+  delete currentSlide.image.generationRequestId;
+  delete currentSlide.image.generationStartedAt;
+  delete currentSlide.image.generationKind;
+  latest.updatedAt = new Date().toISOString();
+  await writeJson(filePath, latest);
+  return true;
+}
+
+async function failCarouselSlideGeneration(filePath, slideId, requestId, message) {
+  const latest = await readJson(filePath);
+  const slide = latest.slides.find((entry) => entry.slideId === slideId);
+  if (!slide || slide.image?.generationRequestId !== requestId || !slide.image?.generating) return false;
+
+  slide.image.generating = false;
+  delete slide.image.generationRequestId;
+  delete slide.image.generationStartedAt;
+  delete slide.image.generationKind;
+  slide.imageGenerationError = message;
+  latest.updatedAt = new Date().toISOString();
+  await writeJson(filePath, latest);
+  return true;
+}
+
 export function enqueueCarouselSlideRegeneration(projectId, carouselId, slideId, options = {}, targetDir = process.cwd()) {
   const paths = getCentralPaths(targetDir, projectId);
   const safeId = String(carouselId || '').replace(/[\\/]/g, '');
-  loadProject(paths)
+  const requestId = randomUUID();
+  const timeoutMs = Number(options.generationTimeoutMs || process.env.OPENSQUAD_CAROUSEL_SLIDE_TIMEOUT_MS || CAROUSEL_SLIDE_GENERATION_TIMEOUT_MS);
+  let watchdog = null;
+  const job = loadProject(paths)
     .then(async (project) => {
       const filePath = join(paths.carouselsDir, `${safeId}.json`);
       const carousel = await readJson(filePath);
       const slide = carousel.slides.find((entry) => entry.slideId === slideId);
       if (!slide) throw new Error('Slide não encontrado.');
       slide.image.generating = true;
+      slide.image.generationRequestId = requestId;
+      slide.image.generationStartedAt = new Date().toISOString();
+      slide.image.generationKind = options.note ? 'correction' : 'regeneration';
+      slide.imageGenerationError = null;
+      carousel.updatedAt = new Date().toISOString();
       await writeJson(filePath, carousel);
+      watchdog = setTimeout(() => {
+        failCarouselSlideGeneration(
+          filePath,
+          slideId,
+          requestId,
+          'A geração demorou mais que o esperado e foi liberada. Tente aplicar a correção novamente.',
+        ).catch((err) => {
+          console.error(`[content-central] could not release timed-out carousel slide ${projectId}/${carouselId}/${slideId}:`, err.message);
+        });
+      }, Math.max(1, timeoutMs));
       // Manual "regenerar esse slide" should stay consistent with the rest
       // of the carousel too — same style reference as the original
       // generation, unless slide 1 itself is the one being regenerated (it
@@ -3730,11 +3779,33 @@ export function enqueueCarouselSlideRegeneration(projectId, carouselId, slideId,
         && typeof options.resolveCarouselStyleReference === 'function'
         ? await options.resolveCarouselStyleReference(firstSlide).catch(() => null)
         : null;
-      await enrichCarouselSlideWithRealImage(carousel, slide, project, projectId, paths, options, styleReferencePath);
+      await enrichCarouselSlideWithRealImage(
+        carousel,
+        slide,
+        project,
+        projectId,
+        paths,
+        { ...options, persistResult: false },
+        styleReferencePath,
+      );
+      await finishCarouselSlideGeneration(filePath, slideId, requestId, slide);
     })
-    .catch((err) => {
+    .catch(async (err) => {
       console.error(`[content-central] background carousel slide regeneration failed for ${projectId}/${carouselId}/${slideId}:`, err.message);
+      const filePath = join(paths.carouselsDir, `${safeId}.json`);
+      await failCarouselSlideGeneration(
+        filePath,
+        slideId,
+        requestId,
+        `Não consegui gerar a nova imagem: ${err.message}. Tente novamente.`,
+      ).catch((persistError) => {
+        console.error(`[content-central] could not persist carousel slide failure for ${projectId}/${carouselId}/${slideId}:`, persistError.message);
+      });
+    })
+    .finally(() => {
+      if (watchdog) clearTimeout(watchdog);
     });
+  return job;
 }
 
 // Same idea as regenerateCarouselSlide/enqueueCarouselSlideRegeneration,
@@ -5810,6 +5881,9 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
           for (const slide of item.slides) {
             if (!slide.image?.generating) continue;
             slide.image.generating = false;
+            delete slide.image.generationRequestId;
+            delete slide.image.generationStartedAt;
+            delete slide.image.generationKind;
             slide.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar esse slide" para tentar de novo.';
             touched = true;
           }
@@ -5831,6 +5905,9 @@ export async function reconcileInterruptedGenerations(targetDir = process.cwd())
         for (const slide of carousel.slides) {
           if (!slide.image?.generating) continue;
           slide.image.generating = false;
+          delete slide.image.generationRequestId;
+          delete slide.image.generationStartedAt;
+          delete slide.image.generationKind;
           slide.imageGenerationError = 'Geração interrompida (o servidor foi reiniciado enquanto a imagem estava sendo criada). Clique em "Regenerar esse slide" para tentar de novo.';
           touched = true;
         }

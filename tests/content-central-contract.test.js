@@ -54,6 +54,22 @@ test('a plan must match the contract: channels, stories per open day, feeds per 
   assert.match(contractProblems({ dayPlans: missing }, contract, SUN_CLOSED).join(' | '), /falta o canal whatsapp_status/);
 });
 
+test('an explicit operator exception allows any quantity and supported channel mix', () => {
+  const contract = validateContractedPlan(ESSENCIAL);
+  const extraStories = week(['2026-10-15']);
+  extraStories[0].regular.push({ channel: 'instagram_story' });
+  assert.match(contractProblems({ dayPlans: extraStories }, contract, SUN_CLOSED).join(' | '), /3 post\(s\) em instagram_story/);
+  assert.deepEqual(contractProblems({ dayPlans: extraStories }, contract, SUN_CLOSED, [], { allowOverage: true }), []);
+
+  const extraChannel = week(['2026-10-15']);
+  extraChannel[0].regular.push({ channel: 'facebook_story' });
+  assert.deepEqual(contractProblems({ dayPlans: extraChannel }, contract, SUN_CLOSED, [], { allowOverage: true }), []);
+
+  const missingMinimum = week(['2026-10-15']);
+  missingMinimum[0].regular = missingMinimum[0].regular.filter((slot) => slot.channel !== 'instagram_story');
+  assert.deepEqual(contractProblems({ dayPlans: missingMinimum }, contract, SUN_CLOSED, [], { allowOverage: true }), []);
+});
+
 test('an over-count names the feed slot ids the cérebro could skip', () => {
   const contract = validateContractedPlan(ESSENCIAL);
   const dayPlans = week(['2026-10-12', '2026-10-13', '2026-10-15']).map((entry) => ({

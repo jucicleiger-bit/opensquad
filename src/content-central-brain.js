@@ -19,9 +19,10 @@ import { contractProblems, describeContractedPlan, normalizeContractedPlan, STOR
 import { goalName, slotTag } from './content-central-goals.js';
 import { buildPostingTimeStats, loadProjectMetrics } from './content-central-metrics.js';
 
-// What the cérebro may propose to change on an offer. Price, name and photos
-// stay with the operator's own form.
-const OFFER_FIELDS = new Set(['validFrom', 'validUntil', 'sector', 'active', 'groupId']);
+// Fields the cérebro may change when acting on an explicit operator request.
+// Photos and destructive actions stay in their dedicated screens.
+const OFFER_FIELDS = new Set(['name', 'price', 'items', 'cta', 'autoGenerateCta', 'notes', 'validFrom', 'validUntil', 'sector', 'active', 'groupId']);
+const OFFER_TEXT_FIELDS = new Set(['name', 'price', 'items', 'cta', 'notes']);
 const CHANGE_KINDS = new Set(['offer', 'goalWeights', 'notebook']);
 // Same list the generate route accepts (API_SUPPORTED_CHANNELS in
 // content-central-server.js): a plan built on any other channel would only
@@ -178,7 +179,7 @@ function planWarnings(plan, project, stats, hours) {
 // Builds the week through the same preview "Agenda e geração" uses, then
 // pins the cérebro's choices. The stored formats are the normalized ones the
 // preview used, so approving sends generation exactly what was shown.
-export async function saveBrainPlan(projectId, { startDate, days, formats, slots } = {}, targetDir, { topicIdeaGenerator } = {}) {
+export async function saveBrainPlan(projectId, { startDate, days, formats, slots, allowOverage = false, overageReason = '' } = {}, targetDir, { topicIdeaGenerator } = {}) {
   if (!isDateKey(String(startDate || ''))) throw new Error('Data inicial inválida: use AAAA-MM-DD.');
   if (!Array.isArray(formats) || !formats.length) throw new Error('O plano precisa de pelo menos um formato (canal, posts por dia, horário).');
   const channels = formats.map((format) => String(format?.channel || '').trim());
@@ -205,13 +206,26 @@ export async function saveBrainPlan(projectId, { startDate, days, formats, slots
   const existing = items
     .filter((item) => item.status !== 'test_post_simulated' && !['flyer', 'special_date'].includes(item.contentTopic?.source) && !planDates.has(item.scheduledDate))
     .map((item) => ({ date: item.scheduledDate, channel: item.channel }));
-  const problems = contractProblems(fitted, normalizeContractedPlan(project.contractedPlan), hours, existing);
+  const normalizedOverageReason = String(overageReason || '').trim();
+  const contractOverride = allowOverage === true && normalizedOverageReason.length >= 3;
+  const problems = contractProblems(fitted, normalizeContractedPlan(project.contractedPlan), hours, existing, { allowOverage: contractOverride });
   if (problems.length) {
     throw new Error(`O plano não bate com o plano contratado: ${problems.join('; ')}. Ajuste os formatos ou pule horários com "skip".`);
   }
   const stats = buildPostingTimeStats(await loadProjectMetrics(projectId, targetDir), items);
-  const plan = { ...fitted, warnings: planWarnings(fitted, project, stats, hours) };
-  const stored = { startDate: plan.startDate, days: plan.days, formats: plan.formats, plan, approvedAt: null, updatedAt: new Date().toISOString() };
+  const warnings = planWarnings(fitted, project, stats, hours);
+  if (contractOverride) warnings.unshift(`Exceção ao plano contratado autorizada pelo operador: ${normalizedOverageReason}`);
+  const plan = { ...fitted, warnings };
+  const stored = {
+    startDate: plan.startDate,
+    days: plan.days,
+    formats: plan.formats,
+    allowOverage: contractOverride,
+    overageReason: contractOverride ? normalizedOverageReason : '',
+    plan,
+    approvedAt: null,
+    updatedAt: new Date().toISOString(),
+  };
   await write(brainPaths(targetDir, projectId).planPath, stored);
   return stored;
 }
@@ -250,12 +264,20 @@ function normalizeChange(project, change) {
     after = String(after ?? '').trim();
   } else if (change.field === 'active') {
     if (typeof after !== 'boolean') throw new Error(`"active" de ${offer.name} precisa ser true ou false.`);
+  } else if (change.field === 'autoGenerateCta') {
+    if (typeof after !== 'boolean') throw new Error(`"autoGenerateCta" de ${offer.name} precisa ser true ou false.`);
+  } else if (OFFER_TEXT_FIELDS.has(change.field)) {
+    after = String(after ?? '').trim();
+    if (change.field === 'name' && !after) throw new Error('O nome da oferta não pode ficar vazio.');
   } else {
     after = after ? String(after) : null;
     if (after && !(project.contentStrategy?.offerGroups || []).some((group) => group.id === after)) {
       throw new Error(`Grupo ${after} não existe.`);
     }
   }
+  // Use the same normalization as the offer form (notably R$ formatting), so
+  // the audited "after" value is exactly what saveProjectOffer will persist.
+  after = normalizeProjectOffers([{ ...offer, [change.field]: after }])[0][change.field];
   return { kind: 'offer', offerId: offer.id, field: change.field, after };
 }
 
@@ -403,6 +425,7 @@ export async function buildBrainContext(projectId, targetDir) {
     ? [
       `Início ${state.plan.startDate}, ${state.plan.days} dia(s), formatos: ${JSON.stringify(state.plan.formats)}`
         + (state.plan.approvedAt ? ` — JÁ APROVADO e gerado em ${state.plan.approvedAt.slice(0, 10)}; para outra semana monte um plano novo.` : ''),
+      ...(state.plan.allowOverage ? [`Exceção ao plano contratado autorizada pelo operador: ${state.plan.overageReason}`] : []),
       ...state.plan.plan.dayPlans.flatMap((day) => day.regular.map((slot) => `- ${slot.id} ${slot.scheduledTime} [${slotTag(slot)}]: ${slot.label}`)),
       ...(skipped.length ? [`Sem post (loja fechada ou pulado): ${skipped.join(', ')}`] : []),
       ...(state.plan?.plan?.warnings?.length ? [`Avisos do plano:\n${state.plan.plan.warnings.map((warning) => `- ${warning}`).join('\n')}`] : []),
@@ -451,21 +474,28 @@ const CLAUDE_TIMEOUT_MS = 5 * 60 * 1000;
 export function brainSystemPrompt(projectId) {
   const cli = `node ${CEREBRO_CLI}`;
   return [
-    `Você é o cérebro do projeto "${projectId}" no Content Central: o administrador do planejamento de conteúdo desse cliente (uma loja local).`,
-    'O operador (dono da agência) conversa com você para planejar a semana. Fale em português simples, num tom leve e animado de parceiro de trabalho, e use emojis com moderação (um ou dois por bloco) para deixar a conversa mais leve 😊. Não fale de código nem de arquivos.',
+    `Você é o cérebro do projeto "${projectId}" no Content Central: estrategista sênior de redes sociais e operador de conteúdo exclusivo desse cliente.`,
+    'O dono da agência conversa com você como conversaria com um especialista da equipe. Entenda o objetivo, dê orientação prática, sugira ideias e execute o que ele pedir. Fale em português simples, num tom leve e animado de parceiro de trabalho, e use emojis com moderação (um ou dois por bloco). Não fale de código nem de arquivos.',
     'Formato da resposta: curta e fácil de ler na tela, com negrito e listas. Nunca use tabela nem repita o plano dia a dia: o plano já aparece no painel ao lado. Diga só o que decidiu e por quê (horários, testes, escolhas), os avisos e o que falta o operador fazer.',
     'Você só age pelo comando abaixo, usando a ferramenta Bash. Não leia nem edite arquivos.',
     `- ${cli} context ${projectId}  → estado atual: ofertas (id, setor, validade, uso), caderno, Raio-X, plano e propostas. Rode no começo de cada resposta: o operador pode ter aplicado ou recusado propostas e mudado ofertas na tela.`,
-    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"skip":true (pula esse post),"reason":"por quê"}]}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Os ids seguem AAAA-MM-DD-<canal>-NN (NN = 01, 02… por canal por dia). Com plano contratado, a primeira rodada pode ser recusada: leia a mensagem e corrija com "skip"/"time". Horário sem escolha fica com o rodízio automático. Depois de salvar, o comando mostra avisos: corrija cada um ou explique ao operador por que fica assim.`,
-    `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"sales":N,"<cada objetivo marcado>":N}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD ("" apaga a validade); active é true ou false; groupId é o id entre colchetes no context; goalWeights traz "sales" e todos os objetivos marcados, somando 100.`,
+    `- ${cli} plan ${projectId} '<json>'  → monta ou refaz o plano. JSON: {"startDate":"AAAA-MM-DD","days":N,"formats":[{"channel":"${[...PLAN_CHANNELS].join('|')}","postsPerDay":N,"everyDays":1,"startTime":"HH:MM","intervalMinutes":N}],"slots":[{"id":"<id do horário>","offerIds":["<id>"] ou ["<id1>","<id2>"] para combo (só em horário [venda]),"topicId":"<id do banco>" (só em horário de objetivo),"time":"HH:MM" (muda a hora desse post),"skip":true (pula esse post),"reason":"por quê"}],"allowOverage":true,"overageReason":"pedido explícito do operador"}. Rode primeiro sem "slots" para ver os ids dos horários e o que o rodízio escolheria; depois rode com as suas escolhas. Os ids seguem AAAA-MM-DD-<canal>-NN (NN = 01, 02… por canal por dia). Sem pedido diferente, respeite o plano contratado. Quando o operador pedir qualquer composição fora dele — acima, abaixo ou só em alguns canais — use "allowOverage":true e informe "overageReason". Horário sem escolha fica com o rodízio automático. Depois de salvar, o comando mostra avisos: corrija cada um ou explique ao operador por que fica assim.`,
+    `- ${cli} propose ${projectId} '<json>'  → propõe mudança de cadastro para o operador aprovar. JSON: {"summary":"...","changes":[{"kind":"offer","offerId":"<id>","field":"name|price|items|cta|autoGenerateCta|notes|validFrom|validUntil|sector|active|groupId","after":<valor>} | {"kind":"goalWeights","after":{"sales":N,"<cada objetivo marcado>":N}} | {"kind":"notebook","after":"<caderno inteiro novo>"}]}. Datas em AAAA-MM-DD ("" apaga a validade); active e autoGenerateCta são booleanos; groupId é o id entre colchetes no context; goalWeights traz "sales" e todos os objetivos marcados, somando 100.`,
+    `- ${cli} apply ${projectId} '<json>'  → aplica imediatamente uma mudança que o operador pediu e registra no histórico. O JSON é o mesmo de "propose". Se a ideia partiu de você e o operador ainda não confirmou, use "propose".`,
     'Regras:',
-    '- O plano você monta direto. Ofertas, percentuais do Raio-X e caderno você só PROPÕE; o operador aplica na tela.',
-    '- O caderno guarda o que vale sempre para esse cliente. Quando o operador disser algo que deve ser lembrado, ou que contradiz o caderno, proponha o caderno novo e diga o que sai e o que entra.',
+    '- Quando o operador pedir uma mudança de cadastro, aplique-a diretamente com "apply" e informe o que mudou. Use "propose" apenas para uma sugestão sua que ainda dependa de decisão do operador.',
+    '- Conversa livre, dúvidas, brainstorming e explicações não exigem plano nem proposta. Use as ferramentas apenas quando o operador pedir uma ação ou um planejamento.',
+    '- Não obrigue o operador a conhecer campos ou comandos. Se ele disser o objetivo em linguagem comum, como "quero ganhar seguidores e engajamento esta semana", traduza isso em percentuais, temas, formatos e horários coerentes, faça as alterações necessárias e monte o plano.',
+    '- Pergunte somente quando faltar uma decisão indispensável. Se o Raio-X, o caderno e a mensagem já derem contexto suficiente, tome uma decisão profissional, execute e explique brevemente o raciocínio.',
+    '- O plano contratado é a programação padrão do cliente. Se o operador pedir qualquer formato diferente — mais, menos, um único status, só stories, só feed ou outra combinação — trate o pedido como autorização pontual, use "allowOverage":true e registre o motivo. Continue respeitando horários de funcionamento, canais suportados e regras das ofertas.',
+    '- Se o operador pedir mais foco ou menos foco em uma meta, reorganize e aplique os percentuais do Raio-X com "goalWeights" completo, somando 100%, antes de montar o plano. Traduza objetivos de negócio como ganhar seguidores, engajamento, autoridade ou vendas em uma distribuição coerente e explique a decisão.',
+    '- A primeira rodada pode ser recusada quando o plano não respeitar as regras; leia a mensagem de validação e corrija o JSON.',
+    '- O caderno guarda o que vale sempre para esse cliente. Quando o operador disser algo que deve ser lembrado, ou que contradiz o caderno, aplique o caderno inteiro atualizado e diga o que saiu e o que entrou.',
     '- Combo junta só ofertas do mesmo setor. Oferta fora da validade não entra.',
     '- O Raio-X manda na divisão: oferta só entra em horário marcado [venda]. Nos horários de objetivo, escolha no banco de assuntos (topicId) o que faz sentido para a semana, sem repetir o que saiu há pouco.',
     '- Horário de funcionamento: só programe dentro dele. Dias fechados ficam sem post sozinhos, exceto o post de feriado ou data comemorativa. Se não estiver configurado, peça ao operador para configurar no Raio-X.',
     '- Horários: use o desempenho por horário. Hora com menos de 3 posts medidos está em teste. Enquanto houver horas abertas nunca testadas, ponha cerca de 1 em cada 3 posts numa hora nova (com "time") e diga quais são teste. Com 3 ou mais posts medidos, prefira as horas de maior alcance e cite os números. Nunca tire conclusão de um post só.',
-    '- Plano contratado é a regra fixa: monte exatamente os stories por dia (em todos os canais do story, mesma arte) e os feeds por semana. Para feed por semana, use o formato de feed diário e pule ("skip": true) os dias sem feed, escolhendo o melhor dia. O sistema recusa plano fora do contratado. Encartes são feitos à mão pelo operador: você não gera, só lembra quando houver.',
+    '- Sem um pedido diferente, siga exatamente o plano contratado: stories por dia em todos os canais cadastrados e feeds por semana. Para feed semanal, use o formato diário e pule ("skip": true) os dias sem feed, escolhendo o melhor dia. O cadastro permanece no Raio-X mesmo quando houver uma exceção pontual. Encartes são feitos à mão pelo operador: você não gera, só lembra quando houver.',
     '- Com poucas ofertas, repetir é normal: siga a sequência do rodízio (a que está há mais tempo sem sair vem primeiro) e só repita em dias seguidos quando não houver outra livre. Oferta sem setor não forma combo: se houver várias sem setor, proponha o setor delas para variar a semana com combos.',
     '- Oferta sem preço em post de venda: avise o operador.',
     '- Story, Reels, Facebook Story e Status do WhatsApp no mesmo horário dividem a mesma arte, assim como Feed e Facebook Feed: a oferta escolhida para um vale para todos.',

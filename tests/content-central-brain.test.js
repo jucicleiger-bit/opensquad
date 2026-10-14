@@ -53,13 +53,18 @@ test('an offer proposal captures before, applies, and refuses when data changed 
   });
 });
 
-test('a proposal is refused up front when what it would save is not valid', async () => {
+test('offer changes are normalized and invalid changes are refused up front', async () => {
   await withProject(async (dir) => {
     const { offer } = await saveProjectOffer('loja', { name: 'Arroz', type: 'offer' }, dir);
     const propose = (change) => createProposal('loja', { summary: 'x', changes: [{ kind: 'offer', offerId: offer.id, ...change }] }, dir);
-    await assert.rejects(propose({ field: 'price', after: '1' }), /não permitido/);
+    const price = await propose({ field: 'price', after: '297' });
+    assert.equal(price.changes[0].after, 'R$ 297,00');
+    await resolveProposal('loja', price.id, 'apply', dir);
+    assert.equal((await loadProjectForTest('loja', dir)).contentStrategy.offers[0].price, 'R$ 297,00');
+    await assert.rejects(propose({ field: 'name', after: '' }), /não pode ficar vazio/);
     await assert.rejects(propose({ field: 'validUntil', after: '20/10/2026' }), /AAAA-MM-DD/);
     await assert.rejects(propose({ field: 'active', after: 'false' }), /true ou false/);
+    await assert.rejects(propose({ field: 'autoGenerateCta', after: 'false' }), /true ou false/);
     await assert.rejects(propose({ field: 'groupId', after: 'nao-existe' }), /Grupo nao-existe não existe/);
     await assert.rejects(createProposal('loja', { summary: 'x', changes: [{ kind: 'apagar', after: 1 }] }, dir), /desconhecido/);
 
@@ -246,6 +251,10 @@ test('the prompt teaches time, bank topics and the Raio-X rules', () => {
   assert.match(prompt, /em teste/);
   assert.match(prompt, /AAAA-MM-DD-<canal>-NN/);
   assert.match(prompt, /primeira rodada pode ser recusada/);
+  assert.match(prompt, /apply loja/);
+  assert.match(prompt, /name\|price\|items\|cta/);
+  assert.match(prompt, /um único status/);
+  assert.match(prompt, /ganhar seguidores e engajamento/);
   assert.match(prompt, /Dias fechados ficam sem post sozinhos, exceto o post de feriado ou data comemorativa\./);
 });
 
@@ -306,6 +315,44 @@ test('the plan must follow the contracted plan; a weekly feed is the daily feed 
     const stored = await saveBrainPlan('loja', { startDate: '2026-10-12', days: 6, formats, slots }, dir);
     const feeds = stored.plan.dayPlans.flatMap((day) => day.regular).filter((slot) => slot.channel === 'instagram_feed');
     assert.deepEqual(feeds.map((slot) => slot.date), ['2026-10-15']);
+  });
+});
+
+test('the cérebro follows the contract by default and accepts any explicit operator exception', async () => {
+  await withProject(async (dir) => {
+    await updateProjectBusinessHours('loja', MON_TO_SAT_OPEN, dir);
+    await updateProjectContractedPlan('loja', { ...ESSENCIAL, feedsPerWeek: 0, feedChannels: [], storiesPerDay: 2 }, dir);
+    const extraStories = { ...TWO_STORIES_DAILY, postsPerDay: 3 };
+    await assert.rejects(
+      saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: [extraStories] }, dir),
+      /o contratado é 2 por dia/,
+    );
+
+    const stored = await saveBrainPlan('loja', {
+      startDate: '2026-10-12',
+      days: 1,
+      formats: [extraStories],
+      allowOverage: true,
+      overageReason: 'Quero três stories por dia nesta campanha.',
+    }, dir);
+    assert.equal(stored.allowOverage, true);
+    assert.equal(stored.overageReason, 'Quero três stories por dia nesta campanha.');
+    assert.match(stored.plan.warnings[0], /Exceção ao plano contratado/);
+
+    const singleStatus = [{ channel: 'whatsapp_status', postsPerDay: 1, everyDays: 1, startTime: '10:00', intervalMinutes: 0 }];
+    await assert.rejects(
+      saveBrainPlan('loja', { startDate: '2026-10-12', days: 1, formats: singleStatus }, dir),
+      /whatsapp_status não está no plano contratado/,
+    );
+    const exception = await saveBrainPlan('loja', {
+      startDate: '2026-10-12',
+      days: 1,
+      formats: singleStatus,
+      allowOverage: true,
+      overageReason: 'Quero somente um status hoje.',
+    }, dir);
+    assert.deepEqual(exception.plan.dayPlans[0].regular.map((slot) => slot.channel), ['whatsapp_status']);
+    assert.match(await buildBrainContext('loja', dir), /Exceção ao plano contratado autorizada pelo operador/);
   });
 });
 
