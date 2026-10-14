@@ -7,3 +7,9 @@ test('numeros.py self-check passes', () => {
   const out = execFileSync(process.env.PYTHON_BIN || 'python', ['src/video-motor/numeros.py'], { encoding: 'utf8' });
   assert.match(out, /ok/);
 });
+
+// direcao.py finds where the script starts when Gemini reads its direction aloud first.
+test('direcao.py self-check passes', () => {
+  const out = execFileSync(process.env.PYTHON_BIN || 'python', ['src/video-motor/direcao.py'], { encoding: 'utf8', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+  assert.match(out, /ok/);
+});

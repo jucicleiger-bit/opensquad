@@ -16,6 +16,7 @@ from pathlib import Path
 import aiohttp
 import edge_tts
 from numeros import falado
+from direcao import inicio_do_roteiro
 
 MAX_GAP = 0.22  # longest silence kept between two words, seconds
 TAIL = 0.15     # audio kept after the last word ends, seconds
@@ -69,8 +70,8 @@ def falar_gemini(texto, mp3, voice):
     key = env_key("OPENSQUAD_GEMINI_API_KEY")
     if not key:
         raise RuntimeError("sem OPENSQUAD_GEMINI_API_KEY no .env")
-    # Headed sections, as in Google's TTS prompting guide. With the direction as
-    # a plain paragraph the model read it aloud (2 of 2 tries); with headers, 0 of 3.
+    # Headed sections, as in Google's TTS prompting guide. The model still reads
+    # the notes aloud now and then (2 of 3 on 2026-10-14); alinhar trims them.
     estilo = re.sub(r"\s*Leia exatamente o texto abaixo.*$", "", direcao)
     body = json.dumps({
         "contents": [{"parts": [{"text": f"### DIRECTOR'S NOTES\n{estilo}\n\n#### TRANSCRIPT\n{texto}"}]}],
@@ -130,10 +131,6 @@ def alinhar(mp3, texto):
     out = subprocess.run([UV, "run", "--python", "3.11", "--with", "faster-whisper", "python", str(motor / "alinhar.py"), str(mp3), "small"],
                          capture_output=True, check=True, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     ouvidas = json.loads(out.stdout.decode("utf-8"))
-    # Gemini TTS sometimes reads its direction aloud before the script; the
-    # caller then falls back to Live, which takes the direction as a system prompt.
-    if re.search(r"\bleia\s+em\s+portugu", " ".join(w["w"] for w in ouvidas), re.I):
-        raise RuntimeError("a voz leu a direção em voz alta")
     # Whisper writes numbers as digits; the script spells them out. Split each
     # numeric token into its spoken words, sharing the token's time evenly.
     expandidas = []
@@ -143,6 +140,22 @@ def alinhar(mp3, texto):
         expandidas += [{"w": p, "t": round(w["t"] + i * d, 3), "d": round(d, 3)} for i, p in enumerate(pecas)]
     ouvidas = expandidas
     esperadas = tokens(texto)
+    # Gemini TTS often reads its direction aloud first ("Directors Notes. Leia em
+    # português…"), then the script after a pause. Cut the take where the script
+    # starts and keep Gemini's voice; only when the start can't be found does the
+    # caller fall back to Live.
+    limpa = lambda w: norm(re.sub(r"[^\w'-]", "", w))
+    inicio = inicio_do_roteiro([limpa(w["w"]) for w in ouvidas], [norm(w) for w in esperadas])
+    leu_direcao = re.search(r"\bleia\s+em\s+portugu|\bdirector", " ".join(w["w"] for w in ouvidas), re.I)
+    if inicio is None and leu_direcao:
+        raise RuntimeError("a voz leu a direção em voz alta")
+    if inicio:
+        t0 = max(0.0, ouvidas[inicio]["t"] - 0.12)
+        cortado = mp3.with_name(mp3.stem + "-cortado.mp3")
+        subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{t0:.3f}", "-i", str(mp3), "-b:a", "160k", str(cortado)], check=True)
+        cortado.replace(mp3)
+        ouvidas = [{**w, "t": round(w["t"] - t0, 3)} for w in ouvidas[inicio:]]
+        print(f"aviso: a voz leu a direção antes do roteiro; cortei os primeiros {t0:.1f}s")
     a = [norm(w) for w in esperadas]
     b = [norm(re.sub(r"[^\w'-]", "", w["w"])) for w in ouvidas]
     tempos = [None] * len(a)
