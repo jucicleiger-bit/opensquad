@@ -1702,3 +1702,145 @@ Expected: PASS.
 - [ ] **Step 3:** The operator makes a **Criação nova** for Frios Modelo (`arthur-frios`). Check the same things.
 - [ ] **Step 4:** If the products drag, lower `SEGUNDOS_POR_PRODUTO` in `src/content-central-video-produtos.js` (for example to 3). This also changes the padrão prompt text, through `duracaoTexto`. Re-run `node --test tests/content-central-video-produtos.test.js tests/content-central-video-jobs.test.js`.
 - [ ] **Step 5:** Run the final whole-branch review, then merge to master and push only when the operator asks. The operator restarts 3333.
+
+---
+
+### Task 8: The voice alignment hears spoken numbers (added after Task 2)
+
+This task was found while Task 2 made the locutor sample. It has two causes.
+- **Whisper writes numbers as digits.** It produces "13,99", "32", ",90" and "5kg", while the script spells them out ("treze e noventa e nove"). The words don't match, `alinhar()` falls under its 60% threshold, and the voice drops to the fallback. Every Oferta narration would hit this.
+- **Gemini TTS sometimes reads the direction aloud** ("Leia em português do Brasil, como locutor…") before the script.
+
+The fix is in the motor only. The files are disjoint from Tasks 4–6, and nothing depends on another task. It runs in wave 2, in parallel with Task 4.
+
+**Files:**
+- Create: `src/video-motor/numeros.py`
+- Modify: `src/video-motor/tts.py` (`alinhar`, about :123-152)
+- Test: `tests/video-motor-numeros.test.js` (new)
+
+**Interfaces:**
+- **Produces:** `numeros.falado(token: str) -> list[str]`, the spoken Portuguese words for one token as Whisper wrote it.
+  - It returns `[token]` unchanged when the token is not numeric.
+  - Leading and trailing punctuation is stripped before the check.
+- **Consumes:** nothing.
+
+- [ ] **Step 1: Write the failing test** `tests/video-motor-numeros.test.js`
+
+```js
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+
+// numeros.py carries its own assert-based self-check (python numeros.py).
+test('numeros.py self-check passes', () => {
+  const out = execFileSync(process.env.PYTHON_BIN || 'python', ['src/video-motor/numeros.py'], { encoding: 'utf8' });
+  assert.match(out, /ok/);
+});
+```
+
+- [ ] **Step 2: Run it and confirm it fails** (the file is missing).
+
+Run: `node --test tests/video-motor-numeros.test.js`
+
+- [ ] **Step 3: Create `src/video-motor/numeros.py`**
+
+```python
+# Whisper writes numbers as digits ("13,99", "5kg", ",90"); scripts spell them
+# out ("treze e noventa e nove"). falado() turns one heard token into the words
+# a narrator says, so alinhar() can match them. Same convention as
+# precoPorExtenso in src/content-central-video-produtos.js.
+import re
+
+UN = ["zero", "um", "dois", "três", "quatro", "cinco", "seis", "sete", "oito", "nove", "dez", "onze", "doze", "treze",
+      "quatorze", "quinze", "dezesseis", "dezessete", "dezoito", "dezenove"]
+DEZ = ["", "", "vinte", "trinta", "quarenta", "cinquenta", "sessenta", "setenta", "oitenta", "noventa"]
+CEM = ["", "cento", "duzentos", "trezentos", "quatrocentos", "quinhentos", "seiscentos", "setecentos", "oitocentos", "novecentos"]
+SUFIXOS = {"kg": ["quilos"], "g": ["gramas"], "l": ["litros"], "ml": ["mililitros"], "%": ["por", "cento"], "un": ["unidades"]}
+
+
+def _ate999(n):
+    if n == 100:
+        return "cem"
+    c, r = divmod(n, 100)
+    partes = [CEM[c]] if c else []
+    if r:
+        partes.append(UN[r] if r < 20 else DEZ[r // 10] + (f" e {UN[r % 10]}" if r % 10 else ""))
+    return " e ".join(partes)
+
+
+def _inteiro(n):
+    if n == 0:
+        return "zero"
+    mil, resto = divmod(n, 1000)
+    partes = []
+    if mil:
+        partes.append("mil" if mil == 1 else f"{_ate999(mil)} mil")
+    if resto:
+        partes.append(_ate999(resto))
+    return (" e " if mil and resto and (resto < 100 or resto % 100 == 0) else " ").join(partes)
+
+
+def falado(token):
+    t = token.strip(" .!?…;:\"'()").lower()
+    m = re.fullmatch(r",(\d{1,2})", t)  # Whisper sometimes splits "32 ,90"
+    if m:
+        return ["e"] + _inteiro(int(m.group(1).ljust(2, "0"))).split()
+    m = re.fullmatch(r"(?:r\$)?(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?(kg|g|l|ml|%|un)?", t)
+    if not m:
+        return [token]
+    out = _inteiro(int(m.group(1).replace(".", ""))).split()
+    if m.group(2):
+        out += ["e"] + _inteiro(int(m.group(2).ljust(2, "0"))).split()
+    return out + SUFIXOS.get(m.group(3) or "", [])
+
+
+if __name__ == "__main__":
+    assert falado("13,99") == "treze e noventa e nove".split()
+    assert falado("32") == ["trinta", "e", "dois"]
+    assert falado(",90") == ["e", "noventa"]
+    assert falado("5kg") == ["cinco", "quilos"]
+    assert falado("R$1.234,50") == "mil duzentos e trinta e quatro e cinquenta".split()
+    assert falado("1100") == ["mil", "e", "cem"]
+    assert falado("13,9!") == "treze e noventa".split()
+    assert falado("Fralda") == ["Fralda"]
+    print("ok")
+```
+
+- [ ] **Step 4: Change `alinhar` in `tts.py`**
+
+Add `from numeros import falado` with the imports. Python puts the script's own folder on the path, so the import works when `tts.py` runs as `python <motor>/tts.py`.
+
+In `alinhar`, right after `ouvidas = json.loads(...)`:
+
+```python
+    # Gemini TTS sometimes reads its direction aloud before the script; the
+    # caller then falls back to Live, which takes the direction as a system prompt.
+    if re.search(r"\bleia\s+em\s+portugu", " ".join(w["w"] for w in ouvidas), re.I):
+        raise RuntimeError("a voz leu a direção em voz alta")
+    # Whisper writes numbers as digits; the script spells them out. Split each
+    # numeric token into its spoken words, sharing the token's time evenly.
+    expandidas = []
+    for w in ouvidas:
+        pecas = falado(w["w"])
+        d = w["d"] / len(pecas)
+        expandidas += [{"w": p, "t": round(w["t"] + i * d, 3), "d": round(d, 3)} for i, p in enumerate(pecas)]
+    ouvidas = expandidas
+```
+
+The rest of `alinhar` is unchanged; it builds `b` from `ouvidas`.
+
+- [ ] **Step 5: Run the tests**
+
+Run: `node --test tests/video-motor-numeros.test.js tests/video-motor.test.js`. Also run `python -c "import ast,sys; ast.parse(open('src/video-motor/tts.py',encoding='utf-8').read())"` as a syntax check.
+Expected: PASS.
+
+- [ ] **Step 6: Real check (one Gemini call)**
+
+Make a temp folder with a `roteiro.json`:
+- `voz` is `gemini:Puck`;
+- `direcao` is the exact locutor direction from Global Constraints;
+- there is one cena with the fala "Olha só que oferta! Arroz de cinco quilos, de trinta e dois e noventa, por apenas vinte e nove e noventa! Corre!".
+
+Run `python src/video-motor/tts.py <tmp>`. Expected: `ok 1 cenas, …` with `gemini:Puck` or `gemini-live:Puck` as the voice used, not Brian. Paste the output into the report.
+
+If the free Gemini quota is exhausted (a 429 in the warnings), say so in the report instead.

@@ -12,3 +12,7 @@ Entregue só nesta pasta:
 Só escreva nesta pasta; não altere nada em `<MOTOR>` (player, render, regras, exemplos). Se aprender uma lição nova, anote no `NOTAS.md` deste vídeo.
 
 Não gere voz, não gere imagens, não renderize. Se houver `ajuste.txt`, ele traz o pedido de ajuste do operador sobre o roteiro atual: aplique-o.
+
+**Oferta:** se o briefing tiver `oferta`, leia `produtos.json` e REGRAS.md § Oferta antes de escrever. Se existir `roteiro-modelo.json`, parta dele; se não existir, parta do `roteiro.json` atual (que pode ter edições do operador) e devolva com marcadores no lugar dos preços.
+
+**Oferta — moldura e ritmo:** a linha "Moldura" do pedido diz a moldura do VT (o visual fixo: fundo, logo, selo da campanha, validade) e o ritmo. Se ela disser "você escolhe", escreva `"moldura": "<id>"` no `roteiro.json` com a moldura que combina com o assunto e a época. No **ritmo rápido** (3 s por produto), a fala de cada produto tem no máximo 6 palavras além dos marcadores: só o nome curto e o preço ("Omo de setecentos gramas, {preco}!", "Fralda IsaBaby, de {precoDe} por {preco}!"). No **calmo** (4 s) cabe uma frase a mais.

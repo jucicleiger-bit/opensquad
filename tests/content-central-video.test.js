@@ -1,12 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Jimp } from 'jimp';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import {
   STATUS, normalizeBriefing, createVideo, updateVideo, readVideoState, listVideos, saveRoteiroCenas, deleteVideo,
-  estimateSeconds, validateRoteiro, buildMarca, buildMaterialInventory, reconcileInterruptedVideos, requireVideoProject, videoDir, normalizeVideoAnimado,
+  estimateSeconds, validateRoteiro, duracaoAlvo, buildMarca, buildMaterialInventory, reconcileInterruptedVideos, requireVideoProject, videoDir, normalizeVideoAnimado,
 } from '../src/content-central-video.js';
 
 async function withDir(fn) {
@@ -83,7 +85,7 @@ test('validateRoteiro: errors block, objective mismatches and timing only warn',
   const ok = { cenas: [{ tipo: 'a', fala: 'Antes de anunciar, pensa.', descricao: 'x' }, { tipo: 'b', fala: 'Chama no WhatsApp!', descricao: 'y' }] };
   assert.deepEqual(validateRoteiro(ok, { ...briefing, duracao: 15 }).erros, []);
   assert.ok(validateRoteiro(ok, { ...briefing, duracao: 60 }).avisos.some((a) => /tempo/i.test(a)));
-  assert.ok(validateRoteiro(ok, { ...briefing, objetivo: 'alcance' }).avisos.some((a) => /pergunta/i.test(a)));
+  assert.ok(validateRoteiro(ok, { ...briefing, objetivo: 'alcance' }).avisos.some((a) => /enquete/i.test(a)));
   assert.ok(validateRoteiro({ cenas: [] }, briefing).erros.length > 0);
   assert.ok(validateRoteiro({ cenas: [{ tipo: 'a', fala: '' }] }, briefing).erros.length > 0);
 });
@@ -181,5 +183,118 @@ test('updateVideo clears the recorded failed/interrupted stage once a stage star
     const next = await updateVideo('king', video.id, { status: STATUS.PRODUCAO_GERANDO }, dir);
     assert.equal(next.etapaComErro, undefined);
     assert.equal(next.etapaInterrompida, undefined);
+  });
+});
+
+test('briefing accepts the v2 objectives, format, style, auto duration and locutor', () => {
+  const b = normalizeBriefing({ ...briefing, objetivo: 'aviso', formato: 'status', estilo: 'premium', duracao: 'auto', tom: 'locutor' });
+  assert.deepEqual([b.objetivo, b.formato, b.estilo, b.duracao, b.tom], ['aviso', 'status', 'premium', 'auto', 'locutor']);
+  const padrao = normalizeBriefing(briefing);
+  assert.deepEqual([padrao.formato, padrao.estilo], ['reels', 'livre']);
+  assert.throws(() => normalizeBriefing({ ...briefing, formato: 'tv' }), (err) => err.status === 400);
+  assert.throws(() => normalizeBriefing({ ...briefing, estilo: 'cinematografico' }), (err) => err.status === 400);
+  assert.throws(() => normalizeBriefing({ ...briefing, objetivo: 'oferta' }), (err) => err.status === 400 && /produtos/.test(err.message));
+});
+
+test('validateRoteiro: auto duration has no time warning; alcance may close with salva/compartilha', () => {
+  const cenas = [{ tipo: 'a', fala: 'Dica rápida de hoje.', descricao: 'x' }, { tipo: 'b', fala: 'Salva pra não esquecer e segue a gente.', descricao: 'y' }];
+  assert.deepEqual(validateRoteiro({ cenas }, { objetivo: 'alcance', duracao: 'auto', formato: 'reels' }).avisos, []);
+  assert.deepEqual(validateRoteiro({ cenas }, { objetivo: 'institucional', duracao: 'auto', formato: 'reels' }).avisos, []);
+  const status = validateRoteiro({ cenas }, { objetivo: 'aviso', duracao: 'auto', formato: 'status' }).avisos;
+  assert.ok(status.some((a) => /WhatsApp/.test(a)));
+});
+
+test('duracaoAlvo is the number of seconds, or null for auto', () => {
+  assert.equal(duracaoAlvo({ duracao: 30 }), 30);
+  assert.equal(duracaoAlvo({ duracao: 'auto' }), null);
+});
+
+async function comOferta(dir, projectId = 'king') {
+  const paths = getCentralPaths(dir, projectId);
+  await mkdir(join(paths.projectDir, 'assets', 'references'), { recursive: true });
+  const im = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+  for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) im.setPixelColor(0x202020ff, x, y);
+  await im.write(join(paths.projectDir, 'assets', 'references', 'fralda.png'));
+  const project = JSON.parse(await readFile(paths.projectPath, 'utf8'));
+  project.offerAssets = [{ id: 'f1', relativePath: 'assets/references/fralda.png', previewUrl: '/p/fralda.png' }];
+  project.contentStrategy = { ...(project.contentStrategy || {}), offers: [{ id: 'fralda', name: 'Fralda IsaBaby', type: 'offer', price: 'R$ 13,99', originalPrice: 'R$ 16,99', priceUnit: 'un', photoReferenceIds: ['f1'] }] };
+  await writeFile(paths.projectPath, JSON.stringify(project));
+}
+const ofertaBriefing = { ...briefing, objetivo: 'oferta', tom: 'locutor', oferta: { produtos: [{ id: 'fralda' }], validoAte: '2026-10-18', criacao: 'nova' } };
+
+test('createVideo snapshots the Oferta products', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    assert.deepEqual(video.briefing.oferta.produtos.map((p) => [p.id, p.preco, p.precoDe, p.fotoTipo]), [['fralda', 1399, 1699, 'recorte']]);
+    await assert.rejects(createVideo('king', { ...ofertaBriefing, oferta: { produtos: [{ id: 'nao' }] } }, dir), (e) => e.status === 400);
+  });
+});
+
+test('listVideos includes the frame of an Oferta, null otherwise', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const oferta = await createVideo('king', ofertaBriefing, dir);
+    const outro = await createVideo('king', briefing, dir);
+    const list = await listVideos('king', dir);
+    assert.equal(list.find((v) => v.id === oferta.id).moldura, 'encarte');
+    assert.equal(list.find((v) => v.id === outro.id).moldura, null);
+  });
+});
+
+test('saveRoteiroCenas on an Oferta keeps the spoken prices', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const cenas = [{ tipo: 'p', produto: 'fralda', fala: 'Fralda por treze e noventa e nove!', descricao: 'x' }];
+    await saveRoteiroCenas('king', video.id, cenas, dir);
+    await assert.rejects(saveRoteiroCenas('king', video.id, [{ ...cenas[0], fala: 'Fralda baratinha!' }], dir), (e) => e.status === 400 && /treze e noventa e nove/.test(e.message));
+  });
+});
+
+test('readVideoState lists the Oferta products from the snapshot before the folder is prepared', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    const state = await readVideoState('king', video.id, dir);
+    assert.deepEqual(state.produtos.map((p) => [p.id, p.precoTela, p.precoDeTela, p.fotoTipo]), [['fralda', 'R$ 13,99', 'R$ 16,99', 'recorte']]);
+    const outro = await createVideo('king', briefing, dir);
+    assert.deepEqual((await readVideoState('king', outro.id, dir)).produtos, []);
+  });
+});
+
+test('saveRoteiroCenas on an Oferta drops the stale roteiro-modelo.json', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const modelo = join(videoDir(dir, 'king', video.id), 'roteiro-modelo.json');
+    await writeFile(modelo, '{"cenas":[]}');
+    await saveRoteiroCenas('king', video.id, [{ tipo: 'p', produto: 'fralda', fala: 'Fralda por treze e noventa e nove!', descricao: 'x' }], dir);
+    assert.equal(existsSync(modelo), false);
+  });
+});
+
+test('saveRoteiroCenas on an Oferta keeps roteiro-modelo.json when the scenes are unchanged, drops it when a fala is edited', async () => {
+  await withDir(async (dir) => {
+    await createCentralProject({ projectId: 'king', name: 'King' }, dir);
+    await comOferta(dir);
+    const video = await createVideo('king', ofertaBriefing, dir);
+    await updateVideo('king', video.id, { status: STATUS.ROTEIRO_PRONTO }, dir);
+    const vdir = videoDir(dir, 'king', video.id);
+    const cenas = [{ tipo: 'p', produto: 'fralda', fala: 'Fralda por treze e noventa e nove!', descricao: 'x' }];
+    await writeFile(join(vdir, 'roteiro.json'), JSON.stringify({ cenas }));
+    const modelo = join(vdir, 'roteiro-modelo.json');
+    await writeFile(modelo, '{"cenas":[]}');
+    await saveRoteiroCenas('king', video.id, cenas, dir);
+    assert.equal(existsSync(modelo), true);
+    await saveRoteiroCenas('king', video.id, [{ ...cenas[0], fala: 'A fralda sai por treze e noventa e nove!' }], dir);
+    assert.equal(existsSync(modelo), false);
   });
 });

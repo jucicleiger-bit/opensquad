@@ -1,0 +1,2 @@
+{ "produtos": [{ "id": "a", "nome": "Fralda", "precoTela": "R$ 13,99", "precoDeTela": "R$ 16,99", "precoFalado": "treze e noventa e nove", "unidade": "un", "foto": "fotos/produto-a.png", "fotoTipo": "recorte" }],
+  "loja": { "nome": "Mercado Teste", "endereco": "Rua 1, 2", "whatsapp": "65 0000-0000", "horario": "seg a sáb 08:00–18:00", "validoAte": "2026-10-18", "validade": "domingo, dia 18" } }

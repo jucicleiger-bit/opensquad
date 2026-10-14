@@ -158,6 +158,7 @@ import {
   STATUS as VIDEO_STATUS, requireVideoProject, createVideo, listVideos, readVideoState, readVideo, updateVideo, saveRoteiroCenas, deleteVideo, reconcileInterruptedVideos, videoDir,
 } from './content-central-video.js';
 import { createVideoJobs } from './content-central-video-jobs.js';
+import { listarProdutosVideo } from './content-central-video-produtos.js';
 import { upsertQueueItem, removeQueueItem, pullQueue, readQueueItem, syncQueue } from './gaveta-sync.js';
 import { runSocialSellingRadarSweep, runSocialSellingEngagementSweep } from './social-selling-sweep.js';
 import { discoverSocialSellingCandidates, performSocialSellingAction, closeSocialSellingBrowser } from './social-selling-browser.js';
@@ -921,9 +922,13 @@ async function handleRequest(req, res, targetDir, context = {}) {
   // with their status so the tab can show them.
   if (parts[3] === 'videos') {
     try {
-      await requireVideoProject(projectId, targetDir);
+      const videoProject = await requireVideoProject(projectId, targetDir);
       const jobs = context.videoJobs;
       const vid = parts[4];
+      if (method === 'GET' && parts.length === 5 && vid === 'produtos') {
+        const produtos = (await listarProdutosVideo(videoProject, targetDir)).map((p) => ({ ...p, preco: undefined, precoDe: undefined })); // cents stay server-side (JSON drops undefined)
+        return sendJson(res, 200, { produtos });
+      }
       if (method === 'GET' && parts.length === 4) return sendJson(res, 200, { videos: await listVideos(projectId, targetDir) });
       if (method === 'POST' && parts.length === 4) {
         const video = await createVideo(projectId, await readBody(req), targetDir);
@@ -952,6 +957,7 @@ async function handleRequest(req, res, targetDir, context = {}) {
             const pedido = String(body.pedido || '').trim();
             if (!pedido) throw Object.assign(new Error('Escreva o ajuste.'), { status: 400 });
             if (body.etapa === 'roteiro') { exige(VIDEO_STATUS.ROTEIRO_PRONTO); return await iniciar(VIDEO_STATUS.ROTEIRO_GERANDO, 'roteiro', { ajuste: pedido }); }
+            if (body.etapa === 'producao' && video.briefing.oferta?.criacao === 'padrao') throw Object.assign(new Error('VT padrão: para mudar o visual, use Criação nova.'), { status: 400 });
             if (body.etapa === 'producao') { exige(VIDEO_STATUS.PREVIA_PRONTA); return await iniciar(VIDEO_STATUS.PRODUCAO_GERANDO, 'producao', { ajuste: pedido }); }
             throw Object.assign(new Error('Etapa de ajuste inválida.'), { status: 400 });
           }
@@ -6129,8 +6135,8 @@ function sendJson(res, status, body) {
 }
 
 const videoReservas = new Set(); // `${projectId}/${vid}` with a mutation in flight
-const VIDEO_FILES = /^(video\.mp4|trecho\.mp4|voz\/narracao\.(mp3|txt)|legenda-post\.txt|NOTAS\.md|stills\/t[\d.]+\.jpg)$/;
-const VIDEO_MIME = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.jpg': 'image/jpeg' };
+const VIDEO_FILES = /^(video\.mp4|trecho\.mp4|voz\/narracao\.(mp3|txt)|legenda-post\.txt|NOTAS\.md|stills\/t[\d.]+\.jpg|fotos\/produto-[a-z0-9-]+\.(png|jpe?g|webp))$/;
+const VIDEO_MIME = { '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 
 // Whitelisted files of a video folder; MP4/MP3 honour Range so the player can seek.
 function sendVideoFile(req, res, dir, name) {

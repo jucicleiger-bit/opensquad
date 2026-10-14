@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
+import { Jimp } from 'jimp';
 import { startContentCentralServer } from '../src/content-central-server.js';
 import { createCentralProject, getCentralPaths } from '../src/content-central.js';
 import { STATUS, readVideo, updateVideo, videoDir } from '../src/content-central-video.js';
@@ -147,6 +148,22 @@ test('files are served from a whitelist, the MP4 honours Range', async () => {
   });
 });
 
+test('Oferta product photos are served, other files under fotos/ are not', async () => {
+  await withServer(async (dir, server) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const vdir = videoDir(dir, 'king', body.video.id);
+    await mkdir(join(vdir, 'fotos'), { recursive: true });
+    await writeFile(join(vdir, 'fotos', 'produto-abc.png'), 'png');
+    await writeFile(join(vdir, 'fotos', 'logo.png'), 'png');
+    const base = `${server.url}/api/projects/king/videos/${body.video.id}/arquivo`;
+    const foto = await realFetch(`${base}/fotos/produto-abc.png`);
+    assert.equal(foto.status, 200);
+    assert.equal(foto.headers.get('content-type'), 'image/png');
+    assert.equal((await realFetch(`${base}/fotos/logo.png`)).status, 404);
+    assert.equal((await realFetch(`${base}/fotos/../video.json`)).status, 404);
+  });
+});
+
 test('retomar reruns the stage recorded for the current status, never a stale one', async () => {
   await withServer(async (dir, server, enqueued) => {
     const { body } = await call(server, '/api/projects/king/videos', briefing);
@@ -222,5 +239,41 @@ test('caption previews and voice samples from the app build play on Safari (type
     assert.equal(trecho.status, 206);
     assert.equal(trecho.headers.get('content-type'), 'video/mp4');
     assert.equal((await trecho.arrayBuffer()).byteLength, 10);
+  });
+});
+
+test('GET videos/produtos lists the offers with their usable state', async () => {
+  await withServer(async (dir, server) => {
+    const paths = getCentralPaths(dir, 'king');
+    await mkdir(join(paths.projectDir, 'assets', 'references'), { recursive: true });
+    const im = new Jimp({ width: 40, height: 40, color: 0xffffffff });
+    for (let y = 10; y < 30; y++) for (let x = 10; x < 30; x++) im.setPixelColor(0x202020ff, x, y);
+    await im.write(join(paths.projectDir, 'assets', 'references', 'fralda.png'));
+    const project = JSON.parse(await readFile(paths.projectPath, 'utf8'));
+    project.offerAssets = [{ id: 'f1', relativePath: 'assets/references/fralda.png', previewUrl: '/p/fralda.png' }];
+    project.contentStrategy = { ...(project.contentStrategy || {}), offers: [
+      { id: 'fralda', name: 'Fralda IsaBaby', type: 'offer', price: 'R$ 13,99', originalPrice: 'R$ 16,99', priceUnit: 'un', photoReferenceIds: ['f1'] },
+      { id: 'ruim', name: 'Ruim', type: 'offer', price: 'barato', photoReferenceIds: ['f1'] },
+    ] };
+    await writeFile(paths.projectPath, JSON.stringify(project));
+    const r = await call(server, '/api/projects/king/videos/produtos');
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.body.produtos.map((p) => [p.id, p.motivo]), [['fralda', null], ['ruim', 'preço inválido']]);
+    assert.equal(r.body.produtos[0].precoTela, 'R$ 13,99');
+    assert.equal('preco' in r.body.produtos[0], false);
+  });
+});
+
+test('a visual ajuste on a VT padrão prévia is refused', async () => {
+  await withServer(async (dir, server, enqueued) => {
+    const { body } = await call(server, '/api/projects/king/videos', briefing);
+    const id = body.video.id;
+    const video = await readVideo('king', id, dir);
+    await updateVideo('king', id, { status: STATUS.PREVIA_PRONTA, briefing: { ...video.briefing, oferta: { produtos: [], criacao: 'padrao' } } }, dir);
+    const before = enqueued.length;
+    const r = await call(server, `/api/projects/king/videos/${id}/ajuste`, { etapa: 'producao', pedido: 'muda a cor' });
+    assert.equal(r.status, 400);
+    assert.match(r.body.error, /Criação nova/);
+    assert.equal(enqueued.length, before);
   });
 });

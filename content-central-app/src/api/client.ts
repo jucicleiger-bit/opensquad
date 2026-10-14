@@ -1921,18 +1921,32 @@ export function saveBrainNotebook(projectId: string, text: string): Promise<{ no
 }
 
 export type VideoStatus = "roteiro_gerando" | "roteiro_pronto" | "producao_gerando" | "previa_pronta" | "render_gerando" | "pronto" | "erro" | "aguardando_limite" | "interrompido";
-export interface VideoBriefing { assunto: string; objetivo: "alcance" | "anuncio"; duracao: 15 | 30 | 45 | 60; tom: "criador" | "vendedor"; legenda: "simples" | "karaoke" | "pop" | "destaque" | "caixa" | "do-video" | "sem"; observacao?: string }
-export interface VideoCena { tipo: string; fala: string; descricao: string; segura?: number }
-export interface VideoSummary { id: string; assunto: string; objetivo: string; duracao: number; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; temVideo: boolean }
+export type VideoObjetivo = "alcance" | "anuncio" | "oferta" | "institucional" | "aviso";
+export interface VideoOfertaInput { produtos: Array<{ id: string; foto?: "recorte" | "moldura" }>; validoAte: string; criacao: "nova" | "padrao"; moldura: "encarte" | "diagonal" | "neon" | "auto"; ritmo: "rapido" | "calmo"; campanha: string }
+export interface VideoOfertaSnapshot { produtos: Array<{ id: string; nome: string; preco: number; precoDe: number | null; unidade: string; fotoOrigem: string; fotoTipo: "transparente" | "recorte" | "moldura" }>; validoAte: string; criacao: "nova" | "padrao"; moldura: "encarte" | "diagonal" | "neon" | "auto"; ritmo: "rapido" | "calmo"; campanha: string; precosEm: string }
+export interface VideoBriefing {
+  assunto: string; objetivo: VideoObjetivo; formato?: "reels" | "status"; estilo?: "livre" | "dinamico" | "mercado" | "premium" | "informativo";
+  duracao: 15 | 30 | 45 | 60 | "auto"; tom: "criador" | "vendedor" | "locutor";
+  legenda: "simples" | "karaoke" | "pop" | "destaque" | "caixa" | "do-video" | "sem"; observacao?: string;
+  oferta?: VideoOfertaInput | VideoOfertaSnapshot;
+}
+export interface VideoCena { tipo: string; fala: string; descricao: string; segura?: number; produto?: string }
+export interface VideoProduto { id: string; nome: string; precoTela: string; precoDeTela: string; unidade: string; validoAte: string; previewUrl: string; foto: string | null; fotoTipo: "transparente" | "branco" | "fundo" | null; motivo: "sem preço" | "preço inválido" | "sem foto" | null }
+export interface VideoSummary { id: string; assunto: string; objetivo: string; duracao: number | "auto"; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; temVideo: boolean; moldura: string | null }
 export interface VideoRecord { id: string; projectId: string; briefing: VideoBriefing; status: VideoStatus; erro: string | null; criadoEm: string; atualizadoEm: string; etapaComErro?: "roteiro" | "producao" | "render"; etapaInterrompida?: VideoStatus }
 export interface VideoState {
-  video: VideoRecord; roteiro: { cenas: VideoCena[] } | null; estimativa: number | null; avisos: string[]; stills: string[];
+  video: VideoRecord; roteiro: { cenas: VideoCena[]; moldura?: string } | null; estimativa: number | null; avisos: string[]; stills: string[];
   arquivos: { video: boolean; narracaoMp3: boolean; narracaoTxt: boolean; legendaPost: boolean; notas: boolean }; vozUsada: string | null; ocupado: boolean;
+  // Oferta only (empty otherwise); `foto` is relative to the video folder and "" while the roteiro is still generating.
+  produtos: Array<{ id: string; nome: string; precoTela: string; precoDeTela: string; foto: string; fotoTipo: string }>;
 }
 const videosPath = (projectId: string, rest = "") => `/api/projects/${encodeURIComponent(projectId)}/videos${rest}`;
 export const videoFileUrl = (projectId: string, videoId: string, name: string) => videosPath(projectId, `/${encodeURIComponent(videoId)}/arquivo/${name}`);
 export function listVideos(projectId: string): Promise<{ videos: VideoSummary[] }> {
   return api(videosPath(projectId));
+}
+export function listVideoProdutos(projectId: string): Promise<{ produtos: VideoProduto[] }> {
+  return api(videosPath(projectId, "/produtos"));
 }
 export function createVideo(projectId: string, briefing: VideoBriefing): Promise<{ video: VideoRecord }> {
   return api(videosPath(projectId), { method: "POST", body: JSON.stringify(briefing) });

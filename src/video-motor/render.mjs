@@ -38,7 +38,7 @@ async function ensureSounds() {
 }
 
 // /_motor/* from the motor folder, /v/* from the video folder; nothing else.
-function serve(videoDir) {
+export function serve(videoDir) {
   const roots = { _motor: resolve(MOTOR_DIR), v: resolve(videoDir) };
   const server = createServer(async (req, res) => {
     try {
@@ -89,16 +89,42 @@ export async function renderVideo({ videoDir, stills = null, legenda = null, tre
     const length = trecho ? trecho[1] - t0 : duration;
     const out = join(videoDir, trecho ? 'trecho.mp4' : 'video.mp4');
     const tracks = [
-      ...voz.map((v) => ({ file: join(videoDir, v.arquivo), t: v.inicio - t0, vol: 1 })),
-      ...sfx.map((c) => ({ file: join(MOTOR_DIR, 'sfx', `${c.s}.wav`), t: c.t - t0, vol: VOLUME[c.s] })),
+      ...voz.map((v) => ({ tipo: 'voz', file: join(videoDir, v.arquivo), t: v.inicio - t0, vol: 1 })),
+      ...sfx.map((c) => ({ tipo: 'sfx', file: join(MOTOR_DIR, 'sfx', `${c.s}.wav`), t: c.t - t0, vol: VOLUME[c.s] })),
     ].filter((tr) => tr.t < length && tr.t > -60);
     const delays = tracks.map((tr, i) => {
       const ms = Math.max(0, Math.round(tr.t * 1000));
       const cut = tr.t < 0 ? `atrim=start=${-tr.t},asetpts=PTS-STARTPTS,` : '';
       return `[${i + 1}:a]${cut}aformat=sample_rates=44100:channel_layouts=stereo,adelay=${ms}|${ms},volume=${tr.vol}[a${i}]`;
     });
-    const mix = `${delays.join(';')};${tracks.map((_, i) => `[a${i}]`).join('')}amix=inputs=${tracks.length}:normalize=0:duration=longest,loudnorm=I=-14:TP=-1.5:LRA=11[a]`;
-    const ff = spawn('ffmpeg', ['-y', '-v', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-', ...tracks.flatMap((tr) => ['-i', tr.file]),
+    // Music bed (roteiro.trilha): looped, ducked by the voice, faded out at the end. Never fails a render.
+    const roteiro = JSON.parse(await readFile(join(videoDir, 'roteiro.json'), 'utf8'));
+    const trilha = roteiro.trilha ? join(MOTOR_DIR, 'trilhas', roteiro.trilha) : null;
+    const comTrilha = Boolean(trilha && existsSync(trilha));
+    if (trilha && !comTrilha) console.warn(`aviso: trilha ${roteiro.trilha} não encontrada; vídeo sem música`);
+    const ivoz = tracks.map((tr, i) => (tr.tipo === 'voz' ? `[a${i}]` : null)).filter(Boolean);
+    const isfx = tracks.map((tr, i) => (tr.tipo === 'sfx' ? `[a${i}]` : null)).filter(Boolean);
+    let mix;
+    if (!ivoz.length) {
+      // no voice (cannot happen in a finished video): plain mix, no music
+      mix = `${delays.join(';')};${tracks.map((_, i) => `[a${i}]`).join('')}amix=inputs=${tracks.length}:normalize=0:duration=longest,loudnorm=I=-14:TP=-1.5:LRA=11[a]`;
+    } else {
+      const m = tracks.length + 1; // ffmpeg input index of the music (0 is the video pipe)
+      const partes = [delays.join(';')];
+      // Voices are split: one copy for the mix, one as the key that ducks the music. Padded to the full
+      // length so duration=first below keeps the music (and effects) after the narration ends.
+      partes.push(`${ivoz.join('')}amix=inputs=${ivoz.length}:normalize=0,apad=whole_dur=${length},asplit=2[voz][chave]`);
+      let finais = '[voz]';
+      if (isfx.length) { partes.push(`${isfx.join('')}amix=inputs=${isfx.length}:normalize=0[sfx]`); finais += '[sfx]'; }
+      if (comTrilha) {
+        partes.push(`[${m}:a]atrim=start=${Math.max(0, t0)},asetpts=PTS-STARTPTS,atrim=0:${length},aformat=sample_rates=44100:channel_layouts=stereo,volume=0.32,afade=t=out:st=${Math.max(0, length - 1.2)}:d=1.2[musica]`);
+        partes.push('[musica][chave]sidechaincompress=threshold=0.02:ratio=8:attack=15:release=350[fundo]');
+        finais += '[fundo]';
+      } else partes.push('[chave]anullsink');
+      const n = 1 + (isfx.length ? 1 : 0) + (comTrilha ? 1 : 0);
+      mix = `${partes.join(';')};${finais}amix=inputs=${n}:normalize=0:duration=first,loudnorm=I=-14:TP=-1.5:LRA=11[a]`;
+    }
+    const ff = spawn('ffmpeg', ['-y', '-v', 'error', '-f', 'image2pipe', '-framerate', String(FPS), '-c:v', 'mjpeg', '-i', '-', ...tracks.flatMap((tr) => ['-i', tr.file]), ...(comTrilha && ivoz.length ? ['-stream_loop', '-1', '-i', trilha] : []),
       '-filter_complex', mix, '-map', '0:v', '-map', '[a]',
       '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ar', '44100', '-movflags', '+faststart', '-t', String(length), out], { stdio: ['pipe', 'ignore', 'pipe'] });
     let ffErr = '';

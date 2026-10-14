@@ -38,6 +38,7 @@
   #fx { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
   #vignette { position: absolute; inset: 0; z-index: 55; pointer-events: none; background: radial-gradient(ellipse at 50% 45%, transparent 55%, #000c 100%); }
   #flash { position: absolute; inset: 0; z-index: 58; background: #fff; opacity: 0; pointer-events: none; }
+  #fixo { position: absolute; inset: 0; z-index: 56; pointer-events: none; }
   #streak { position: absolute; left: -50%; width: 200%; height: 160px; top: 400px; z-index: 57; opacity: 0; pointer-events: none; background: linear-gradient(180deg, transparent, #fff6d0aa 45%, #ffffff 50%, #fff6d0aa 55%, transparent); filter: blur(10px); }
 </style>
 </head>
@@ -49,6 +50,7 @@
   <div id="vignette"></div>
   <div id="streak"></div>
   <div id="flash"></div>
+  <div id="fixo"></div>
   <div id="cap"></div>
 </div>
 
@@ -73,6 +75,7 @@ const brk = (s) => { const w = String(s ?? '').split(' '); const h = Math.ceil(w
 // The renderer serves the video folder at /v/ and the motor at /_motor/.
 const asset = (path) => `/v/${path}`;
 const obj = (name) => asset(`objetos/${name}.png`);
+const carregar = (src, erro) => new Promise((ok, rej) => { const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = () => rej(new Error(erro)); document.head.appendChild(sc); });
 
 let VIDEO = {}, cam = { y: 0 };
 var R; // global so legendas.js can read the brand color
@@ -203,6 +206,7 @@ function seek(t) {
   }
   $('cam').style.transform = shake ? `translate(${Math.sin(t * 90) * 9 * shake}px, ${Math.cos(t * 77) * 7 * shake}px)` : VIDEO.estrelas === false ? '' : `rotateZ(${Math.sin(t * 0.9) * 0.8}deg)`;
   VIDEO.quadro?.(t);
+  if (window.MOLDURA) window.MOLDURA.fixo.frame(t, (k) => $('fixo').querySelector(`[data-k="${k}"]`));
   $('flash').style.opacity = flash;
   layers(t);
   caption(t);
@@ -210,8 +214,26 @@ function seek(t) {
 
 window.ready = (async () => {
   R = await (await fetch(asset('roteiro.json'))).json();
+  // Oferta videos bring products and store data; on-screen prices come only from here.
+  const prod = await fetch(asset('produtos.json'));
+  const dados = prod.ok ? await prod.json() : {};
+  window.PRODUTOS = dados.produtos || [];
+  window.LOJA = dados.loja || {};
+  // VT frames (Oferta): the kit and the chosen frame come before cenas.js, which may build on them.
+  // The frame's fixed layer (logo, campaign, validity) is drawn here, so no cenas.js can drop it.
+  if (R.moldura) {
+    await carregar('/_motor/vt/kit.js', 'vt/kit.js não encontrado');
+    await carregar(`/_motor/vt/molduras/${encodeURIComponent(R.moldura)}/moldura.js`, `moldura "${R.moldura}" não encontrada`);
+    const M = window.MOLDURA;
+    if (M.fontes) {
+      const link = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: M.fontes });
+      await new Promise((ok) => { link.onload = ok; link.onerror = ok; document.head.appendChild(link); });
+    }
+    document.head.insertAdjacentHTML('beforeend', `<style>${window.VT.cssBase}${M.css || ''}</style>`);
+    $('fixo').innerHTML = M.fixo.html(window.LOJA, R.campanha || '', R.marca || {});
+  }
   // A video can bring its own scenes, look and cuts in <pasta>/cenas.js.
-  await new Promise((ok, rej) => { const sc = document.createElement('script'); sc.src = asset('cenas.js'); sc.onload = ok; sc.onerror = () => rej(new Error('cenas.js não encontrado na pasta do vídeo')); document.head.appendChild(sc); });
+  await carregar(asset('cenas.js'), 'cenas.js não encontrado na pasta do vídeo');
   VIDEO = window.VIDEO || {};
   Object.assign(TYPES, VIDEO.tipos || {});
   if (VIDEO.fontes) {
@@ -221,6 +243,7 @@ window.ready = (async () => {
   if (VIDEO.css) document.head.insertAdjacentHTML('beforeend', `<style>${VIDEO.css}</style>`);
   document.head.insertAdjacentHTML('beforeend', `<style>${LEGENDAS_CSS}</style>`);
   build(await (await fetch(asset('voz/tempos.json'))).json());
+  window.CENAS = S;
   buildChunks();
   // Fonts only download once text uses them: visit every scene first, so the
   // very first frame never renders with invisible (still loading) text.

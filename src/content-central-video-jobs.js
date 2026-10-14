@@ -5,25 +5,30 @@
 import { spawn } from 'node:child_process';
 import { copyFile, writeFile, rm, cp, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readJson, writeJson, getCentralPaths } from './content-central.js';
 import {
   STATUS, requireVideoProject, readVideo, updateVideo, videoDir, validateRoteiro, buildMarca, buildMaterialInventory, normalizeVideoAnimado,
 } from './content-central-video.js';
+import {
+  MOLDURAS, SEGUNDOS_POR_PRODUTO, CAMPANHA_PADRAO, precoNaTela, precoPorExtenso, recortarFundoBranco, validateRoteiroOferta, expandirRoteiro, validadePorExtenso, legendaPostOferta,
+} from './content-central-video-produtos.js';
 
 const MOTOR_DIR = fileURLToPath(new URL('./video-motor/', import.meta.url));
 const MOTOR_PROMPT = MOTOR_DIR.replaceAll('\\', '/').replace(/\/+$/, ''); // Git Bash loses backslashes
 const CLAUDE_TIMEOUT_MS = 45 * 60 * 1000;
+const TTS_TIMEOUT_MS = 10 * 60 * 1000;
 const CLOCK_SLACK_MS = 2000; // coarse filesystem timestamps
 
 export const DIRECOES = {
   criador: 'Leia em português do Brasil, como um criador de conteúdo de Instagram: animado, sorrindo, ritmo rápido, com energia e variação de entonação, dando ênfase nas palavras importantes. Leia exatamente o texto abaixo, sem acrescentar nada:',
   vendedor: 'Leia em português do Brasil, como um vendedor simpático e confiante de loja de bairro: próximo, caloroso e natural, sem exagero, com ritmo de anúncio de Instagram. Leia exatamente o texto abaixo, sem acrescentar nada:',
+  locutor: 'Leia em português do Brasil, como locutor de comercial de supermercado na TV e no rádio: muita energia, sorriso na voz, ritmo rápido, ênfase forte nos nomes dos produtos e nos preços, como quem anuncia uma oferta imperdível. Leia exatamente o texto abaixo, sem acrescentar nada:',
 };
 
 export function isUsageLimit(text) {
-  return /usage limit|hit your limit|limit reached|limite de uso/i.test(String(text || ''));
+  return /usage limit|session limit|hit your (\w+ )?limit|limit reached|limite de uso/i.test(String(text || ''));
 }
 
 // Killing only claude.exe would leave its Bash children (Chromium, python,
@@ -67,6 +72,21 @@ export function runClaudeCode({ prompt, cwd, addDirs = [], timeoutMs = CLAUDE_TI
 }
 
 const defaultRenderer = async (opts) => (await import('./video-motor/render.mjs')).renderVideo(opts);
+const defaultChecador = async (opts) => (await import('./video-motor/checar.mjs')).checarVideo(opts);
+
+const DIAS_CURTOS = { mon: 'seg', tue: 'ter', wed: 'qua', thu: 'qui', fri: 'sex', sat: 'sáb', sun: 'dom' };
+// "seg a sex 08:00–18:00 · sáb 08:00–12:00": days with the same hours are grouped.
+function resumoHorario(hours) {
+  if (!hours || typeof hours !== 'object') return '';
+  const grupos = [];
+  for (const [dia, curto] of Object.entries(DIAS_CURTOS)) {
+    const faixa = (hours[dia] || []).map((f) => `${f.from}–${f.to}`).join(', ');
+    if (!faixa) continue;
+    const ultimo = grupos[grupos.length - 1];
+    if (ultimo && ultimo.faixa === faixa) ultimo.ate = curto; else grupos.push({ de: curto, ate: curto, faixa });
+  }
+  return grupos.map((g) => `${g.de === g.ate ? g.de : `${g.de} a ${g.ate}`} ${g.faixa}`).join(' · ');
+}
 
 async function prepareFolder(project, video, dir, targetDir) {
   const settings = normalizeVideoAnimado(project.videoAnimado, project.projectId);
@@ -82,6 +102,24 @@ async function prepareFolder(project, video, dir, targetDir) {
   });
   await writeJson(join(dir, 'material.json'), await buildMaterialInventory(settings.projetosDeMaterial, targetDir));
   if (temLogo) await copyFile(logo, join(dir, 'fotos', 'logo.png'));
+  const oferta = video.briefing.oferta;
+  if (oferta) {
+    const base = getCentralPaths(targetDir, project.projectId).projectDir;
+    const produtos = [];
+    for (const p of oferta.produtos) {
+      const origem = join(base, p.fotoOrigem || '');
+      if (!p.fotoOrigem || !existsSync(origem)) throw new Error(`A foto de ${p.nome} não foi encontrada no cadastro.`);
+      const foto = `fotos/produto-${p.id}${p.fotoTipo === 'recorte' ? '.png' : extname(origem).toLowerCase()}`;
+      if (p.fotoTipo === 'recorte') await recortarFundoBranco(origem, join(dir, foto));
+      else await copyFile(origem, join(dir, foto));
+      produtos.push({ id: p.id, nome: p.nome, preco: p.preco, precoDe: p.precoDe, precoTela: precoNaTela(p.preco), precoDeTela: p.precoDe ? precoNaTela(p.precoDe) : '', precoFalado: precoPorExtenso(p.preco), unidade: p.unidade, foto, fotoTipo: p.fotoTipo });
+    }
+    const empresa = project.companyProfile || {};
+    await writeJson(join(dir, 'produtos.json'), {
+      produtos,
+      loja: { nome: marca.nome, endereco: empresa.address || '', whatsapp: marca.whatsapp, horario: resumoHorario(project.businessHours), validoAte: oferta.validoAte, validade: oferta.validoAte ? validadePorExtenso(oferta.validoAte) : '' },
+    });
+  }
   await copyFile(join(MOTOR_DIR, 'REGRAS.md'), join(dir, 'REGRAS.md'));
   await cp(join(MOTOR_DIR, 'exemplos'), join(dir, 'exemplos'), { recursive: true });
   return { marca, settings, temLogo };
@@ -98,11 +136,39 @@ const LEGENDA_TEXTO = {
   'do-video': 'Legendas na tela: as falas do próprio vídeo.',
 };
 
-function stagePrompt(nome, video, temLogo, erroAnterior) {
+const ESTILO_TEXTO = { dinamico: 'dinamico', mercado: 'mercado', premium: 'premium', informativo: 'informativo' };
+
+function duracaoTexto(b) {
+  if (b.duracao !== 'auto') return `${b.duracao}s`;
+  if (b.oferta) {
+    const n = b.oferta.produtos.length;
+    const s = SEGUNDOS_POR_PRODUTO[b.oferta.ritmo] || SEGUNDOS_POR_PRODUTO.rapido;
+    return `automática (cerca de ${s}s por produto × ${n} + uns 6s de abertura e fechamento ≈ ${n * s + 6}s)`;
+  }
+  return b.formato === 'status' ? 'automática (15 a 30s)' : 'automática (20 a 45s, o que o assunto pedir)';
+}
+
+const NOMES_RITMO = { rapido: 'rápido', calmo: 'calmo' };
+// `escolhida`: the frame already approved in stage 1, so stage 2 never offers a re-pick.
+function linhaMoldura(o, escolhida) {
+  const ritmo = `ritmo ${NOMES_RITMO[o.ritmo] || 'rápido'} (${SEGUNDOS_POR_PRODUTO[o.ritmo] || SEGUNDOS_POR_PRODUTO.rapido}s por produto)`;
+  const selo = `selo da campanha "${o.campanha || 'Ofertas da Semana'}"`;
+  if (o.moldura === 'auto' && !escolhida) {
+    return `Moldura: você escolhe pelo assunto, a observação e a época; escreva "moldura": "<id>" no roteiro.json, um de: ${MOLDURAS.map((m) => `${m.id}: ${m.descricao}`).join('; ')}. ${ritmo}, ${selo}.`;
+  }
+  const m = MOLDURAS.find((x) => x.id === (o.moldura === 'auto' ? escolhida : o.moldura)) || MOLDURAS[0];
+  return `Moldura: ${m.nome} (${m.id}), ${ritmo}, ${selo}.`;
+}
+
+function stagePrompt(nome, video, temLogo, erroAnterior, moldura) {
   const b = video.briefing;
   return [
     `Leia e siga ${MOTOR_PROMPT}/${nome}. Onde ele diz <MOTOR>, use: ${MOTOR_PROMPT}`,
-    `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${b.duracao}s.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
+    `Assunto: ${b.assunto}. Objetivo: ${b.objetivo}. Duração alvo: ${duracaoTexto(b)}.${b.observacao ? ` Observação do operador: ${b.observacao}` : ''}`,
+    `Formato: ${b.formato === 'status' ? 'Story/Status do WhatsApp (REGRAS.md § Formato)' : 'Reels'}.`,
+    ...(b.oferta ? [`Oferta: ${b.oferta.produtos.length} produto${b.oferta.produtos.length > 1 ? 's' : ''} em produtos.json, criação ${b.oferta.criacao === 'padrao' ? 'VT padrão' : 'nova'} (REGRAS.md § Oferta).`] : []),
+    ...(b.oferta?.moldura ? [linhaMoldura(b.oferta, moldura)] : []),
+    ...(ESTILO_TEXTO[b.estilo] ? [`Estilo: ${ESTILO_TEXTO[b.estilo]} (REGRAS.md § Estilo).`] : []),
     LEGENDA_TEXTO[b.legenda] || `Legendas na tela: modelo "${b.legenda}" (já definido, não mude).`,
     temLogo ? 'O logo da marca está em fotos/logo.png.' : 'Esta marca não tem logo cadastrado; não use logo.',
     ...(erroAnterior ? [`A tentativa anterior falhou com: ${erroAnterior}`] : []),
@@ -110,7 +176,7 @@ function stagePrompt(nome, video, temLogo, erroAnterior) {
 }
 
 // Brand, voice and caption come from the briefing, never from the model.
-function forcarRoteiro(roteiro, briefing, marca) {
+function forcarRoteiro(roteiro, briefing, marca, moldura) {
   roteiro.marca = marca;
   roteiro.voz = 'gemini:Puck';
   roteiro.velocidade = '+6%';
@@ -120,6 +186,20 @@ function forcarRoteiro(roteiro, briefing, marca) {
   delete roteiro.legendas;
   if (briefing.legenda === 'sem') roteiro.legendas = false;
   else if (briefing.legenda !== 'do-video') roteiro.legenda = briefing.legenda;
+  const padrao = briefing.oferta?.criacao === 'padrao';
+  // The old padrão template no longer exists: a padrão video made before frames existed is an encarte.
+  // A nova one made before frames existed has no moldura and stays as it was.
+  const o = padrao && !briefing.oferta.moldura ? { ...briefing.oferta, moldura: 'encarte', ritmo: 'rapido', campanha: CAMPANHA_PADRAO } : briefing.oferta;
+  if (o?.moldura) {
+    // "auto": stage 1 keeps Claude's validated pick, stage 2 restores the approved one; anything else comes from the briefing.
+    if (o.moldura !== 'auto') roteiro.moldura = o.moldura;
+    else if (moldura) roteiro.moldura = moldura;
+    roteiro.campanha = o.campanha;
+    roteiro.ritmo = o.ritmo;
+    roteiro.trilha = (MOLDURAS.find((m) => m.id === roteiro.moldura) || MOLDURAS[0]).trilha;
+  }
+  // The padrão fala ends with the price: hold the picture so the stamp has time to settle.
+  if (padrao) for (const c of roteiro.cenas || []) if (c?.produto) c.segura = 0.8;
   return roteiro;
 }
 
@@ -130,7 +210,22 @@ async function escritoDepois(path, inicio) {
 
 const falas = (roteiro) => JSON.stringify((roteiro?.cenas || []).map((c) => [c.tipo, c.fala]));
 
-export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer }) {
+// Runs the motor's TTS directly (VT padrão has no Claude in stage 2).
+// `bin`/`args`/`timeoutMs` exist only so tests can run a stand-in process.
+export function narrarComTts(dir, { timeoutMs = TTS_TIMEOUT_MS, bin = process.env.PYTHON_BIN || 'python', args = [join(MOTOR_DIR, 'tts.py'), dir] } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(bin, args, { cwd: dir, windowsHide: true, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    // The queue runs one job at a time: a stalled Gemini stream would block every project.
+    const timer = setTimeout(() => { killTree(child); reject(new Error('A voz passou de 10 minutos e foi interrompida.')); }, timeoutMs);
+    let saida = '';
+    child.stdout.on('data', (c) => { saida += c; });
+    child.stderr.on('data', (c) => { saida += c; });
+    child.on('error', (err) => { clearTimeout(timer); reject(new Error(`Não consegui gerar a voz: ${err.message}`)); });
+    child.on('close', (code) => { clearTimeout(timer); if (code === 0) resolve(); else reject(new Error(saida.trim().slice(-600) || `A voz saiu com código ${code}.`)); });
+  });
+}
+
+export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = defaultRenderer, narrador = narrarComTts, checador = defaultChecador }) {
   const queue = [];
   const busy = new Set();
   let running = null;
@@ -140,14 +235,33 @@ export function createVideoJobs({ targetDir, runner = runClaudeCode, renderer = 
     const { marca, settings, temLogo } = await prepareFolder(project, video, dir, targetDir);
     await writeAjuste(dir, ajuste);
     const addDirs = [MOTOR_DIR, ...settings.projetosDeMaterial.map((id) => getCentralPaths(targetDir, id).assetsDir)];
-    await runner({ prompt: `# Etapa 1
-${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs });
-    if (!await escritoDepois(join(dir, 'roteiro.json'), inicio)) throw new Error('O Claude não escreveu o roteiro.json.');
-    const roteiro = await readJson(join(dir, 'roteiro.json'), null);
-    if (!roteiro) throw new Error('O Claude não escreveu o roteiro.json.');
+    const rodar = async (erro, desde) => {
+      await runner({ prompt: `# Etapa 1
+${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erro)}`, cwd: dir, addDirs });
+      if (!await escritoDepois(join(dir, 'roteiro.json'), desde)) throw new Error('O Claude não escreveu o roteiro.json.');
+      const lido = await readJson(join(dir, 'roteiro.json'), null);
+      if (!lido) throw new Error('O Claude não escreveu o roteiro.json.');
+      return lido;
+    };
+    const oferta = video.briefing.oferta;
+    let roteiro = await rodar(erroAnterior, inicio);
+    // Oferta: prices only through placeholders. One automatic retry with the
+    // problems spelled out, then the operator sees the error.
+    if (oferta) {
+      let problemas = validateRoteiroOferta(roteiro, oferta);
+      if (problemas.length) {
+        roteiro = await rodar(problemas.join(' '), Date.now());
+        problemas = validateRoteiroOferta(roteiro, oferta);
+        if (problemas.length) throw new Error(problemas.join(' '));
+      }
+    }
     forcarRoteiro(roteiro, video.briefing, marca);
     const { erros } = validateRoteiro(roteiro, video.briefing);
     if (erros.length) throw new Error(erros.join(' '));
+    if (oferta) {
+      await writeJson(join(dir, 'roteiro-modelo.json'), roteiro);
+      roteiro = expandirRoteiro(roteiro, oferta);
+    }
     await writeJson(join(dir, 'roteiro.json'), roteiro);
     return STATUS.ROTEIRO_PRONTO;
   }
@@ -156,23 +270,55 @@ ${stagePrompt('PEDIDO-roteiro.md', video, temLogo, erroAnterior)}`, cwd: dir, ad
     const aprovado = await readJson(join(dir, 'roteiro.json'), null);
     if (!aprovado) throw new Error('Não há roteiro aprovado para produzir.');
     await writeAjuste(dir, ajuste);
+    const oferta = video.briefing.oferta;
+    const padrao = oferta?.criacao === 'padrao';
+    // Everything after the scene code exists: caption, tempos, roteiro re-force, preview stills.
+    const finalizar = async (inicioRodada, reaproveitaVoz) => {
+      // Oferta: the post caption is mechanical too, so no hand-typed price reaches it.
+      if (oferta) {
+        const { loja } = await readJson(join(dir, 'produtos.json'), { loja: {} });
+        await writeFile(join(dir, 'legenda-post.txt'), legendaPostOferta(oferta, loja));
+      }
+      // An adjustment (or a check retry) may reuse the existing voice: tempos.json then only has to exist.
+      const temposPath = join(dir, 'voz', 'tempos.json');
+      if (reaproveitaVoz ? !existsSync(temposPath) : !await escritoDepois(temposPath, inicioRodada)) throw new Error('A produção não gerou voz/tempos.json.');
+      // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
+      const atual = await readJson(join(dir, 'roteiro.json'), null);
+      if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');
+      await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca, aprovado.moldura));
+      // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
+      const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
+      const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
+      // Claude's own check renders and older rounds must not show up in the preview grid.
+      await rm(join(dir, 'stills'), { recursive: true, force: true });
+      await renderer({ videoDir: dir, stills: marcas });
+    };
     const temLogo = existsSync(join(dir, 'fotos', 'logo.png'));
-    await runner({ prompt: `# Etapa 2
-${stagePrompt('PEDIDO-producao.md', video, temLogo, erroAnterior)}`, cwd: dir, addDirs: [MOTOR_DIR] });
-    // An adjustment may reuse the existing voice (saves quota): tempos.json then only has to exist.
-    if (!await escritoDepois(join(dir, 'cenas.js'), inicio)) throw new Error('A produção não gerou cenas.js.');
-    const temposPath = join(dir, 'voz', 'tempos.json');
-    if (ajuste ? !existsSync(temposPath) : !await escritoDepois(temposPath, inicio)) throw new Error('A produção não gerou voz/tempos.json.');
-    // Claude may have touched roteiro.json: spoken lines and scene order stay as approved, the forced fields come back.
-    const atual = await readJson(join(dir, 'roteiro.json'), null);
-    if (!atual || falas(atual) !== falas(aprovado)) throw new Error('A produção alterou as falas ou a ordem das cenas do roteiro aprovado.');
-    await writeJson(join(dir, 'roteiro.json'), forcarRoteiro(atual, video.briefing, aprovado.marca));
-    // Mechanical check: sample the first instant and the end of each scene's last word; the scenes must draw there without errors.
-    const tempos = await readJson(join(dir, 'voz', 'tempos.json'), { cenas: [] });
-    const marcas = [0.05, ...tempos.cenas.map((c) => c.words?.[c.words.length - 1]).filter(Boolean).map((w) => Math.round((w.t + w.d) * 100) / 100)];
-    // Claude's own check renders and older rounds must not show up in the preview grid.
-    await rm(join(dir, 'stills'), { recursive: true, force: true });
-    await renderer({ videoDir: dir, stills: marcas });
+    const produzir = async (erro, desde, reaproveitaVoz) => {
+      // Prices come from the catalog, never from Claude: produtos.json comes back as it was.
+      const produtosOriginal = oferta ? await readJson(join(dir, 'produtos.json'), null) : null;
+      await runner({ prompt: `# Etapa 2
+${stagePrompt('PEDIDO-producao.md', video, temLogo, erro, aprovado.moldura)}`, cwd: dir, addDirs: [MOTOR_DIR] });
+      if (produtosOriginal) await writeJson(join(dir, 'produtos.json'), produtosOriginal);
+      if (!await escritoDepois(join(dir, 'cenas.js'), desde)) throw new Error('A produção não gerou cenas.js.');
+      await finalizar(desde, reaproveitaVoz);
+    };
+    if (padrao) {
+      // Fixed template: narration and stills are mechanical, no Claude.
+      await narrador(dir);
+      await copyFile(join(MOTOR_DIR, 'modelos', 'vt-padrao', 'cenas.js'), join(dir, 'cenas.js'));
+      await finalizar(inicio, ajuste);
+    } else await produzir(erroAnterior, inicio, ajuste);
+    // Oferta: measure the rendered scenes. Claude gets one retry with the failures (the voice is kept); the template has no one to retry.
+    // Only videos with a frame have the kit and the data-papel marks the check reads.
+    if (oferta && (await readJson(join(dir, 'roteiro.json'), null))?.moldura) {
+      let r = await checador({ videoDir: dir });
+      if (!r.ok && !padrao) {
+        await produzir(`Conferência automática reprovou:\n${r.falhas.join('\n')}\nNão rode o tts de novo: a voz já está pronta (voz/tempos.json).`, Date.now(), true);
+        r = await checador({ videoDir: dir });
+      }
+      if (!r.ok) throw new Error(`A conferência automática reprovou a prévia:\n${r.falhas.join('\n')}`);
+    }
     return STATUS.PREVIA_PRONTA;
   }
 

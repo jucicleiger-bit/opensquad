@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import {
-  createVideo, getVideo, listVideos, requestVideoAdjustment, saveVideoRoteiro, videoAction, videoFileUrl,
-  type VideoBriefing, type VideoCena, type VideoState, type VideoStatus, type VideoSummary,
+  createVideo, getVideo, listVideoProdutos, listVideos, requestVideoAdjustment, saveVideoRoteiro, videoAction, videoFileUrl,
+  type VideoBriefing, type VideoCena, type VideoOfertaInput, type VideoProduto, type VideoState, type VideoStatus, type VideoSummary,
 } from "@/api/client";
 import { Button } from "@/components/Button";
 import { Card } from "@/components/Card";
@@ -36,19 +36,45 @@ const LEGENDA_INFO: Record<VideoBriefing["legenda"], { titulo: string; ajuda: st
   sem: { titulo: "Sem legenda", ajuda: "Só a narração, sem texto na tela" },
 };
 const OBJETIVOS = [
-  { v: "alcance", nome: "Alcance", ajuda: "Ganhar seguidores e comentários · fecha com enquete", ideal: [20, 45] },
+  { v: "alcance", nome: "Alcance", ajuda: "Ganhar seguidores · fecha com enquete ou “salva e compartilha”", ideal: [20, 45] },
   { v: "anuncio", nome: "Anúncio", ajuda: "Converter no WhatsApp · fecha com chamada direta", ideal: [15, 30] },
+  { v: "oferta", nome: "Oferta", ajuda: "VT de mercado com vários produtos e preços", ideal: [15, 60] },
+  { v: "institucional", nome: "Institucional", ajuda: "Apresenta a empresa · fecha com a marca", ideal: [20, 45] },
+  { v: "aviso", nome: "Aviso", ajuda: "Feriado, horário, novidade · curto e direto", ideal: [15, 15] },
 ] as const;
 const TONS = [
   { v: "criador", nome: "Criador de conteúdo", curto: "Criador", ajuda: "Animado, sorrindo" },
   { v: "vendedor", nome: "Vendedor de bairro", curto: "Vendedor", ajuda: "Próximo, confiante" },
+  { v: "locutor", nome: "Locutor de VT", curto: "Locutor", ajuda: "Propaganda de mercado, energia lá em cima" },
+] as const;
+const FORMATOS = [
+  { v: "reels", nome: "Reels", ajuda: "Feed e Reels do Instagram" },
+  { v: "status", nome: "Story/Status", ajuda: "Mais curto, fecha no WhatsApp" },
+] as const;
+const ESTILOS = [
+  { v: "livre", nome: "Livre" }, { v: "dinamico", nome: "🔥 Dinâmico" }, { v: "mercado", nome: "🛒 Promoção de mercado" },
+  { v: "premium", nome: "✨ Premium" }, { v: "informativo", nome: "📰 Informativo" },
 ] as const;
 const ETAPAS = ["Roteiro", "Prévia", "Vídeo final"];
 const PALAVRAS_POR_SEGUNDO = 2.6;
 const segundos = (fala: string) => Math.round(((fala.match(/[\p{L}\d]+/gu) || []).length / PALAVRAS_POR_SEGUNDO) * 10) / 10;
 // React sets `muted` only as a property, and Chrome then refuses to autoplay; the attribute makes the loop start.
 const mudo = (el: HTMLVideoElement | null) => { if (el) el.defaultMuted = true; };
-const nomeObjetivo = (o: string) => (o === "anuncio" ? "Anúncio" : "Alcance");
+const NOMES_OBJETIVO: Record<string, string> = { alcance: "Alcance", anuncio: "Anúncio", oferta: "Oferta", institucional: "Institucional", aviso: "Aviso" };
+const nomeObjetivo = (o: string) => NOMES_OBJETIVO[o] || o;
+const nomeDuracao = (d: number | "auto") => (d === "auto" ? "Automático" : `${d}s`);
+// Frames and pace mirror the server (content-central-video-produtos.js); automatic duration takes up to the maximum.
+const MOLDURAS = [{ v: "encarte", nome: "Encarte", ajuda: "Fundo claro de panfleto, preço em selo" }, { v: "diagonal", nome: "Diagonal", ajuda: "Faixas inclinadas, ritmo de promoção" }, { v: "neon", nome: "Neon Premium", ajuda: "Fundo escuro com brilho neon" }] as const;
+const NOMES_MOLDURA: Record<string, string> = { ...Object.fromEntries(MOLDURAS.map((m) => [m.v, m.nome])), auto: "A IA escolhe" };
+const SEGUNDOS = { rapido: 3, calmo: 4 } as const;
+const MAX_PRODUTOS = 12;
+const limiteProdutos = (duracao: number | "auto", ritmo: "rapido" | "calmo") => (duracao === "auto" ? MAX_PRODUTOS : Math.min(MAX_PRODUTOS, Math.floor((duracao - 6) / SEGUNDOS[ritmo])));
+const CRIACOES = [
+  { v: "nova", nome: "Criação nova", ajuda: "O Claude cria um VT único · ~15 min" },
+  { v: "padrao", nome: "VT padrão", ajuda: "Modelo fixo nas cores da marca · ~5 min" },
+] as const;
+// "2026-10-12" -> "12/10" without going through Date, so the time zone cannot shift the day.
+const diaMes = (iso: string) => iso.split("-").reverse().slice(0, 2).join("/");
 
 type Tom = "gen" | "review" | "ok" | "bad" | "warn";
 function tomDoStatus(s: string): Tom {
@@ -145,6 +171,9 @@ export function VideoAnimado() {
   const reload = useCallback(() => listVideos(project.projectId).then((r) => setVideos(r.videos)).catch((e: Error) => setError(e.message)), [project.projectId]);
   useEffect(() => { reload(); }, [reload]);
   const open = (id: string | null) => setParams(id ? { v: id } : {});
+  // The list comes newest first, but sort anyway so the default never depends on it.
+  const ultima = ([...(videos || [])].filter((v) => v.objetivo === "oferta" && v.moldura).sort((a, b) => b.criadoEm.localeCompare(a.criadoEm))[0]?.moldura || null);
+  const ultimaMoldura = (ultima && (ultima === "auto" || MOLDURAS.some((m) => m.v === ultima)) ? ultima : null) as VideoOfertaInput["moldura"] | null;
   const comecar = () => { setNovo(true); open(null); };
 
   return (
@@ -157,7 +186,7 @@ export function VideoAnimado() {
         <Button type="button" onClick={comecar}><Icon name="plus" />Novo vídeo</Button>
       </header>
       {error ? <div className="pill bad">{error}</div> : null}
-      {novo ? <NovoVideo project={project} onCreated={(id) => { setNovo(false); reload(); open(id); }} onCancel={() => setNovo(false)} /> : null}
+      {novo ? <NovoVideo project={project} ultimaMoldura={ultimaMoldura} onCreated={(id) => { setNovo(false); reload(); open(id); }} onCancel={() => setNovo(false)} /> : null}
       {selected ? <VideoDetalhe projectId={project.projectId} videoId={selected} onChanged={reload} onClose={() => open(null)} /> : null}
       {!selected && !novo ? (
         videos === null ? (
@@ -183,7 +212,7 @@ export function VideoAnimado() {
                     <span className={styles.cardTitle}>{v.assunto}</span>
                     <span className={styles.chips}>
                       <span className={styles.chip}>{nomeObjetivo(v.objetivo)}</span>
-                      <span className={styles.chip}>{v.duracao}s</span>
+                      <span className={styles.chip}>{nomeDuracao(v.duracao)}</span>
                       <span className={styles.date}>{dataCurta(v.criadoEm)}</span>
                     </span>
                     <MiniEtapas status={v.status} />
@@ -213,8 +242,8 @@ function Secao({ n, titulo, ajuda, id, children }: { n: number; titulo: string; 
   );
 }
 
-function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext["project"]; onCreated: (id: string) => void; onCancel: () => void }) {
-  const [b, setB] = useState<VideoBriefing>({ assunto: "", objetivo: "alcance", duracao: 30, tom: "criador", legenda: "do-video", observacao: "" });
+function NovoVideo({ project, ultimaMoldura, onCreated, onCancel }: { project: WorkspaceContext["project"]; ultimaMoldura: VideoOfertaInput["moldura"] | null; onCreated: (id: string) => void; onCancel: () => void }) {
+  const [b, setB] = useState<VideoBriefing>({ assunto: "", objetivo: "alcance", formato: "reels", estilo: "livre", duracao: 30, tom: "criador", legenda: "do-video", observacao: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tocando, setTocando] = useState<string | null>(null);
@@ -227,6 +256,39 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   }, [project]);
   const set = <K extends keyof VideoBriefing>(k: K, v: VideoBriefing[K]) => setB((prev) => ({ ...prev, [k]: v }));
   useEffect(() => () => audio.current?.pause(), []);
+  const [produtos, setProdutos] = useState<VideoProduto[] | null>(null);
+  // Click order is the order in the video.
+  const [escolhidos, setEscolhidos] = useState<Array<{ id: string; foto: "recorte" | "moldura" }>>([]);
+  const [validoAte, setValidoAte] = useState("");
+  const [validadeMexida, setValidadeMexida] = useState(false);
+  const [criacao, setCriacao] = useState<"nova" | "padrao">("nova");
+  // null = untouched, so the last-used frame still applies if the list arrives after the form opens.
+  const [molduraEscolhida, setMolduraEscolhida] = useState<VideoOfertaInput["moldura"] | null>(null);
+  const moldura = molduraEscolhida ?? ultimaMoldura ?? "encarte";
+  const [ritmo, setRitmo] = useState<VideoOfertaInput["ritmo"]>("rapido");
+  const [campanha, setCampanha] = useState("");
+  useEffect(() => {
+    if (b.objetivo !== "oferta" || produtos) return;
+    listVideoProdutos(project.projectId).then((r) => setProdutos(r.produtos)).catch((e) => setError((e as Error).message));
+  }, [b.objetivo, produtos, project.projectId]);
+  // "Válido até" follows the earliest validity among the picked products until the operator edits it.
+  useEffect(() => {
+    if (validadeMexida || !produtos) return;
+    const datas = escolhidos.map((e) => produtos.find((p) => p.id === e.id)?.validoAte).filter(Boolean).sort() as string[];
+    setValidoAte(datas[0] || "");
+  }, [escolhidos, produtos, validadeMexida]);
+  // Oferta is narrated by the locutor and shows no caption (the price is the text on
+  // screen); leaving it hands the voice and caption back to the defaults.
+  function escolherObjetivo(v: VideoBriefing["objetivo"]) {
+    setB((prev) => ({
+      ...prev, objetivo: v, tom: v === "oferta" ? "locutor" : prev.tom === "locutor" ? "criador" : prev.tom,
+      legenda: v === "oferta" ? "sem" : prev.objetivo === "oferta" && prev.legenda === "sem" ? "do-video" : prev.legenda,
+      assunto: v === "oferta" && !prev.assunto.trim() ? "Ofertas da semana" : prev.assunto,
+    }));
+  }
+  function alternarProduto(p: VideoProduto) {
+    setEscolhidos((es) => (es.some((e) => e.id === p.id) ? es.filter((e) => e.id !== p.id) : [...es, { id: p.id, foto: p.fotoTipo === "fundo" ? "moldura" : "recorte" }]));
+  }
 
   // One sample at a time; the button sits outside the option's label so it never changes the selection.
   function amostra(tom: string) {
@@ -242,16 +304,27 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
   async function submit() {
     setBusy(true);
     setError(null);
-    try { onCreated((await createVideo(project.projectId, b)).video.id); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+    try { onCreated((await createVideo(project.projectId, body)).video.id); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
 
+  const oferta = b.objetivo === "oferta";
+  const limite = limiteProdutos(b.duracao, ritmo);
+  const excedeu = oferta && escolhidos.length > limite;
+  const faltaProduto = oferta && escolhidos.length === 0;
+  const padrao = oferta && criacao === "padrao";
+  const body: VideoBriefing = oferta
+    ? { ...b, estilo: padrao ? "livre" : b.estilo, oferta: { produtos: escolhidos, validoAte, criacao, moldura, ritmo, campanha: campanha.trim() || "Ofertas da Semana" } }
+    : b;
+  // Sections are numbered in render order, since Produtos and Estilo come and go.
+  let n = 0;
   const objetivo = OBJETIVOS.find((o) => o.v === b.objetivo)!;
-  const foraDoIdeal = b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1];
-  const resumo = [objetivo.nome, `${b.duracao}s`, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
+  const foraDoIdeal = b.duracao !== "auto" && (b.duracao < objetivo.ideal[0] || b.duracao > objetivo.ideal[1]);
+  const resumo = [objetivo.nome, nomeDuracao(b.duracao), FORMATOS.find((f) => f.v === b.formato)!.nome, TONS.find((t) => t.v === b.tom)!.curto, b.legenda === "do-video" ? "Legenda do vídeo" : LEGENDA_INFO[b.legenda].titulo].join(" · ");
+  const resumoCompleto = [resumo, oferta ? `${escolhidos.length} produto${escolhidos.length === 1 ? "" : "s"}` : "", oferta ? NOMES_MOLDURA[moldura] : "", oferta ? (ritmo === "rapido" ? "Rápido" : "Calmo") : "", padrao ? "VT padrão" : ""].filter(Boolean).join(" · ");
 
   return (
     <Card className={styles.form}>
-      <Secao n={1} id={`${uid}-assunto`} titulo="Assunto" ajuda="Sobre o que é o Reel. Uma frase basta: o roteiro sai dela.">
+      <Secao n={++n} id={`${uid}-assunto`} titulo="Assunto" ajuda="Sobre o que é o Reel. Uma frase basta: o roteiro sai dela.">
         <input aria-labelledby={`${uid}-assunto`} value={b.assunto} onChange={(e) => set("assunto", e.target.value)} placeholder="Ex.: O que colocar na bio do Instagram" />
         {assuntos.length ? (
           <div className={styles.suggest}>
@@ -269,11 +342,11 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         ) : null}
       </Secao>
 
-      <Secao n={2} id={`${uid}-obj`} titulo="Objetivo" ajuda="Muda o tom do roteiro e como o vídeo termina.">
-        <div role="radiogroup" aria-labelledby={`${uid}-obj`} className={styles.options2}>
+      <Secao n={++n} id={`${uid}-obj`} titulo="Objetivo" ajuda="Muda o tom do roteiro e como o vídeo termina.">
+        <div role="radiogroup" aria-labelledby={`${uid}-obj`} className={styles.options5}>
           {OBJETIVOS.map((o) => (
             <label key={o.v} className={styles.option}>
-              <input type="radio" className="sr-only" name="objetivo" aria-label={o.nome} checked={b.objetivo === o.v} onChange={() => set("objetivo", o.v)} />
+              <input type="radio" className="sr-only" name="objetivo" aria-label={o.nome} checked={b.objetivo === o.v} onChange={() => escolherObjetivo(o.v)} />
               <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
               <span className={styles.optionName}>{o.nome}</span>
               <span className={styles.optionHelp}>{o.ajuda}</span>
@@ -282,24 +355,128 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         </div>
       </Secao>
 
-      <Secao n={3} id={`${uid}-dur`} titulo="Duração" ajuda="Tempo alvo do vídeo. O roteiro mostra quanto a fala ocupa de verdade.">
+      {oferta ? (
+        <Secao n={++n} id={`${uid}-prod`} titulo="Produtos da oferta" ajuda="Só entram produtos cadastrados com preço. Os preços são travados pelo cadastro; a ordem do clique é a ordem no vídeo.">
+          {produtos === null ? <Skeleton height={140} /> : produtos.length === 0 ? <p className={styles.hint}>Nenhum produto cadastrado neste projeto.</p> : (
+            <div role="group" aria-label="Produtos" className={styles.produtos}>
+              {produtos.map((p) => {
+                const pos = escolhidos.findIndex((e) => e.id === p.id);
+                const escolhido = pos >= 0;
+                return (
+                  <div key={p.id} className={styles.produto} data-escolhido={escolhido} data-bloqueado={Boolean(p.motivo)}>
+                    <label className={styles.produtoCard}>
+                      <input type="checkbox" className="sr-only" aria-label={`${p.nome} ${p.precoTela}`} checked={escolhido} disabled={Boolean(p.motivo)} onChange={() => alternarProduto(p)} />
+                      <span className={styles.produtoFoto}>
+                        {p.previewUrl ? <img src={p.previewUrl} alt="" loading="lazy" /> : null}
+                        {escolhido ? <span className={styles.produtoPos} aria-hidden="true">{pos + 1}</span> : null}
+                      </span>
+                      <span className={styles.produtoNome}>{p.nome}</span>
+                      {p.motivo ? <span className={styles.produtoMotivo}>{p.motivo}</span> : (
+                        <span className={styles.produtoPreco}>
+                          {p.precoDeTela ? <s className={styles.precoDe}>{p.precoDeTela}</s> : null}
+                          <b>{p.precoTela}</b>
+                        </span>
+                      )}
+                      {p.fotoTipo === "fundo" ? <span className={styles.produtoNota}>vai em moldura</span> : null}
+                    </label>
+                    {p.fotoTipo === "branco" && escolhido ? (
+                      <div role="radiogroup" aria-label={`Foto de ${p.nome}`} className={styles.fotoModo}>
+                        {([["recorte", "Recortar"], ["moldura", "Moldura"]] as const).map(([v, nome]) => (
+                          <label key={v} className={styles.fotoOpcao}>
+                            <input type="radio" className="sr-only" name={`foto-${p.id}`} aria-label={nome} checked={escolhidos[pos].foto === v}
+                              onChange={() => setEscolhidos((es) => es.map((e) => (e.id === p.id ? { ...e, foto: v } : e)))} />{nome}
+                          </label>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <p className={styles.hint} data-fora={excedeu}>
+            <span className={styles.contador} data-fora={excedeu}>{`${escolhidos.length} de ${limite}`}</span>
+            {excedeu ? <><Icon name="alert" size={15} />{`${nomeDuracao(b.duracao)} cabe até ${limite} produtos.`}</> : escolhidos.length === 0 ? "Escolha pelo menos um produto." : null}
+          </p>
+          <label className={styles.field}>Válido até
+            <input type="date" className={styles.data} value={validoAte} onChange={(e) => { setValidadeMexida(true); setValidoAte(e.target.value); }} />
+          </label>
+          <div role="radiogroup" aria-label="Criação" className={styles.options2}>
+            {CRIACOES.map((c) => (
+              <label key={c.v} className={styles.option}>
+                <input type="radio" className="sr-only" name="criacao" aria-label={c.nome} checked={criacao === c.v} onChange={() => setCriacao(c.v)} />
+                <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+                <span className={styles.optionName}>{c.nome}</span>
+                <span className={styles.optionHelp}>{c.ajuda}</span>
+              </label>
+            ))}
+          </div>
+          <span className={styles.suggestLabel} aria-hidden="true">Moldura</span>
+          <div role="radiogroup" aria-label="Moldura" className={styles.gallery}>
+            {[...MOLDURAS, { v: "auto", nome: "✨ A IA escolhe", ajuda: "A IA escolhe pela época e pelo assunto" }].map((m) => (
+              <label key={m.v} className={styles.tile}>
+                <input type="radio" className="sr-only" name="moldura" aria-label={m.nome} checked={moldura === m.v} onChange={() => setMolduraEscolhida(m.v as VideoOfertaInput["moldura"])} />
+                <span className={styles.tileMedia}>
+                  {m.v === "auto"
+                    ? <span className={styles.tileIcon} style={{ fontSize: 30 }} aria-hidden="true">✨</span>
+                    : <video ref={mudo} src={`/video-molduras/${m.v}.mp4`} autoPlay loop muted playsInline preload="auto" aria-hidden="true" />}
+                  <span className={styles.tileCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+                </span>
+                <span className={styles.tileName}>{m.nome}</span>
+                <span className={styles.tileHelp}>{m.ajuda}</span>
+              </label>
+            ))}
+          </div>
+          <span className={styles.suggestLabel} aria-hidden="true">Ritmo</span>
+          <div role="radiogroup" aria-label="Ritmo" className={styles.segmented}>
+            {([["rapido", "Rápido"], ["calmo", "Calmo"]] as const).map(([v, nome]) => (
+              <label key={v} className={styles.segment}>
+                <input type="radio" className="sr-only" name="ritmo" aria-label={`${nome} (${SEGUNDOS[v]} s)`} checked={ritmo === v} onChange={() => setRitmo(v)} />{nome} ({SEGUNDOS[v]} s)
+              </label>
+            ))}
+          </div>
+          <label className={styles.field}>Selo da campanha
+            <input type="text" maxLength={30} value={campanha} onChange={(e) => setCampanha(e.target.value)} placeholder="Ofertas da Semana" />
+          </label>
+        </Secao>
+      ) : null}
+
+      <Secao n={++n} id={`${uid}-fmt`} titulo="Formato" ajuda="Onde o vídeo vai ser postado.">
+        <div role="radiogroup" aria-labelledby={`${uid}-fmt`} className={styles.options2}>
+          {FORMATOS.map((f) => (
+            <label key={f.v} className={styles.option}>
+              <input type="radio" className="sr-only" name="formato" aria-label={f.nome} checked={b.formato === f.v} onChange={() => set("formato", f.v)} />
+              <span className={styles.optionCheck} aria-hidden="true"><Icon name="check" size={14} /></span>
+              <span className={styles.optionName}>{f.nome}</span>
+              <span className={styles.optionHelp}>{f.ajuda}</span>
+            </label>
+          ))}
+        </div>
+      </Secao>
+
+      <Secao n={++n} id={`${uid}-dur`} titulo="Duração" ajuda="Tempo alvo do vídeo. O roteiro mostra quanto a fala ocupa de verdade.">
         <div role="radiogroup" aria-labelledby={`${uid}-dur`} className={styles.segmented}>
           {([15, 30, 45, 60] as const).map((d) => (
             <label key={d} className={styles.segment} data-ideal={d >= objetivo.ideal[0] && d <= objetivo.ideal[1]}>
               <input type="radio" className="sr-only" name="duracao" checked={b.duracao === d} onChange={() => set("duracao", d)} />{d}s
             </label>
           ))}
+          <label className={styles.segment}>
+            <input type="radio" className="sr-only" name="duracao" aria-label="Automático" checked={b.duracao === "auto"} onChange={() => set("duracao", "auto")} />Automático ✨
+          </label>
         </div>
         <p className={styles.hint} data-fora={foraDoIdeal}>
           {foraDoIdeal ? <Icon name="alert" size={15} /> : null}
           {foraDoIdeal
             ? `${b.duracao}s fica fora do ideal para ${objetivo.nome.toLowerCase()} (${objetivo.ideal[0]}–${objetivo.ideal[1]} s). Dá para usar, mas a retenção costuma cair.`
-            : `Ideal para ${objetivo.nome.toLowerCase()}: ${objetivo.ideal[0]}–${objetivo.ideal[1]} s.`}
+            : b.duracao === "auto"
+              ? "Automático: o roteiro escolhe o tempo pelo conteúdo."
+              : `Ideal para ${objetivo.nome.toLowerCase()}: ${objetivo.ideal[0]}–${objetivo.ideal[1]} s.`}
         </p>
       </Secao>
 
-      <Secao n={4} id={`${uid}-voz`} titulo="Voz" ajuda="Quem narra. Toque no play para ouvir uma amostra.">
-        <div role="radiogroup" aria-labelledby={`${uid}-voz`} className={styles.options2}>
+      <Secao n={++n} id={`${uid}-voz`} titulo="Voz" ajuda="Quem narra. Toque no play para ouvir uma amostra.">
+        <div role="radiogroup" aria-labelledby={`${uid}-voz`} className={styles.options3}>
           {TONS.map((t) => (
             <div key={t.v} className={styles.voiceWrap}>
               <label className={`${styles.option} ${styles.voice}`}>
@@ -317,7 +494,19 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         </div>
       </Secao>
 
-      <Secao n={5} id={`${uid}-leg`} titulo="Legenda" ajuda="Veja cada estilo rodando antes de escolher.">
+      {padrao ? null : (
+        <Secao n={++n} id={`${uid}-est`} titulo="Estilo" ajuda="O clima visual e de ritmo do vídeo.">
+          <div role="radiogroup" aria-labelledby={`${uid}-est`} className={styles.chipsRow}>
+            {ESTILOS.map((e) => (
+              <label key={e.v} className={styles.suggestChip}>
+                <input type="radio" className="sr-only" name="estilo" aria-label={e.nome.replace(/^\S+\s/, "")} checked={b.estilo === e.v} onChange={() => set("estilo", e.v)} />{e.nome}
+              </label>
+            ))}
+          </div>
+        </Secao>
+      )}
+
+      <Secao n={++n} id={`${uid}-leg`} titulo="Legenda" ajuda="Veja cada estilo rodando antes de escolher.">
         <div role="radiogroup" aria-labelledby={`${uid}-leg`} className={styles.gallery}>
           {LEGENDAS.map(([v, l]) => (
             <label key={v} className={styles.tile}>
@@ -336,16 +525,16 @@ function NovoVideo({ project, onCreated, onCancel }: { project: WorkspaceContext
         </div>
       </Secao>
 
-      <Secao n={6} id={`${uid}-obs`} titulo="Observação (opcional)" ajuda="Algo que o roteiro precisa citar ou evitar.">
+      <Secao n={++n} id={`${uid}-obs`} titulo="Observação (opcional)" ajuda="Algo que o roteiro precisa citar ou evitar.">
         <textarea aria-labelledby={`${uid}-obs`} value={b.observacao} onChange={(e) => set("observacao", e.target.value)} placeholder="Ex.: citar o preço do plano mensal" />
       </Secao>
 
       <div className={styles.actionBar}>
-        <span className={styles.summary}>{resumo}</span>
+        <span className={styles.summary}>{resumoCompleto}</span>
         {error ? <div className="pill bad">{error}</div> : null}
         <div className={styles.actions}>
           <Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button>
-          <Button type="button" disabled={busy || !b.assunto.trim()} onClick={submit}>{busy ? "Enviando…" : "Gerar roteiro"}</Button>
+          <Button type="button" disabled={busy || !b.assunto.trim() || excedeu || faltaProduto} onClick={submit}>{busy ? "Enviando…" : "Gerar roteiro"}</Button>
         </div>
       </div>
     </Card>
@@ -395,8 +584,14 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
   };
   const total = Math.round((cenas.reduce((n, c) => n + segundos(c.fala) + (c.segura || 0), 0)) * 10) / 10;
   const meta = video.briefing.duracao;
-  const escala = Math.max(meta * 1.3, total * 1.05);
-  const desvio = total < meta * 0.85 ? "curto" : total > meta * 1.15 ? "longo" : null;
+  const oferta = video.briefing.oferta;
+  const precosEm = oferta && "precosEm" in oferta ? oferta.precosEm : "";
+  const padrao = oferta?.criacao === "padrao";
+  const produtoDe = (c: VideoCena) => (c.produto ? (state.produtos || []).find((p) => p.id === c.produto) : undefined);
+  // With automatic duration there is no target to measure against.
+  const alvo = meta === "auto" ? total : meta;
+  const escala = Math.max(alvo * 1.3, total * 1.05);
+  const desvio = meta === "auto" ? null : total < alvo * 0.85 ? "curto" : total > alvo * 1.15 ? "longo" : null;
   const move = (i: number, d: number) => setCenas((cs) => { const next = [...cs]; const [c] = next.splice(i, 1); next.splice(i + d, 0, c); return next; });
   // Same choice as the server's retry: the field recorded for the current status.
   const falhou = Math.max(0, video.status === "interrompido"
@@ -418,7 +613,10 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
         <h3 className={styles.detailTitle}>{video.briefing.assunto}</h3>
         <div className={styles.chips}>
           <span className={styles.chip}>{nomeObjetivo(video.briefing.objetivo)}</span>
-          <span className={styles.chip}>{meta}s</span>
+          <span className={styles.chip}>{nomeDuracao(meta)}</span>
+          {precosEm ? <span className={styles.chip}>{`preços de ${diaMes(precosEm)}`}</span> : null}
+          {padrao ? <span className={styles.chip}>VT padrão</span> : null}
+          {oferta?.moldura ? <span className={styles.chip}>{`Moldura ${NOMES_MOLDURA[oferta.moldura === "auto" && state.roteiro?.moldura ? state.roteiro.moldura : oferta.moldura] || oferta.moldura}`}</span> : null}
         </div>
       </div>
       <Etapas status={video.status} falhou={falhou} />
@@ -454,17 +652,27 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
           <div className={styles.timebar} data-desvio={desvio || undefined}>
             <div className={styles.track}>
               <span className={styles.fill} style={{ width: `${Math.min(100, (total / escala) * 100)}%` }} />
-              <span className={styles.target} style={{ left: `${(meta / escala) * 100}%` }} title={`Meta ${meta}s`} />
+              <span className={styles.target} style={{ left: `${(alvo / escala) * 100}%` }} title={`Meta ${nomeDuracao(meta)}`} />
             </div>
-            <span className={styles.timeText}>{total}s de {meta}s</span>
+            <span className={styles.timeText}>{meta === "auto" ? `${total}s` : `${total}s de ${meta}s`}</span>
             {desvio ? <span className={styles.timeFlag}>{desvio === "curto" ? "Curto" : "Longo"} demais</span> : null}
           </div>
           {state.avisos.map((a) => <div key={a} className={styles.notice}><Icon name="alert" size={15} />{a}</div>)}
           <ol className={styles.cenas}>
-            {cenas.map((c, i) => (
+            {cenas.map((c, i) => {
+              const prod = produtoDe(c);
+              return (
               <li key={i} data-testid="cena" className={styles.cena}>
                 <span className={styles.cenaNum}>{i + 1}</span>
                 <div className={styles.cenaMain}>
+                  {prod ? (
+                    <div className={styles.cenaProduto}>
+                      {prod.foto ? <img src={file(prod.foto)} alt={prod.nome} /> : null}
+                      <span className={styles.produtoNome}>{prod.nome}</span>
+                      {prod.precoDeTela ? <s className={styles.precoDe}>{prod.precoDeTela}</s> : null}
+                      <span className={styles.chip}>{prod.precoTela}</span>
+                    </div>
+                  ) : null}
                   <textarea aria-label={`Fala da cena ${i + 1}`} value={c.fala} rows={2} onChange={(e) => setCenas((cs) => cs.map((x, j) => (j === i ? { ...x, fala: e.target.value } : x)))} />
                   <p className={styles.cenaDesc}><Icon name="film" size={14} />{c.descricao}</p>
                 </div>
@@ -477,7 +685,8 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
                   </div>
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ol>
           <label className={styles.field}>Pedir ajuste no roteiro<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} placeholder="Ex.: abrir com uma pergunta mais direta" /></label>
           <div className={styles.actions}>
@@ -515,9 +724,11 @@ function VideoDetalhe({ projectId, videoId, onChanged, onClose }: { projectId: s
               </div>
             </div>
           ) : null}
-          <label className={styles.field}>Pedir ajuste na prévia<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} placeholder="Ex.: trocar a cena 3 por algo mais claro" /></label>
+          {padrao ? <p className={styles.hint}>VT padrão: para mudar o visual, use Criação nova.</p> : (
+            <label className={styles.field}>Pedir ajuste na prévia<textarea value={ajuste} onChange={(e) => setAjuste(e.target.value)} placeholder="Ex.: trocar a cena 3 por algo mais claro" /></label>
+          )}
           <div className={styles.actions}>
-            <Button type="button" variant="secondary" disabled={!ajuste.trim()} onClick={run(() => requestVideoAdjustment(projectId, videoId, "producao", ajuste))}>Pedir ajuste</Button>
+            {padrao ? null : <Button type="button" variant="secondary" disabled={!ajuste.trim()} onClick={run(() => requestVideoAdjustment(projectId, videoId, "producao", ajuste))}>Pedir ajuste</Button>}
             <Button type="button" onClick={run(() => videoAction(projectId, videoId, "aprovar-previa"))}>Aprovar prévia</Button>
           </div>
           {still ? <ImageLightbox src={file(`stills/${still}`)} alt={still} fileName={still} onClose={() => setStill(null)} /> : null}
